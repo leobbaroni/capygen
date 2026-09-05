@@ -19,6 +19,37 @@
 - Mascot v2 (real capybara face, yuzu, pink hoodie) replaced the visor version at the user's request; crew rule recorded (Fable orchestrates; Opus 5 hard / Sonnet 5 mechanical).
 - Kept only `docs/spikes/codex-app-server-schema/v0.153.4-ts` (1.8 MB); JSON bundles and 0.139.0 bindings gitignored/removed.
 
+## 2026-09-05 — Phase 2 / A1: foundation (monorepo, shell, contracts, db, renderer skeleton)
+- Monorepo stood up: root scripts (`dev` `build` `start` `test` `typecheck` `e2e`, `spike` kept),
+  `tsconfig.base.json`, `vitest.config.ts` (projects: shared/db/desktop), Playwright via
+  `_electron` (no browser download). `apps/desktop` (esbuild → `dist/main.cjs` + `preload.cjs`),
+  `apps/renderer` (Vite 8 + React 18 + Tailwind 4 + shadcn/ui), `packages/shared`, `packages/db`.
+- SQLite driver decision (ADR-0003): **`node:sqlite` (`DatabaseSync`)**, not better-sqlite3 —
+  measured available in Electron 44.2.0 / Node 24.20.0 and in the Node 22.16 test runner, so no
+  `@electron/rebuild`, no asarUnpack, no native toolchain anywhere. `electron -e "…"` does NOT
+  evaluate (Electron treats argv[1] as an app path); the probe is a real app dir.
+- `packages/shared`: zod domain model (Project/Session/Agent/Turn/Block union/UsageEvent/Settings)
+  + the IPC contract as two typed maps (15 invoke channels, 6 events) + `defineIpc`, used by the
+  preload and the renderer. `z.config({ jitless: true })` is mandatory: the renderer's CSP
+  (`script-src 'self'`) blocks zod's JIT `new Function`, which failed every parse on both sides of
+  the bridge ("Code generation from strings disallowed for this context"). Regression test added.
+- `packages/db`: `0001_init.sql` covering SPEC §Data (blocks table generalises `tool_calls`, which
+  survives as a VIEW); migrator copies the DB file before applying anything, read-only peek so the
+  backup is untouched. Repositories + 21 tests on a real temp file. Bug found and fixed by test:
+  turn/block ordering tie-broke on a random UUID within the same millisecond — now `rowid`.
+- `apps/desktop`: single instance, seamless chrome ported from Omnigent-windows `chrome.js`
+  (hidden title bar + caption buttons blended to the sampled page colour), tray with
+  Open/New Window/Quit + close-to-tray, rotating redacting logger, window-state persistence,
+  `--project=<dir>` / `CAPYGEN_PROJECT_DIR`, and all 15 IPC handlers over a 300 ms echo stub engine.
+- `apps/renderer`: Omnigent tokens copied verbatim with the Apache-2.0 attribution, AppShell +
+  sidebar, landing (capybara + "What should we build?" + composer), chat page with a per-kind
+  block renderer, settings nav listing all 20 R19 section ids, zustand store, hash router.
+  Brand assets are staged from `assets/` by `scripts/sync-assets.ts`; `public/` is gitignored.
+- Checks: install ok · typecheck ok (6 projects + e2e specs) · `pnpm test` 73 passed ·
+  `pnpm build` ok · `pnpm e2e` 4 passed, `e2e-out/landing.png` + `chat.png` saved.
+
 ## Open / next
 - USER ACTION: Codex sign-in is dead (`invalid_refresh_token` since 2026-09-03). Run `codex logout` then `codex login` in a terminal, then `corepack pnpm spike` should show the 4 Codex FAILs turn PASS. Phase 1 stays unchecked until then; Phase 2 proceeds on Claude.
-- Phase 2: walking skeleton app + brand (workflow).
+- Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
+  same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
+  AskUserQuestion cards.

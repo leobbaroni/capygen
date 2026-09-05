@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Playwright transpiles specs to CommonJS; `page.evaluate` bodies run in the
+    // browser, so the DOM lib has to be visible here even though the test file
+    // itself runs in Node.
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "verbatimModuleSyntax": false
+  },
+  "include": ["e2e", "../playwright.config.ts"]
+}

@@ -1,0 +1,280 @@
+/*
+ * capygen theme.
+ *
+ * The colour system, radii, shadows and type ramp below are Omnigent's, copied
+ * from reference/omnigent/web/src/index.css (Omnigent by Databricks, Inc.,
+ * main@44378d6), Apache License 2.0 — see reference/omnigent/LICENSE and
+ * reference/omnigent/NOTICE. capygen reuses the tokens under that licence; no
+ * Omnigent code is imported at runtime.
+ *
+ * What is NOT copied: the reference's imports for shadcn/tailwind.css,
+ * tw-animate-css, @fontsource geist-mono, the typography plugin and streamdown's
+ * @source pragma — those pull in components capygen does not have yet. When a
+ * later phase needs one, add it here rather than editing the palette file.
+ *
+ * capygen's own additions are marked [capygen].
+ */
+@import "tailwindcss";
+@import "./themePalettes.generated.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* [capygen] Wordmark face. Bundled per SPEC assumption A11; if the licence turns
+   out to forbid redistribution, the wordmark ships as an SVG instead and this
+   block goes away. */
+@font-face {
+  font-family: "CheGuevaraBarry";
+  src: url("/fonts/CheGuevaraBarry-Brown.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  /* Native system UI font stack — defers to whatever the OS ships (Segoe UI on
+     Windows), so the app reads as native chrome. */
+  --font-sans:
+    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: "Cascadia Mono", "JetBrains Mono", ui-monospace, monospace;
+  /* [capygen] The wordmark/brand step. */
+  --font-brand: "CheGuevaraBarry", var(--font-sans);
+  /* Hero/title step — overrides Tailwind's text-3xl (30/36) with 32/36. */
+  --text-3xl: 32px;
+  --text-3xl--line-height: 36px;
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-foreground: var(--sidebar-active-foreground);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-border-weak: var(--border-weak);
+  --color-border-strong: var(--border-strong);
+  --color-button-border: var(--button-border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-session-active: var(--session-active);
+  /* Brand pink — reserved for brand moments, not status. */
+  --color-brand-accent: var(--brand-accent);
+  --color-tag-pink: var(--tag-pink);
+  --color-status-blue: var(--status-blue);
+  --color-status-green: var(--status-green);
+  --color-status-yellow: var(--status-yellow);
+  --color-status-red: var(--status-red);
+  --color-status-gray: var(--status-gray);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-foreground-tertiary: var(--foreground-tertiary);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-card-solid: var(--card-solid);
+  --color-tray: var(--tray);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-code-bg: var(--code-bg);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --shadow-composer: 0 0 12px -6px rgb(var(--ui-shadow-neutral-rgb) / 0.12);
+  --shadow-composer-focus: 0 0 20px -4px rgb(var(--ui-shadow-neutral-rgb) / 0.12);
+  --shadow-xs: 0 2px 8px rgb(var(--ui-shadow-neutral-rgb) / 0.04);
+  --shadow-sm: 0 4px 10px -6px rgb(var(--ui-shadow-neutral-rgb) / 0.09);
+  --shadow-md: 0 6px 12px -6px rgb(var(--ui-shadow-neutral-rgb) / 0.12);
+  --shadow-lg: 0 6px 20px -4px rgb(var(--ui-shadow-neutral-rgb) / 0.12);
+  --shadow-menu: 0 8px 28px rgb(var(--ui-shadow-warm-rgb) / 0.12);
+  --shadow-xl: 0 12px 44px rgb(var(--ui-shadow-warm-rgb) / 0.16);
+  --shadow-card:
+    0 4px 16px -2px rgb(var(--ui-shadow-warm-rgb) / 0.1),
+    0 1px 0 rgb(var(--ui-shadow-neutral-rgb) / 0.02);
+  --shadow-tooltip: 0 3px 6px rgb(var(--ui-shadow-neutral-rgb) / 0.05);
+  --shadow-dialog: 0 16px 48px rgb(var(--ui-shadow-neutral-rgb) / 0.2);
+}
+
+/* The two body text steps. Non-inline on purpose: `@theme inline` would bake the
+   literal value into each utility and make the runtime mapping a no-op. */
+@theme {
+  --text-ui: 1rem;
+  --text-ui--line-height: 1.6;
+  --text-sm: 0.9rem;
+  --text-sm--line-height: 1.6;
+  --text-xs: var(--text-sm);
+  --text-xs--line-height: var(--text-sm--line-height);
+}
+
+:root {
+  /* User-controlled UI font size (Settings ▸ Appearance overrides this at
+     runtime on documentElement). */
+  --desktop-ui-font-size: 13px;
+  --icon-size-default: 14px;
+  --icon-container-default: 16px;
+  --ui-shadow-neutral-rgb: 0 0 0;
+  --ui-shadow-warm-rgb: 60 40 10;
+  --composer-shadow: 0 0 12px -6px rgb(0 0 0 / 12%);
+  --composer-shadow-focus: 0 0 20px -6px rgb(0 0 0 / 12%);
+
+  --foreground-tertiary: #a1a1aa;
+  --destructive: #c8324c;
+  --destructive-foreground: #fff;
+  --success: #2ea65c;
+  --warning: #d4972a;
+  --info: #3b8ff5;
+  --session-active: #2f7fd4;
+  --border-weak: #ececee;
+  --button-icon-hover-color: #27272a;
+  --tag-pink: rgba(240, 1, 150, 0.06);
+  --status-blue: #3b8ff5;
+  --status-green: #2ea65c;
+  --status-yellow: #d4972a;
+  --status-red: #f04858;
+  --status-gray: #8e99a4;
+  --chart-1: #3b8ff5;
+  --chart-2: #2272b4;
+  --chart-3: #2ea65c;
+  --chart-4: #d4972a;
+  --chart-5: #8e99a4;
+  --radius: 0.5rem;
+
+  /* [capygen] Width Windows reserves for the caption buttons; the shell's
+     titleBarOverlay draws them over the page's top-right corner. */
+  --caption-width: 9rem;
+  --titlebar-height: 2.25rem;
+}
+
+.dark {
+  --ui-shadow-neutral-rgb: 0 0 0;
+  --ui-shadow-warm-rgb: 0 0 0;
+  --composer-shadow: 0 0 12px -6px rgb(0 0 0 / 80%);
+  --composer-shadow-focus: 0 0 14px -8px rgb(0 0 0 / 90%);
+  --destructive: #e65b77;
+  --destructive-foreground: #fff;
+  --success: #2ea65c;
+  --warning: #d4972a;
+  --info: #3b8ff5;
+  --session-active: #5ca4f5;
+  --tag-pink: rgba(240, 1, 150, 0.15);
+  --status-blue: #3b8ff5;
+  --status-green: #2ea65c;
+  --status-yellow: #d4972a;
+  --status-red: #f04858;
+  --status-gray: #8e99a4;
+  --chart-1: oklch(0.64 0.22 254);
+  --chart-2: oklch(0.65 0.14 200);
+  --chart-3: oklch(0.68 0.15 145);
+  --chart-4: oklch(0.75 0.16 70);
+  --chart-5: oklch(0.65 0.008 240);
+  --border-weak: oklch(0.24 0.005 240);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--desktop-ui-font-size);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand-accent) 25%, transparent);
+  }
+}
+
+/* The transparent <main> shows the palette canvas through (Omnigent). */
+.app-shell {
+  background: var(--background);
+}
+
+/* Fixed default icon geometry: a 14px glyph centred in a 16px SVG box. */
+.ui-icon {
+  box-sizing: border-box;
+  width: var(--icon-container-default);
+  height: var(--icon-container-default);
+  padding: 1px;
+  flex-shrink: 0;
+}
+
+/* [capygen] Seamless title bar.
+   Electron draws only the caption buttons (titleBarStyle "hidden" +
+   titleBarOverlay, see apps/desktop/src/win/chrome.ts). The page supplies the
+   drag region: a strip across the top that stops short of the buttons.
+   Drag regions are geometric, so every interactive element opts back out. */
+.titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: var(--caption-width);
+  height: var(--titlebar-height);
+  -webkit-app-region: drag;
+  z-index: 40;
+}
+
+.app-shell :is(a, button, input, textarea, select, [role="button"], [contenteditable]) {
+  -webkit-app-region: no-drag;
+}
+
+/* Anything living in the top-right corner keeps clear of the caption buttons. */
+.titlebar-clearance {
+  padding-right: var(--caption-width);
+}
+
+/* [capygen] Brand wordmark. */
+.wordmark {
+  font-family: var(--font-brand);
+  letter-spacing: 0.01em;
+}
+
+/* [capygen] The mascot renders a 256px PNG at a small size; keep the pixels
+   crisp rather than letting the browser smooth them into mush. */
+.mascot-img {
+  image-rendering: pixelated;
+}
+
+/* Thin, unobtrusive scrollbars matching the palette. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent;
+}

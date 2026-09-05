@@ -1,0 +1,21 @@
+{
+  "name": "@capygen/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@capygen/db": "workspace:*",
+    "@capygen/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "electron": "^44.2.0",
+    "esbuild": "^0.28.0"
+  }
+}

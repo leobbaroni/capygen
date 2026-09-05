@@ -13,3 +13,6 @@ docs/spikes/*.raw.json
 e2e-out/
 docs/spikes/codex-app-server-schema/*-json/
 docs/spikes/codex-app-server-schema/v0.139.0-*/
+
+# Staged from assets/ by apps/renderer/scripts/sync-assets.ts on dev/build.
+apps/renderer/public/
