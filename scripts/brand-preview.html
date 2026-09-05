@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>capygen brand preview</title>
+    <!--
+      Task B3 visual check. Self-contained: no build step, opens straight from
+      disk. Assets are referenced relative to this file's location
+      (scripts/brand-preview.html) rather than through Vite's public/ paths,
+      and the mascot animation rules below are copied from
+      apps/renderer/src/brand/brand.css (kept in sync by hand — this file has
+      no bundler to import the real one with rewritten asset URLs). If the two
+      drift, brand.css is the source of truth.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0b0b0c;
+        --fg: #ececec;
+        --card: #17171a;
+        --border: #2a2a2e;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 40px;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      h1 {
+        font-weight: 400;
+        font-size: 20px;
+        margin: 0 0 6px;
+      }
+      p.sub {
+        margin: 0 0 32px;
+        color: #9a9a9f;
+        font-size: 13px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        max-width: 900px;
+      }
+      .cell {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+      .cell .stage {
+        width: 96px;
+        height: 96px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .cell .name {
+        font-size: 12px;
+        color: #b7b7bd;
+      }
+      .section {
+        margin-top: 48px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        flex-wrap: wrap;
+      }
+      .row .cell {
+        min-width: 140px;
+      }
+
+      /* --- copied from apps/renderer/src/brand/brand.css --- */
+      @font-face {
+        font-family: "CheGuevaraBarry";
+        src: url("../assets/fonts/CheGuevaraBarry-Brown.ttf") format("truetype");
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+      }
+      .capygen-wordmark {
+        font-family: "CheGuevaraBarry", ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: 0.01em;
+        line-height: 1;
+      }
+      .capygen-mascot {
+        position: relative;
+        display: inline-block;
+        flex-shrink: 0;
+        user-select: none;
+      }
+      .capygen-mascot__layer {
+        position: absolute;
+        inset: 0;
+        transition: opacity 150ms ease;
+      }
+      .capygen-mascot__img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        image-rendering: pixelated;
+        -webkit-user-drag: none;
+        user-select: none;
+      }
+      @keyframes capygen-bob {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-2px); }
+      }
+      @keyframes capygen-bob-slow {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-1px); }
+      }
+      @keyframes capygen-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.55; }
+      }
+      @keyframes capygen-blink {
+        0%, 92%, 100% { opacity: 1; }
+        96% { opacity: 0.15; }
+      }
+      @keyframes capygen-jitter {
+        0%, 100% { transform: translate(0, 0); }
+        25% { transform: translate(0, -1px); }
+        50% { transform: translate(0, 0); }
+        75% { transform: translate(0, 1px); }
+      }
+      @keyframes capygen-bounce {
+        0% { transform: translateY(0); }
+        30% { transform: translateY(-6px); }
+        55% { transform: translateY(0); }
+        75% { transform: translateY(-2px); }
+        100% { transform: translateY(0); }
+      }
+      @keyframes capygen-shake {
+        0%, 100% { transform: translateX(0); }
+        20% { transform: translateX(-3px); }
+        40% { transform: translateX(3px); }
+        60% { transform: translateX(-2px); }
+        80% { transform: translateX(2px); }
+      }
+      .capygen-mascot__img--idle { animation: capygen-bob 1.2s ease-in-out infinite; }
+      .capygen-mascot__img--thinking { animation: capygen-pulse 1.6s ease-in-out infinite; }
+      .capygen-mascot__img--working { animation: capygen-jitter 0.6s steps(4, end) infinite; }
+      .capygen-mascot__img--waiting { animation: capygen-blink 3.2s ease-in-out infinite; }
+      .capygen-mascot__img--success { animation: capygen-bounce 0.6s ease-out 1; }
+      .capygen-mascot__img--error { animation: capygen-shake 0.5s ease-in-out 1; }
+      .capygen-mascot__img--sleeping { animation: capygen-bob-slow 2.4s ease-in-out infinite; }
+      .capygen-mascot__img--listening { animation: capygen-pulse 1s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .capygen-mascot__img { animation: none !important; }
+        .capygen-mascot__layer { transition: none !important; }
+      }
+      /* --- end copy --- */
+    </style>
+  </head>
+  <body>
+    <h1 class="capygen-wordmark" style="font-size: 28px">capygen</h1>
+    <p class="sub">
+      Brand preview (Task B3) — the 8 mascot states with their per-state
+      micro-animation, the wordmark, and a live cross-fade demo.
+    </p>
+
+    <div class="grid" id="states"></div>
+
+    <div class="section">
+      <h1>Cross-fade (150ms, cycles every 1.8s)</h1>
+      <p class="sub">One mounted layer fading into the next as `state` changes — the same DOM shape `Mascot.tsx` produces.</p>
+      <div class="row">
+        <div class="cell">
+          <div class="stage">
+            <span class="capygen-mascot" style="width: 96px; height: 96px" id="crossfade-stage">
+              <span class="capygen-mascot__layer" style="opacity: 1">
+                <img class="capygen-mascot__img capygen-mascot__img--idle" id="crossfade-img" src="../assets/mascot/states/idle.png" alt="" draggable="false" />
+              </span>
+            </span>
+          </div>
+          <div class="name">idle → thinking → working → waiting → success → error → sleeping → listening → …</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h1>Wordmark</h1>
+      <div class="row">
+        <span class="capygen-wordmark" style="font-size: 40px">capygen</span>
+        <span class="capygen-wordmark" style="font-size: 20px">capygen</span>
+        <span class="capygen-wordmark" style="font-size: 13px">capygen</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h1>BrandLogo sizes (eyes = 56px, icon = 16px)</h1>
+      <div class="row">
+        <div class="cell">
+          <div class="stage" style="width: 56px; height: 56px">
+            <span class="capygen-mascot" style="width: 56px; height: 56px">
+              <span class="capygen-mascot__layer" style="opacity: 1">
+                <img class="capygen-mascot__img capygen-mascot__img--idle" src="../assets/mascot/states/idle.png" alt="" draggable="false" />
+              </span>
+            </span>
+          </div>
+          <div class="name">variant="eyes"</div>
+        </div>
+        <div class="cell">
+          <div class="stage" style="width: 16px; height: 16px">
+            <span class="capygen-mascot" style="width: 16px; height: 16px">
+              <span class="capygen-mascot__layer" style="opacity: 1">
+                <img class="capygen-mascot__img capygen-mascot__img--idle" src="../assets/mascot/states/idle.png" alt="" draggable="false" />
+              </span>
+            </span>
+          </div>
+          <div class="name">variant="icon"</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const STATES = [
+        "idle",
+        "thinking",
+        "working",
+        "waiting",
+        "success",
+        "error",
+        "sleeping",
+        "listening",
+      ];
+
+      const grid = document.getElementById("states");
+      for (const state of STATES) {
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        cell.innerHTML =
+          '<div class="stage"><span class="capygen-mascot" style="width:96px;height:96px">' +
+          '<span class="capygen-mascot__layer" style="opacity:1">' +
+          '<img class="capygen-mascot__img capygen-mascot__img--' +
+          state +
+          '" src="../assets/mascot/states/' +
+          state +
+          '.png" alt="capygen mascot, ' +
+          state +
+          '" draggable="false" /></span></span></div>' +
+          '<div class="name">' +
+          state +
+          "</div>";
+        grid.appendChild(cell);
+      }
+
+      // Live cross-fade demo: mirrors Mascot.tsx's two-layer approach.
+      const stage = document.getElementById("crossfade-stage");
+      let index = 0;
+      setInterval(() => {
+        index = (index + 1) % STATES.length;
+        const nextState = STATES[index];
+        const outgoing = stage.querySelector(".capygen-mascot__layer");
+        outgoing.style.transition = "opacity 150ms ease";
+        outgoing.style.opacity = "0";
+        const incoming = document.createElement("span");
+        incoming.className = "capygen-mascot__layer";
+        incoming.style.opacity = "0";
+        incoming.innerHTML =
+          '<img class="capygen-mascot__img capygen-mascot__img--' +
+          nextState +
+          '" src="../assets/mascot/states/' +
+          nextState +
+          '.png" alt="" draggable="false" />';
+        stage.appendChild(incoming);
+        requestAnimationFrame(() => {
+          incoming.style.transition = "opacity 150ms ease";
+          incoming.style.opacity = "1";
+        });
+        setTimeout(() => outgoing.remove(), 200);
+      }, 1800);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,199 @@
+/*
+ * capygen brand assets — mascot animation and wordmark type.
+ *
+ * Self-contained on purpose: everything the components in this folder need
+ * lives here, so `apps/renderer/src/brand/**` stays a single owned unit
+ * (Task B3) that does not depend on `index.css` having already declared the
+ * wordmark face. The font file itself is staged into `public/fonts/` by
+ * `apps/renderer/scripts/sync-assets.ts` from `assets/fonts/` (single source
+ * of truth, SPEC assumption A11 — if the licence turns out to forbid
+ * redistribution, this face is dropped and Wordmark falls back to rendering
+ * plain text).
+ */
+
+@font-face {
+  font-family: "CheGuevaraBarry";
+  src: url("/fonts/CheGuevaraBarry-Brown.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+.capygen-wordmark {
+  font-family: "CheGuevaraBarry", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+/* --- Mascot --------------------------------------------------------------
+ * Two stacked layers (current + outgoing) cross-fade on `opacity` over
+ * 150ms when `state` changes; the per-state micro-animation lives on the
+ * `<img>` inside the active layer so it never fights the cross-fade (they
+ * animate different elements). Every keyframe drives only `transform`/
+ * `opacity` — no layout properties — so it stays GPU-friendly.
+ */
+
+.capygen-mascot {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.capygen-mascot__layer {
+  position: absolute;
+  inset: 0;
+  transition: opacity 150ms ease;
+}
+
+.capygen-mascot__layer--in {
+  opacity: 1;
+}
+
+.capygen-mascot__layer--out {
+  opacity: 0;
+}
+
+.capygen-mascot__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+@keyframes capygen-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes capygen-bob-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes capygen-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes capygen-blink {
+  0%,
+  92%,
+  100% {
+    opacity: 1;
+  }
+  96% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes capygen-jitter {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(0, -1px);
+  }
+  50% {
+    transform: translate(0, 0);
+  }
+  75% {
+    transform: translate(0, 1px);
+  }
+}
+
+@keyframes capygen-bounce {
+  0% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-6px);
+  }
+  55% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes capygen-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-3px);
+  }
+  40% {
+    transform: translateX(3px);
+  }
+  60% {
+    transform: translateX(-2px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+.capygen-mascot__img--idle {
+  animation: capygen-bob 1.2s ease-in-out infinite;
+}
+
+.capygen-mascot__img--thinking {
+  animation: capygen-pulse 1.6s ease-in-out infinite;
+}
+
+.capygen-mascot__img--working {
+  animation: capygen-jitter 0.6s steps(4, end) infinite;
+}
+
+.capygen-mascot__img--waiting {
+  animation: capygen-blink 3.2s ease-in-out infinite;
+}
+
+.capygen-mascot__img--success {
+  animation: capygen-bounce 0.6s ease-out 1;
+}
+
+.capygen-mascot__img--error {
+  animation: capygen-shake 0.5s ease-in-out 1;
+}
+
+.capygen-mascot__img--sleeping {
+  animation: capygen-bob-slow 2.4s ease-in-out infinite;
+}
+
+.capygen-mascot__img--listening {
+  animation: capygen-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .capygen-mascot__img {
+    animation: none !important;
+  }
+  .capygen-mascot__layer {
+    transition: none !important;
+  }
+}
