@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "spike": "pnpm --filter @capygen/engine spike",
+    "spike": "corepack pnpm --filter @capygen/engine spike",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   },
