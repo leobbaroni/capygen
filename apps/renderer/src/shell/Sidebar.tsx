@@ -11,6 +11,8 @@ import { useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { ArchiveIcon, ArchiveRestoreIcon, Plus, SearchIcon, Settings as SettingsIcon } from "lucide-react";
 import type { Project, Session } from "@capygen/shared";
+import { BrandLogo } from "@/brand/BrandLogo";
+import { Wordmark } from "@/brand/Wordmark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
@@ -64,8 +66,13 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
       className="conversations-sidebar flex w-[260px] shrink-0 flex-col border-r border-border bg-card select-none"
     >
       {/* Sits under the caption buttons only on the right edge of the window;
-          the sidebar is on the left, so it just needs the title-bar height. */}
-      <div className="flex h-9 items-center px-3" />
+          the sidebar is on the left, so it just needs the title-bar height.
+          The brand lockup lives here — the small mark plus the wordmark, the
+          same pair Omnigent's sidebar carries at the top of the rail. */}
+      <div className="flex h-9 items-center gap-1.5 px-3" data-testid="sidebar-brand">
+        <BrandLogo variant="icon" />
+        <Wordmark className="text-sm text-foreground" testId="brand-wordmark" />
+      </div>
 
       <div className="flex flex-col gap-2 px-2 pb-2">
         <Button

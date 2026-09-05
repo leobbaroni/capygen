@@ -16,7 +16,8 @@ import { useNavigate } from "react-router-dom";
 import { Folder, GitBranch } from "lucide-react";
 import { DEFAULT_HEADING, type Project } from "@capygen/shared";
 import { Composer } from "@/components/Composer";
-import { Mascot } from "@/components/Mascot";
+import { Mascot } from "@/brand/Mascot";
+import { Wordmark } from "@/brand/Wordmark";
 import { useMascotState } from "@/hooks/useMascotState";
 import { useAppStore } from "@/store/appStore";
 
@@ -57,7 +58,9 @@ export function LandingPage() {
           840 − 80 = 760px max. */}
       <div className="flex w-full max-w-[840px] flex-col items-center gap-6 px-10 pt-8 pb-16 select-none">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
-          <Mascot state={mascotState} className="h-16 w-16" />
+          {/* h-14 (56px) inside the reference's h-16 hero box:
+              NewChatDialog.tsx `<BrandLogo variant="eyes" className="h-14 w-auto" />`. */}
+          <Mascot state={mascotState} size={56} />
           <h1
             className="min-w-0 text-center text-[2.15em] font-normal tracking-[-0.05em] text-foreground"
             data-testid="landing-heading"
@@ -114,9 +117,7 @@ export function LandingPage() {
           </p>
         ) : null}
 
-        <p className="wordmark text-sm text-foreground-tertiary" data-testid="wordmark">
-          capygen
-        </p>
+        <Wordmark className="text-sm text-foreground-tertiary" />
       </div>
     </div>
   );

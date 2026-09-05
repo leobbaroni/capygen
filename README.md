@@ -4,8 +4,10 @@ A native-Windows desktop app for working with Claude Code, Codex and API models 
 Omnigent's UI and features, no server to connect to, dockable panes, one-click dev servers, and
 in-app management of harnesses, MCP servers, skills and plugins.
 
-Status: in development. See `SPEC.md` (contract), `PLAN.md` (build order), `CONTEXT.md`
-(glossary), `PROJECT_LOG.md` (what happened).
+Status: in development — Phase 2 done (landing → live Claude reply → persisted across a
+relaunch). See `SPEC.md` (contract), `PLAN.md` (build order), `CONTEXT.md` (glossary),
+`PROJECT_LOG.md` (what happened), `docs/RUN.md` (how to dev/build/test/e2e), `COMPAT.md`
+(external contracts).
 
 Design and behaviour reference: Omnigent (Apache-2.0), vendored read-only under
 `reference/omnigent/` with its NOTICE. capygen reuses its CSS tokens verbatim (see
@@ -18,7 +20,7 @@ apps/desktop/     Electron main + preload (TypeScript, bundled with esbuild → 
 apps/renderer/    Vite 8 + React 18 + Tailwind 4 + shadcn/ui (the SPA)
 packages/shared/  domain types, zod schemas, the typed IPC contract (`defineIpc`)
 packages/db/      SQLite schema, numbered migrations, repositories
-packages/engine/  harnesses (Phase 3+); Phase 1 spikes live in its scripts/
+packages/engine/  harnesses — Claude (SDK) today, Codex/API in Phase 3; spikes in its scripts/
 assets/           mascot states, wordmark font — the source of truth for brand assets
 docs/adr/         decisions   docs/spikes/   capability proofs
 ```
@@ -38,8 +40,10 @@ All package-manager calls go through corepack; bare `pnpm` is not on PATH here.
 | `corepack pnpm e2e` | build, then Playwright against the real Electron app |
 | `corepack pnpm spike` | Phase 1 engine capability proof |
 
-`corepack pnpm build` must run before `start` or `e2e`: Electron's entry point is
-`apps/desktop/dist/main.cjs`, not the TypeScript.
+`corepack pnpm build` must run before `start` or `e2e:only`: Electron's entry point is
+`apps/desktop/dist/main.cjs`, not the TypeScript. `pnpm e2e` runs two suites —
+`tests/e2e/launch.spec.ts` offline against the echo double, and `tests/e2e/skeleton.spec.ts`
+against the real Claude backend (**real model calls, real money**). Details in `docs/RUN.md`.
 
 ## Environment variables
 

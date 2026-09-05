@@ -8,11 +8,14 @@ import "./brand.css";
 
 export interface WordmarkProps {
   className?: string;
+  /** Overridable so two lockups on one screen (sidebar + landing footer)
+   *  stay individually addressable. */
+  testId?: string;
 }
 
-export function Wordmark({ className }: WordmarkProps) {
+export function Wordmark({ className, testId = "wordmark" }: WordmarkProps) {
   return (
-    <span className={cn("capygen-wordmark", className)} data-testid="wordmark">
+    <span className={cn("capygen-wordmark", className)} data-testid={testId}>
       capygen
     </span>
   );

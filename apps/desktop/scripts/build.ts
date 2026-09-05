@@ -1,7 +1,7 @@
 /**
  * Bundle the Electron main + preload with esbuild into apps/desktop/dist, and
- * copy the two runtime assets they load by path: the SQL migrations and the tray
- * icon. CommonJS output on purpose — Electron's preload is loaded as CJS, and a
+ * copy the runtime assets they load by path: the SQL migrations and the brand
+ * icons (tray + window). CommonJS output on purpose — Electron's preload is loaded as CJS, and a
  * single format for both keeps `__dirname` meaning the same thing in each.
  *
  * `electron` is external (provided by the runtime); `node:*` builtins are
@@ -62,12 +62,15 @@ for (const file of fs.readdirSync(migrationsSrc)) {
   }
 }
 
-// Tray icon: the idle mascot, which Electron downsizes to 16px at runtime.
+// Brand icons, loaded by path at runtime (main.ts): `tray.png` is the 32px
+// tray mark and `icon.png` the 256px window/taskbar icon, both from
+// `assets/icons/` — the brand set, not a downsized mascot frame.
 const assetsOut = path.join(outDir, "assets");
 fs.mkdirSync(assetsOut, { recursive: true });
-fs.copyFileSync(
-  path.join(repoRoot, "assets", "mascot", "states", "idle.png"),
-  path.join(assetsOut, "tray.png"),
-);
+for (const icon of ["tray.png", "icon.png"]) {
+  const from = path.join(repoRoot, "assets", "icons", icon);
+  if (!fs.existsSync(from)) throw new Error(`build: missing brand icon ${from}`);
+  fs.copyFileSync(from, path.join(assetsOut, icon));
+}
 
 console.log(`[build] desktop bundle written to ${outDir}${watch ? " (watch not implemented)" : ""}`);

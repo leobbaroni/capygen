@@ -13,6 +13,10 @@
  *    thinking pulses slowly (a stand-in "thinking" cue), working jitters in
  *    4 steps, waiting blinks, success bounces once, error shakes once,
  *    sleeping bobs slower, listening pulses faster than thinking.
+ *
+ * Which state to show is decided in one place only —
+ * `lib/mascotState.ts` (`deriveMascotState`), read through
+ * `hooks/useMascotState.ts`. This component never derives it.
  */
 import { useEffect, useRef, useState } from "react";
 import type { MascotState } from "@capygen/shared";
@@ -39,6 +43,12 @@ export interface MascotProps {
    * landing page's `h-16 w-16`. */
   size?: number;
   className?: string;
+  /**
+   * Overridable so a page can host more than one mascot without colliding:
+   * the sidebar's small brand mark is always mounted, so it identifies as
+   * `brand-logo` and leaves `mascot` to mean "the page's reactive mascot".
+   */
+  testId?: string;
 }
 
 function frameSrc(state: MascotState): string {
@@ -48,7 +58,7 @@ function frameSrc(state: MascotState): string {
   return `./mascot/${state}.png`;
 }
 
-export function Mascot({ state = "idle", size = 64, className }: MascotProps) {
+export function Mascot({ state = "idle", size = 64, className, testId = "mascot" }: MascotProps) {
   const previousStateRef = useRef<MascotState>(state);
   const [outgoing, setOutgoing] = useState<MascotState | null>(null);
 
@@ -65,7 +75,7 @@ export function Mascot({ state = "idle", size = 64, className }: MascotProps) {
     <span
       className={cn("capygen-mascot", className)}
       style={{ width: size, height: size }}
-      data-testid="mascot"
+      data-testid={testId}
       data-state={state}
     >
       {outgoing ? (
@@ -88,22 +98,4 @@ export function Mascot({ state = "idle", size = 64, className }: MascotProps) {
       </span>
     </span>
   );
-}
-
-/** Session status → mascot state. Mirrors `components/Mascot.tsx`'s mapping
- * (CONTEXT.md §Mascot: state mirrors the active session's status) so both can
- * agree without importing each other. */
-export function mascotStateForSession(
-  status: "idle" | "running" | "waiting" | "error" | undefined,
-): MascotState {
-  switch (status) {
-    case "running":
-      return "working";
-    case "waiting":
-      return "waiting";
-    case "error":
-      return "error";
-    default:
-      return "idle";
-  }
 }

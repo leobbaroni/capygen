@@ -7,7 +7,7 @@
 import { useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { XIcon } from "lucide-react";
-import { Mascot } from "@/components/Mascot";
+import { Mascot } from "@/brand/Mascot";
 import { Composer } from "@/components/Composer";
 import { Transcript } from "@/components/Transcript";
 import { TurnRail } from "@/components/TurnRail";
@@ -42,7 +42,7 @@ export function ChatPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-page">
       <header className="titlebar-clearance flex h-9 shrink-0 items-center gap-2 px-4">
-        <Mascot state={mascotState} className="h-5 w-5" />
+        <Mascot state={mascotState} size={20} />
         <span className="truncate text-sm text-muted-foreground">
           {session?.title || "Untitled session"}
         </span>

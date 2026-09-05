@@ -34,7 +34,11 @@ function TurnView({ turn, blocks }: { turn: Turn; blocks: Block[] }) {
       className={cn("flex w-full scroll-mt-4", isUser ? "justify-end" : "justify-start")}
     >
       <div className={cn("flex min-w-0 flex-col gap-2", isUser ? "max-w-[80%]" : "w-full")}>
-        {turn.hopIndex > 0 && !isUser ? (
+        {/* Hop 1 is just "the agent answering the user" — every solo turn is
+            one, so badging it is noise. The chip only means something once an
+            agent answers another agent (CONTEXT.md §Turn; the dispatcher and
+            its hop cap arrive in Phase 4). */}
+        {turn.hopIndex > 1 && !isUser ? (
           <span className="text-xs text-muted-foreground" data-testid="turn-hop">
             hop {turn.hopIndex}
           </span>

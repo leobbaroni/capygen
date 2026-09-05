@@ -19,17 +19,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* [capygen] Wordmark face. Bundled per SPEC assumption A11; if the licence turns
-   out to forbid redistribution, the wordmark ships as an SVG instead and this
-   block goes away. */
-@font-face {
-  font-family: "CheGuevaraBarry";
-  src: url("/fonts/CheGuevaraBarry-Brown.ttf") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
 @theme inline {
   --font-heading: var(--font-sans);
   /* Native system UI font stack — defers to whatever the OS ships (Segoe UI on
@@ -38,7 +27,9 @@
     ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
     "Segoe UI Symbol", "Noto Color Emoji";
   --font-mono: "Cascadia Mono", "JetBrains Mono", ui-monospace, monospace;
-  /* [capygen] The wordmark/brand step. */
+  /* [capygen] The wordmark/brand step. The `@font-face` for
+     "CheGuevaraBarry" is declared once, in `brand/brand.css`, which every
+     brand component imports; this token only names the family. */
   --font-brand: "CheGuevaraBarry", var(--font-sans);
   /* Hero/title step — overrides Tailwind's text-3xl (30/36) with 32/36. */
   --text-3xl: 32px;
@@ -259,18 +250,6 @@
 /* Anything living in the top-right corner keeps clear of the caption buttons. */
 .titlebar-clearance {
   padding-right: var(--caption-width);
-}
-
-/* [capygen] Brand wordmark. */
-.wordmark {
-  font-family: var(--font-brand);
-  letter-spacing: 0.01em;
-}
-
-/* [capygen] The mascot renders a 256px PNG at a small size; keep the pixels
-   crisp rather than letting the browser smooth them into mush. */
-.mascot-img {
-  image-rendering: pixelated;
 }
 
 /* Thin, unobtrusive scrollbars matching the palette. */

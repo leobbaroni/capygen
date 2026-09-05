@@ -66,6 +66,10 @@ const HERE: string = __dirname;
 const RENDERER_INDEX = path.join(HERE, "..", "..", "renderer", "dist", "index.html");
 const PRELOAD = path.join(HERE, "preload.cjs");
 const TRAY_ICON = path.join(HERE, "assets", "tray.png");
+/** Window + taskbar icon. Only meaningful for `pnpm start` / e2e runs against
+ *  the dev directory — a packaged build takes its icon from the executable
+ *  resources electron-builder writes (Phase 12). */
+const APP_ICON = path.join(HERE, "assets", "icon.png");
 
 let store: CapygenStore | null = null;
 let log: Logger;
@@ -122,6 +126,7 @@ function createWindow(): BrowserWindow {
     minHeight: 560,
     show: false,
     backgroundColor: isDark() ? "#0e1013" : "#ffffff",
+    ...(fs.existsSync(APP_ICON) ? { icon: APP_ICON } : {}),
     ...windowOptions(isDark()),
     webPreferences: {
       preload: PRELOAD,

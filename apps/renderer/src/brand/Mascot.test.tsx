@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Mascot, mascotStateForSession } from "./Mascot";
+import { Mascot } from "./Mascot";
 
 describe("Mascot", () => {
   it("renders the idle frame by default", () => {
@@ -31,15 +31,5 @@ describe("Mascot", () => {
     const html = renderToStaticMarkup(<Mascot state="working" />);
     const layerCount = html.split("capygen-mascot__layer ").length - 1;
     expect(layerCount).toBe(1);
-  });
-});
-
-describe("mascotStateForSession", () => {
-  it("maps session status to a mascot state", () => {
-    expect(mascotStateForSession("running")).toBe("working");
-    expect(mascotStateForSession("waiting")).toBe("waiting");
-    expect(mascotStateForSession("error")).toBe("error");
-    expect(mascotStateForSession("idle")).toBe("idle");
-    expect(mascotStateForSession(undefined)).toBe("idle");
   });
 });

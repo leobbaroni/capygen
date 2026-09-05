@@ -106,6 +106,14 @@ const DEFAULT_INTERRUPT_GRACE_MS = 5_000;
 /** Wire names of the sub-agent tool: `init.tools` says Task, the model emits Agent. */
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
 export const SUBAGENT_HOOK_MATCHER = "Task|Agent";
+/**
+ * Tools whose whole purpose is the card `canUseTool` already emitted. Their
+ * `tool_use` / `tool_result` frames would otherwise render a second, raw
+ * tool-call card next to the interactive one (the question card *is* the
+ * rendering of this call), so they are folded into the block keyed
+ * `question:<toolUseId>` instead. Matches Claude Code's own transcript.
+ */
+const INTERACTION_TOOLS = new Set(["AskUserQuestion"]);
 
 interface ActiveTurn {
   turnId: string;
@@ -118,6 +126,8 @@ interface ActiveTurn {
   taskToolUse: Map<string, string>;
   /** Sub-agent blocks by tool_use id, keyed for later status updates. */
   subagents: Map<string, { name: string; description: string; model: string | null }>;
+  /** tool_use ids of INTERACTION_TOOLS calls, whose frames are not re-rendered. */
+  interactionToolUseIds: Set<string>;
   settled: boolean;
   interrupted: boolean;
   interruptTimer: ReturnType<typeof setTimeout> | null;
@@ -220,6 +230,7 @@ export class ClaudeHarness implements Harness {
       toolKeys: new Map(),
       taskToolUse: new Map(),
       subagents: new Map(),
+      interactionToolUseIds: new Set(),
       settled: false,
       interrupted: false,
       interruptTimer: null,
@@ -503,6 +514,11 @@ export class ClaudeHarness implements Harness {
       if (block.type === "tool_use") {
         const toolUseId = str(block.id) ?? `${key}:tool`;
         const name = str(block.name) ?? "tool";
+        if (INTERACTION_TOOLS.has(name)) {
+          // The `question:<toolUseId>` block is the card for this call.
+          turn.interactionToolUseIds.add(toolUseId);
+          return;
+        }
         if (SUBAGENT_TOOLS.has(name)) {
           const input = (block.input ?? {}) as Record<string, unknown>;
           this.upsertSubagent(turn, toolUseId, {
@@ -552,6 +568,9 @@ export class ClaudeHarness implements Harness {
         });
         continue;
       }
+      // The answer is already on the question card; a tool_result card here
+      // would just repeat it.
+      if (turn.interactionToolUseIds.has(toolUseId)) continue;
       const key = turn.toolKeys.get(toolUseId) ?? `tool:${toolUseId}`;
       turn.toolKeys.set(toolUseId, key);
       const structured = message.tool_use_result;

@@ -33,6 +33,12 @@ const jobs: CopyJob[] = [
     from: path.join(repoRoot, "assets", "fonts", "CheGuevaraBarry-Brown.ttf"),
     to: path.join(publicDir, "fonts", "CheGuevaraBarry-Brown.ttf"),
   },
+  // The page icon referenced by index.html; the window/tray icons are copied
+  // separately into the desktop bundle by apps/desktop/scripts/build.ts.
+  {
+    from: path.join(repoRoot, "assets", "icons", "favicon.ico"),
+    to: path.join(publicDir, "favicon.ico"),
+  },
 ];
 
 let copied = 0;

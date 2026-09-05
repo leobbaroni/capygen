@@ -6,10 +6,13 @@ import type { Project, Session } from "@capygen/shared";
 import { useAppStore } from "@/store/appStore";
 import { Sidebar } from "./Sidebar";
 
+// Deliberately not "capygen": the sidebar header carries the brand wordmark,
+// which is the literal text "capygen", so a project of that name would make
+// the grouping assertion below ambiguous.
 const project: Project = {
   id: "proj-1",
-  path: "C:/work/capygen",
-  name: "capygen",
+  path: "C:/work/widget-shop",
+  name: "widget-shop",
   layout: null,
   devServers: null,
   createdAt: 0,
@@ -46,8 +49,15 @@ beforeEach(() => {
 describe("Sidebar", () => {
   it("groups sessions under their project's name", () => {
     renderSidebar([session({ id: "s1", title: "First" })]);
-    expect(screen.getByText("capygen")).toBeInTheDocument();
+    expect(screen.getByText("widget-shop")).toBeInTheDocument();
     expect(screen.getByText("First")).toBeInTheDocument();
+  });
+
+  it("carries the brand lockup at the top of the rail", () => {
+    renderSidebar([]);
+    const brand = screen.getByTestId("sidebar-brand");
+    expect(within(brand).getByTestId("brand-logo")).toBeInTheDocument();
+    expect(within(brand).getByTestId("brand-wordmark")).toHaveTextContent("capygen");
   });
 
   it("falls back to a loose-sessions bucket for an unknown project", () => {

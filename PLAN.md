@@ -4,9 +4,13 @@ One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contrac
 
 ## Current State
 
-- Empty repo scaffold: `reference/omnigent/` (design + API reference, read-only), `assets/fonts/`
-  (wordmark font), `docs/adr/`, this plan (verified: this session).
-- Nothing builds yet. Machine facts: SPEC.md §Current State.
+- Phases 1–2 done (verified 2026-09-06): the monorepo builds, the app launches on the New Session
+  landing, a live Claude turn streams into the transcript with a usage/cost line, and the session
+  survives a relaunch out of SQLite. `pnpm typecheck` clean · `pnpm test` 142 passed ·
+  `pnpm build` clean · `pnpm e2e` 7 passed (5 offline + 2 live). How to run any of it:
+  `docs/RUN.md`.
+- Not built yet: everything from Phase 3 on — Codex and API harnesses, panes, settings hub,
+  round-table, packaging. Machine facts: SPEC.md §Current State.
 
 ## Approach
 
@@ -26,7 +30,7 @@ capygen/
   packages/shared/        IPC contracts (zod), domain types, constants
   packages/engine/        harness interface, Claude/Codex/API harnesses, tool runtime, MCP client,
                           round-table dispatcher, routing policy, compaction, usage accounting
-  packages/db/            better-sqlite3 schema, migrations, repositories
+  packages/db/            SQLite schema, migrations, repositories (node:sqlite — docs/adr/0003)
   assets/                 fonts, mascot sprite sheets, icons
   reference/omnigent/     read-only design/API reference (never imported at runtime)
   docs/adr/  docs/spikes/ decisions, spike logs
@@ -60,7 +64,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       run against the signed-in CLIs; record token usage per call; if any capability is missing,
       record the ConPTY fallback plan for exactly that piece.
       Covers: R7, R8, R14 basis; checks: A2, A3, A4.
-- [ ] Phase 2: Walking skeleton app + brand
+- [x] Phase 2: Walking skeleton app + brand
       Done when: `pnpm e2e` launches the packaged-dir build, lands on the New Session page
       (capybara mascot, "What should we build?", composer, dir picker), sends "reply with the
       word pong", and the transcript shows the Claude reply; relaunch restores the session.
@@ -70,6 +74,20 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       mascot sprite sheet (generate 8 states, 96 px, pixel style; fall back to code-drawn pixel
       art if generation is unavailable) + reactive state hook; wordmark font-face.
       Covers: R1, R2, R5, R6 (text/tool blocks), R15; checks: A1, A5, A6, A8.
+      Done 2026-09-06: `tests/e2e/skeleton.spec.ts` (live) — landing (mascot + heading + composer
+      + pre-selected folder) → "Reply with exactly the word pong." → text block "pong" and a usage
+      line (`2 in · 4 out · 37,211 cached · $0.0075 (claude-sonnet-5)`) → app close → relaunch on
+      the same profile → the session in the sidebar and the same transcript
+      (`e2e-out/chat-pong.png`, `e2e-out/restored.png`); a second test answers a live
+      `AskUserQuestion` card and the model echoes the choice (`e2e-out/chat-question.png`).
+      `tests/e2e/launch.spec.ts` keeps the same path green offline (`CAPYGEN_ENGINE=stub`).
+      A6 (Omnigent tokens copy verbatim) and A8 (8-state mascot) hold; A11 (font may be bundled)
+      is still unverified but now regression-checked (`document.fonts.check`).
+      Not covered by an e2e: R2's tray / close-to-tray path is unit-tested only
+      (`apps/desktop/test/win.test.ts` "tray / close-to-tray") — Playwright cannot drive the
+      Windows tray. Permission cards round-trip in unit tests (harness + runner + handlers), not
+      live; a live proof needs a tool the user's own `~/.claude` allowlist does not pre-approve,
+      which would make the spec machine-dependent.
 - [ ] Phase 3: Harness layer complete
       Done when: fixture tests pass for all three harnesses (Claude, Codex, API model with a
       mocked API) rendering every block type; live smoke: Codex answers; slash menu lists

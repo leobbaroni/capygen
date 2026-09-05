@@ -326,6 +326,55 @@ describe("ClaudeHarness — permissions (SPEC R27)", () => {
   });
 });
 
+describe("ClaudeHarness — AskUserQuestion is rendered once", () => {
+  it("folds the tool_use and tool_result frames into the question block", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "ask me" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    const input = {
+      questions: [
+        {
+          question: "Red or blue?",
+          header: "Colour",
+          multiSelect: false,
+          options: [{ label: "Red" }, { label: "Blue" }],
+        },
+      ],
+    };
+    const asked = fake.options().canUseTool?.("AskUserQuestion", input, {
+      signal: new AbortController().signal,
+      toolUseID: "toolu_q",
+      requestId: "req-1",
+    } as never);
+    await vi.waitFor(() => expect(turn.events.some((e) => e.type === "question")).toBe(true));
+    const question = turn.events.find(
+      (e): e is Extract<EngineEvent, { type: "question" }> => e.type === "question",
+    );
+    harness.answerQuestion(question!.requestId, { "Red or blue?": "Blue" });
+    await asked;
+
+    // The same call also comes down the stream as a normal tool_use plus its
+    // tool_result. Those must NOT become a second, raw tool-call card next to
+    // the question card the user already answered.
+    fake.out.push(
+      assistantMessage("msg_q", [
+        { type: "tool_use", id: "toolu_q", name: "AskUserQuestion", input },
+      ]),
+    );
+    fake.out.push(toolResultMessage("toolu_q", "Blue"));
+    fake.out.push(resultMessage("Blue"));
+    await turn.done;
+
+    expect(blocks(turn.events, "tool_call")).toEqual([]);
+    expect(blocks(turn.events, "question").at(-1)?.patch.answers).toEqual({
+      "Red or blue?": "Blue",
+    });
+    await harness.dispose();
+  });
+});
+
 describe("ClaudeHarness — sub-agents (SPEC R12)", () => {
   it("registers the hook on both wire names and fails open by default", async () => {
     const fake = makeFakeSdk();

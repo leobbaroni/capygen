@@ -90,6 +90,30 @@ test("lands on the New Session page with the mascot and composer", async () => {
   expect(fs.existsSync(path.join(outDir, "landing.png"))).toBe(true);
 });
 
+test("renders the brand lockup in the wordmark face", async () => {
+  // The sidebar's small mark + wordmark, and the landing's reactive mascot,
+  // are three separate mounts of the same brand components (apps/renderer/
+  // src/brand/**) — they must not collide on one test id.
+  const brand = page.getByTestId("sidebar-brand");
+  await expect(brand.getByTestId("brand-logo")).toBeVisible();
+  await expect(brand.getByTestId("brand-wordmark")).toHaveText("capygen");
+  await expect(page.getByTestId("mascot")).toBeVisible();
+
+  // SPEC assumption A11: the wordmark ships in CheGuevaraBarry-Brown. A
+  // missing/blocked font file would silently fall back to the sans stack, so
+  // assert the face actually loaded rather than that the class is present.
+  const loaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return document.fonts.check('16px "CheGuevaraBarry"');
+  });
+  expect(loaded).toBe(true);
+
+  const family = await page
+    .getByTestId("brand-wordmark")
+    .evaluate((el) => getComputedStyle(el).fontFamily);
+  expect(family).toContain("CheGuevaraBarry");
+});
+
 test("hides the native title bar and keeps a drag region", async () => {
   // The seamless chrome: Electron draws only the caption buttons, the page
   // supplies the drag strip (apps/desktop/src/win/chrome.ts).

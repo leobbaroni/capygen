@@ -169,8 +169,33 @@
 - `COMPAT.md` written: every SDK member the app now relies on, with its `.d.ts`/spike citation and a
   fallback.
 
+## 2026-09-06 — Phase 2 / C: integration + live proof
+
+- Phase 2 is **done**: the built app lands on the New Session page, a live Claude turn streams into
+  the transcript with a usage/cost line, and the session comes back out of SQLite after a relaunch —
+  proved by `tests/e2e/skeleton.spec.ts` against the real harness, not a double
+  (`e2e-out/chat-pong.png`, `e2e-out/restored.png`, `e2e-out/chat-question.png`).
+- Wiring: the brand components (`brand/Mascot`, `brand/Wordmark`, `brand/BrandLogo`) are now the
+  only mascot/wordmark in the app — `components/Mascot.tsx` and the duplicate `@font-face` /
+  `.wordmark` / `.mascot-img` rules in `index.css` are gone, and `brand/Mascot`'s second
+  session→state table went with them (`lib/mascotState.ts` is the one decision table). The sidebar
+  carries the brand lockup; `assets/icons/{tray,icon}.png` are copied into the desktop bundle and
+  used for the tray and the window; `favicon.ico` is staged into the renderer's `public/`.
+- Two rendering defects the live run exposed and fixed: every solo agent turn was badged "hop 1"
+  (the chip now only shows for real agent→agent hops), and an answered `AskUserQuestion` rendered
+  twice — once as the question card, once as a raw tool-call card, because the same call also comes
+  down the stream as `tool_use`/`tool_result`. `ClaudeHarness` now folds those frames into the
+  question block (`INTERACTION_TOOLS`), with a regression test and a `COMPAT.md` row.
+- Checks: `pnpm typecheck` clean · `pnpm test` 142 passed (13 files) · `pnpm build` clean ·
+  `pnpm e2e` 7 passed (5 offline + 2 live, 1.0 min, ~$0.02). `docs/RUN.md` written.
+
 ## Open / next
-- Phase 2 remaining: the e2e walking-skeleton still asserts the echo reply (`CAPYGEN_ENGINE=stub`); a
-  live-Claude e2e (PLAN Phase 2 "reply with the word pong") wants its own opt-in spec.
+- R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
+  in `apps/desktop/test/win.test.ts`.
+- Permission cards round-trip in unit tests only. A live proof would depend on the user's own
+  `~/.claude` allowlist not pre-approving the tool, so it is left for Phase 3's harness matrix.
+- `tests/e2e/skeleton.spec.ts` runs on every `pnpm e2e` and spends real tokens. If that becomes
+  annoying in CI, gate it behind a tag rather than deleting it — it is the only proof the app talks
+  to a real model.
 - Sub-agent routing policy is a stub (`ClaudeHarness` `routeSubagent` dep, fail-open) — Phase 4 fills it in.
 - Round-table queuing: the runner allows one in-flight turn per session; Phase 4 adds the dispatcher.

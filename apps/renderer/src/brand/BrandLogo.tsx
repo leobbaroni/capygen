@@ -28,6 +28,11 @@ export interface BrandLogoProps {
 
 export function BrandLogo({ className, variant = "eyes" }: BrandLogoProps) {
   return (
-    <Mascot state="idle" size={VARIANT_SIZE_PX[variant]} className={className} />
+    <Mascot
+      state="idle"
+      size={VARIANT_SIZE_PX[variant]}
+      className={className}
+      testId="brand-logo"
+    />
   );
 }
