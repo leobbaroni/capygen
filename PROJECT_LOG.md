@@ -56,3 +56,25 @@
 - Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
   AskUserQuestion cards.
+
+## 2026-09-05 — Task B3: mascot component, wordmark, app icons
+- `apps/renderer/src/brand/{Mascot,Wordmark,BrandLogo}.tsx` + `brand.css`: cross-fading,
+  per-state-animated mascot (`{state, size}`); `Wordmark`; a `BrandLogo` drop-in for
+  `reference/…/components/BrandLogo.tsx`'s `{className, variant}` props. Kept self-contained
+  (own font-face, no import from `components/Mascot.tsx`) since other Phase 2 tasks were
+  editing that file and `pages/ChatPage.tsx` concurrently.
+- `scripts/make-icons.py` (Pillow, nearest-neighbour resizes from
+  `assets/mascot/states/idle.png`) → `assets/icons/{icon.png 512, icon.ico 256/128/64/48/32/16,
+  tray.png 32, favicon.ico 32/16}`, copied into `apps/desktop/build/icons/` (electron-builder,
+  unwired — Phase 12) and `apps/renderer/public/favicon.ico` (gitignored like the rest of
+  `public/`; `apps/renderer/scripts/sync-assets.ts` should add it to its copy job list so a
+  fresh clone regenerates it). The tray already had a runtime hook
+  (`apps/desktop/src/main.ts` `TRAY_ICON`) copying `idle.png` directly — left as is.
+- `scripts/brand-preview.html`: all 8 states + wordmark + BrandLogo sizes, opens from disk with
+  no build step. Checked with Playwright chromium (one-off script, not committed): 11/11 images
+  loaded, `CheGuevaraBarry` font loaded, 0 console errors; screenshot at `e2e-out/brand-preview.png`.
+- Added a `renderer-brand` vitest project (`environment: "node"`, `esbuild.jsx: "automatic"`) to
+  the root `vitest.config.ts` so `brand/*.test.tsx` can run via `react-dom/server` SSR strings —
+  no jsdom/@testing-library dependency added. 10 new tests, 83/83 passing repo-wide.
+- Commit `1712802` (17 files, mine only — `git add` named paths, not `-A`, since Phase 2's other
+  concurrent tasks had unstaged/untracked edits in the same tree at commit time).
