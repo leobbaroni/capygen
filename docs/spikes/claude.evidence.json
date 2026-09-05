@@ -1,0 +1,284 @@
+{
+ "generatedAt": "2026-09-05T22:16:28.275Z",
+ "note": "Trimmed, redacted evidence for the Phase 1 Claude SDK spike gates (docs/spikes/claude-sdk-shapes.md, packages/engine/scripts/spike-claude.ts). Not the full raw stream — see claude.raw.json (gitignored, much larger) for that. Emails/organizations are redacted the same way as the raw log (see redact() below).",
+ "caps": [
+  {
+   "name": "stream_text",
+   "status": "PASS",
+   "evidence": "result.result=\"pong\" model=claude-sonnet-5 claude_code_version=2.1.261 stream_event msgs=7 apiKeySource=none"
+  },
+  {
+   "name": "system_init_commands",
+   "status": "PASS",
+   "evidence": "slash_commands=93 builtins present=[context,compact,clear,model,usage,init] plugin-qualified=31 (cockpit:diagnosing-bugs,cockpit:domain-modeling,cockpit:grill-with-docs,cockpit:grilling,cockpit:handoff,cockpit:orchestrate,cockpit:pilot,cockpit:setup,…) cockpit:pilot=true plugins=[cockpit@3.0.0,maestro@5.0.0,hyperframes@0.8.4] skills=57 tools=163 (AskUserQuestion=false, Task=true, Agent=false) mcp_servers=4 model=claude-sonnet-5 output_style=Concise capabilities=[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\",\"msg_lifecycle_v1\"] supportedCommands()=93 pilotDesc=\"(Cockpit) Pilot\""
+  },
+  {
+   "name": "slash_context",
+   "status": "PASS",
+   "evidence": "assistant.context_usage{model=claude-sonnet-5 total_tokens=22152 raw_max=1000000 pct=2 categories=System prompt=568|System tools=12152|MCP tools (deferred)=89066|System tools (deferred)=15076|Memory files=879|Skills=8545|Messages=8|Autocompact buffer=33000|Free space=944848} msgs=[system:hook_started,system:hook_response,system:init,assistant,result:success]"
+  },
+  {
+   "name": "plugin_command",
+   "status": "PASS",
+   "evidence": "cmd=/cockpit:pilot what's next isPilot=true pilotStepZeroFingerprint=true firstToolUse=Bash firstBashCmd=\"cd \\\"C:\\\\Users\\\\TugaPlayz\\\\Desktop\\\\GITHUB\\\\capygen\\\" && git log --oneline -5 && echo --- && git status --short && echo --- && tail -n 40 PROJECT_LOG.md 2>/dev/null &&\" expanded(<command-name> in user msg)=false tools=[Bash,Bash,Bash,Bash,Read,Bash,Read,Bash] result.subtype=success text=\"**Phase: BUILD — because PLAN.md has Phase 2 unchecked and the tree already has a skeleton app running uncommitted on `main`.** Next: wire the real Claude harness into `chat.send` (replacing the `echo:` placeholder), the\""
+  },
+  {
+   "name": "ask_user_question",
+   "status": "PASS",
+   "evidence": "mode=bypassPermissions canUseTool calls=[AskUserQuestion] question=\"Which colour do you prefer?\" tool_use_result={\"questions\":[{\"question\":\"Which colour do you prefer?\",\"header\":\"Colour\",\"options\":[{\"label\":\"Red\",\"description\":\"Choose red\"},{\"label\":\"Blue\",\"description\":\"Choose blue\"}],\"multiSelect\":false}],\"ans final=\"Blue\""
+  },
+  {
+   "name": "pretooluse_hook_task",
+   "status": "PASS",
+   "evidence": "hook fired=1 [Agent#toolu_01] task_started=1 {task_id=ab15df24e08e797b4 subagent_type=general-purpose desc=\"Count .md files in directory\" bg=false depth=1} subagent msgs(parent_tool_use_id)=5 task_notification=1 hook_events=[hook_started:SessionStart,hook_response:SessionStart,hook_started:UserPromptSubmit,hook_response:UserPromptSubmit,hook_started:PreToolUse,hook_response:PreToolUse] final=\"6 .md files: CLAUDE.md, CONTEXT.md, PLAN.md, PROJECT_LOG.md, README.md, SPEC.md\""
+  },
+  {
+   "name": "routing_lever",
+   "status": "PASS",
+   "evidence": "hookFired=1 sentUpdatedInput.model='haiku'=true task_started.hasModelField=false task_started.fields=[\"type\",\"subtype\",\"task_id\",\"tool_use_id\",\"description\",\"subagent_type\",\"is_backgrounded\",\"spawn_depth\",\"task_type\",\"prompt\",\"uuid\",\"session_id\"] task_notification.usage.hasModelField=false resolvedModel=\"claude-haiku-4-5-20251001\" modelUsage keys=[claude-sonnet-5,claude-haiku-4-5-20251001] final=\".claude\\napps\\nassets\\ndocs\\ne2e-out\\nnode_modules\\npackages\\nreference\\nscripts\\ntests\""
+  },
+  {
+   "name": "usage_reporting",
+   "status": "PASS",
+   "evidence": "every model-calling step reports input>0,output>0,total_cost_usd>0: a:in=2,out=4,cost=0.0551484 b:in=2,out=4,cost=0.0073624 d:in=16,out=3194,cost=0.1504446 e:in=4,out=131,cost=0.0165826 f:in=4,out=224,cost=0.0934027; local (exempt, no model call): c=local(cost=0)"
+  }
+ ],
+ "init": {
+  "model": "claude-sonnet-5",
+  "claude_code_version": "2.1.261",
+  "apiKeySource": "none",
+  "permissionMode": "bypassPermissions",
+  "output_style": "Concise",
+  "capabilities": [
+   "interrupt_receipt_v1",
+   "interrupt_cancel_queued_v1",
+   "msg_lifecycle_v1"
+  ],
+  "mcp_servers": [
+   {
+    "name": "claude.ai Higgsfield",
+    "status": "connected"
+   },
+   {
+    "name": "claude.ai Gmail",
+    "status": "connected"
+   },
+   {
+    "name": "claude.ai Context7",
+    "status": "connected"
+   },
+   {
+    "name": "claude.ai Microsoft 365",
+    "status": "needs-auth"
+   }
+  ],
+  "slash_commands": {
+   "count": 93,
+   "sample": [
+    "agent-reach",
+    "computer-use",
+    "graphify",
+    "impeccable",
+    "mediabunny",
+    "orca-cli",
+    "orchestration",
+    "unity-cli",
+    "website-to-video",
+    "deep-research",
+    "capygen-phase2-skeleton",
+    "cockpit:diagnosing-bugs",
+    "cockpit:domain-modeling",
+    "cockpit:grill-with-docs",
+    "cockpit:grilling"
+   ],
+   "hasCockpitPilot": true
+  },
+  "plugin_commands": {
+   "count": 31,
+   "sample": [
+    "cockpit:diagnosing-bugs",
+    "cockpit:domain-modeling",
+    "cockpit:grill-with-docs",
+    "cockpit:grilling",
+    "cockpit:handoff",
+    "cockpit:orchestrate",
+    "cockpit:pilot",
+    "cockpit:setup",
+    "cockpit:test-driven-development",
+    "cockpit:using-worktrees"
+   ]
+  },
+  "tools": {
+   "count": 163,
+   "hasAskUserQuestion": false,
+   "hasTask": true,
+   "hasAgent": false
+  },
+  "skills": {
+   "count": 57
+  },
+  "plugins": [
+   {
+    "name": "cockpit",
+    "version": "3.0.0"
+   },
+   {
+    "name": "maestro",
+    "version": "5.0.0"
+   },
+   {
+    "name": "hyperframes",
+    "version": "0.8.4"
+   }
+  ]
+ },
+ "canUseTool": {
+  "calls": [
+   {
+    "step": "e",
+    "data": {
+     "toolName": "AskUserQuestion",
+     "input": {
+      "questions": [
+       {
+        "question": "Which colour do you prefer?",
+        "header": "Colour",
+        "options": [
+         {
+          "label": "Red",
+          "description": "Choose red"
+         },
+         {
+          "label": "Blue",
+          "description": "Choose blue"
+         }
+        ],
+        "multiSelect": false
+       }
+      ]
+     },
+     "options": {
+      "displayName": "AskUserQuestion",
+      "toolUseID": "toolu_01RhCd5g8gNNBgp4LAww8jYd",
+      "requestId": "46bf6c44-117b-4be5-b822-6f9fa97fecbe"
+     },
+     "permissionMode": "bypassPermissions"
+    }
+   }
+  ],
+  "responses": [
+   {
+    "step": "e",
+    "data": {
+     "behavior": "allow",
+     "updatedInput": {
+      "questions": [
+       {
+        "question": "Which colour do you prefer?",
+        "header": "Colour",
+        "options": [
+         {
+          "label": "Red",
+          "description": "Choose red"
+         },
+         {
+          "label": "Blue",
+          "description": "Choose blue"
+         }
+        ],
+        "multiSelect": false
+       }
+      ],
+      "answers": {
+       "Which colour do you prefer?": "Blue"
+      }
+     }
+    }
+   }
+  ]
+ },
+ "hooks": [
+  {
+   "step": "f",
+   "kind": "hook_PreToolUse",
+   "data": {
+    "input": {
+     "session_id": "d15fde1b-035a-493d-a209-84f4fce7731b",
+     "transcript_path": "C:\\Users\\TugaPlayz\\.claude\\projects\\C--Users-TugaPlayz-Desktop-GITHUB-capygen\\d15fde1b-035a-493d-a209-84f4fce7731b.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "prompt_id": "a27f4f13-7b6a-43a5-99b6-317266f530ab",
+     "permission_mode": "bypassPermissions",
+     "effort": {
+      "level": "medium"
+     },
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "Count .md files in directory",
+      "prompt": "Count the number of .md files (Markdown files) in the current working directory (top-level only, not subdirectories, unless subdirectories are clearly intended—default to top-level only). Report just the count and the list of filenames.",
+      "run_in_background": false
+     },
+     "tool_use_id": "toolu_01G1x3y8njX26RQgjybWaiSB"
+    },
+    "toolUseID": "toolu_01G1x3y8njX26RQgjybWaiSB"
+   }
+  },
+  {
+   "step": "f",
+   "kind": "hook_PreToolUse_response",
+   "data": {}
+  },
+  {
+   "step": "g",
+   "kind": "hook_PreToolUse",
+   "data": {
+    "input": {
+     "session_id": "bcc3febd-822e-42f3-a53b-fbdbbf150b3a",
+     "transcript_path": "C:\\Users\\TugaPlayz\\.claude\\projects\\C--Users-TugaPlayz-Desktop-GITHUB-capygen\\bcc3febd-822e-42f3-a53b-fbdbbf150b3a.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "prompt_id": "217c5043-88be-477e-9c9b-242f4e7813c8",
+     "permission_mode": "bypassPermissions",
+     "effort": {
+      "level": "medium"
+     },
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "List top-level folders",
+      "prompt": "List the top-level folder names (directories only, not files) in \"C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen\" — non-recursive. Output one folder name per line, nothing else.",
+      "subagent_type": "Explore",
+      "run_in_background": false
+     },
+     "tool_use_id": "toolu_01EY42KKMXQ2yGhFLp82Ws4z"
+    },
+    "toolUseID": "toolu_01EY42KKMXQ2yGhFLp82Ws4z"
+   }
+  },
+  {
+   "step": "g",
+   "kind": "hook_PreToolUse_response",
+   "data": {
+    "hookSpecificOutput": {
+     "hookEventName": "PreToolUse",
+     "permissionDecision": "allow",
+     "updatedInput": {
+      "description": "List top-level folders",
+      "prompt": "List the top-level folder names (directories only, not files) in \"C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen\" — non-recursive. Output one folder name per line, nothing else.",
+      "subagent_type": "Explore",
+      "run_in_background": false,
+      "model": "haiku"
+     }
+    }
+   }
+  }
+ ],
+ "usage": {
+  "a": "subtype=success turns=1 4838ms usage{input=2 output=4 cache_creation=12739 cache_read=20742} total_cost_usd=0.0551 modelUsage{claude-sonnet-5: in=2 out=4 cacheRead=20742 cacheCreate=12739 cost=$0.0551 ctx=1000000}",
+  "b": "subtype=success turns=1 4347ms usage{input=2 output=4 cache_creation=0 cache_read=36592} total_cost_usd=0.0074 modelUsage{claude-sonnet-5: in=2 out=4 cacheRead=36592 cacheCreate=0 cost=$0.0074 ctx=1000000}",
+  "c": "subtype=success turns=0 578ms usage{input=0 output=0 cache_creation=0 cache_read=0} total_cost_usd=0.0000 modelUsage{}",
+  "d": "subtype=success turns=9 66613ms usage{input=16 output=3194 cache_creation=12009 cache_read=352183} total_cost_usd=0.1504 modelUsage{claude-sonnet-5: in=16 out=3194 cacheRead=352183 cacheCreate=12009 cost=$0.1504 ctx=1000000}",
+  "e": "subtype=success turns=2 11687ms usage{input=4 output=131 cache_creation=0 cache_read=76323} total_cost_usd=0.0166 modelUsage{claude-sonnet-5: in=4 out=131 cacheRead=76323 cacheCreate=0 cost=$0.0166 ctx=1000000}",
+  "f": "subtype=success turns=2 27234ms usage{input=4 output=224 cache_creation=445 cache_read=73222} total_cost_usd=0.0934 modelUsage{claude-sonnet-5: in=10 out=478 cacheRead=161651 cacheCreate=22242 cost=$0.0934 ctx=1000000}",
+  "g": "subtype=success turns=2 27566ms usage{input=4 output=232 cache_creation=329 cache_read=73228} total_cost_usd=0.0329 modelUsage{claude-sonnet-5: in=4 out=232 cacheRead=73228 cacheCreate=329 cost=$0.0183 ctx=1000000; claude-haiku-4-5-20251001: in=18 out=724 cacheRead=26502 cacheCreate=6684 cost=$0.0146 ctx=200000}"
+ }
+}

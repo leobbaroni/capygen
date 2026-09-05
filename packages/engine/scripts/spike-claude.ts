@@ -3,7 +3,14 @@
  *
  * Runs one query() per capability against cwd = repo root and logs every SDKMessage to
  * docs/spikes/claude.raw.json (gitignored). Prints one "CAP <name> PASS|PARTIAL|FAIL - <evidence>"
- * line per capability. Always exits 0.
+ * line per capability, then writes docs/spikes/claude.evidence.json — a small, redacted,
+ * commit-able extract (init summary, canUseTool call/return, hook input/output, per-step usage)
+ * that backs up every PASS without requiring the full (gitignored) raw log. Always exits 0.
+ *
+ * Steps: a=stream_text, b=system_init_commands, c=slash_context (local, no model call),
+ * d=plugin_command, e=ask_user_question, f=pretooluse_hook_task, g=routing_lever
+ * (SPEC R12 sub-agent routing: does a PreToolUse hook's updatedInput.model actually steer the
+ * spawned sub-agent?). usage_reporting is derived from a/b/d/e/f, not run as its own query.
  *
  * Run: corepack pnpm --dir packages/engine exec tsx scripts/spike-claude.ts
  * Env: SPIKE_CLAUDE_EXE=<path to claude.exe> to override the SDK-bundled binary.
@@ -25,6 +32,7 @@ import { dirname } from 'node:path';
 
 const CWD = 'C:/Users/TugaPlayz/Desktop/GITHUB/capygen';
 const RAW = `${CWD}/docs/spikes/claude.raw.json`;
+const EVIDENCE = `${CWD}/docs/spikes/claude.evidence.json`;
 const QUERY_TIMEOUT_MS = 240_000;
 
 // ---------- logging ----------
@@ -224,13 +232,20 @@ function failReason(r: RunResult): string {
   return `no result; stderr tail: ${tail.slice(0, 400)}`;
 }
 
-const wanted = new Set((process.env.SPIKE_STEPS ?? 'a,b,c,d,e,f').split(','));
+const wanted = new Set((process.env.SPIKE_STEPS ?? 'a,b,c,d,e,f,g').split(','));
 const usage: Record<string, string> = {};
+/** Numeric twin of `usage`, used by the usage_reporting gate (§g below) instead of regexing strings. */
+type UsageNums = { input: number; output: number; cost: number } | null;
+const usageNums: Record<string, UsageNums> = {};
+function recordUsage(step: string, r: RunResult): void {
+  usage[step] = usageLine(r);
+  usageNums[step] = r.result ? { input: r.result.usage.input_tokens, output: r.result.usage.output_tokens, cost: r.result.total_cost_usd } : null;
+}
 
 // ---------- a) ping ----------
 if (wanted.has('a')) {
   const r = await run({ step: 'a', prompt: 'Reply with exactly the word pong.', maxTurns: 2, includePartialMessages: true });
-  usage.a = usageLine(r);
+  recordUsage('a', r);
   const streamEvents = r.messages.filter((m) => m.type === 'stream_event').length;
   if (/pong/i.test(r.finalText)) {
     cap('stream_text', 'PASS', `result.result=${JSON.stringify(r.finalText.trim())} model=${r.init?.model} claude_code_version=${r.init?.claude_code_version} stream_event msgs=${streamEvents} apiKeySource=${r.init?.apiKeySource}`);
@@ -244,7 +259,7 @@ let pluginCommands: string[] = [];
 let toolNames: string[] = [];
 if (wanted.has('b')) {
   const r = await run({ step: 'b', prompt: 'Reply with exactly the word ok.', maxTurns: 2, streaming: true });
-  usage.b = usageLine(r);
+  recordUsage('b', r);
   const init = r.init;
   if (init) {
     const sc = init.slash_commands ?? [];
@@ -272,7 +287,7 @@ if (wanted.has('b')) {
 // ---------- c) /context ----------
 if (wanted.has('c')) {
   const r = await run({ step: 'c', prompt: '/context', maxTurns: 2 });
-  usage.c = usageLine(r);
+  recordUsage('c', r);
   const withCtx = r.messages.find((m) => m.type === 'assistant' && (m as { context_usage?: unknown }).context_usage);
   const local = r.messages.find((m) => m.type === 'system' && (m as { subtype: string }).subtype === 'local_command_output');
   const textHit = /context|tokens/i.test(r.finalText);
@@ -291,21 +306,56 @@ if (wanted.has('c')) {
 if (wanted.has('d')) {
   const cmd = pluginCommands.includes('cockpit:pilot') || pluginCommands.length === 0 ? 'cockpit:pilot' : pluginCommands[0]!;
   const prompt = cmd === 'cockpit:pilot' ? "/cockpit:pilot what's next" : `/${cmd}`;
-  const r = await run({ step: 'd', prompt, maxTurns: 6 });
-  usage.d = usageLine(r);
-  const assistantTexts = r.messages
-    .filter((m): m is Extract<SDKMessage, { type: 'assistant' }> => m.type === 'assistant' && !m.parent_tool_use_id)
-    .flatMap((m) => m.message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text));
+  // maxTurns 9 (was 6): the pilot skill's own step count varies with git-log verbosity on the
+  // machine running it — a run observed hitting error_max_turns at 6 with the fingerprint tool call
+  // already made but no final reply yet, which is a turn-budget artifact, not evidence the skill
+  // didn't run. Give it enough headroom to reach its own natural finish.
+  const r = await run({ step: 'd', prompt, maxTurns: 9 });
+  recordUsage('d', r);
+  const assistantMsgs = r.messages.filter(
+    (m): m is Extract<SDKMessage, { type: 'assistant' }> => m.type === 'assistant' && !m.parent_tool_use_id,
+  );
+  const assistantTexts = assistantMsgs.flatMap((m) => m.message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text));
   const allText = [...assistantTexts, r.finalText].join('\n');
   const toolsUsed = r.messages
     .filter((m): m is Extract<SDKMessage, { type: 'assistant' }> => m.type === 'assistant')
     .flatMap((m) => m.message.content.filter((b) => b.type === 'tool_use').map((b) => (b as { name: string }).name));
   const expanded = r.messages.some((m) => m.type === 'user' && JSON.stringify(m.message.content).includes('<command-name>'));
   const hit = /phase|plan/i.test(allText);
-  const ev = `cmd=${prompt} expanded(<command-name> in user msg)=${expanded} tools=[${toolsUsed.join(',')}] result.subtype=${r.result?.subtype} text=${JSON.stringify(allText.slice(0, 220))}`;
-  if (hit && (expanded || toolsUsed.length > 0)) cap('plugin_command', 'PASS', ev);
-  else if (hit || expanded) cap('plugin_command', 'PARTIAL', ev);
-  else cap('plugin_command', 'FAIL', `${failReason(r)} ${ev}`);
+
+  // PASS predicate (tightened after adversarial review): "some tool ran and the reply sounds
+  // plausible" is not evidence the *plugin skill* executed — an unmodified model can produce both
+  // a Bash call and phase/plan-sounding prose with no plugin loaded at all. Require a fingerprint
+  // that only cockpit:pilot's own script produces: its documented "Step 0" (skills/pilot's build
+  // node — observed running verbatim in claude-sdk-shapes.md §8.4) issues `git log --oneline -5`
+  // then `git status --short` as the FIRST top-level tool_use of the turn, before the model has
+  // seen any other output to react to. That exact ordered pair, as the opening move, is not
+  // something a bare model would improvise unprompted — it is the skill's literal command line.
+  // PASS requires BOTH: (a) the fingerprint tool call — proof the skill's *code* ran — AND
+  // (b) a phase/plan reply — proof the skill's *output* also matches its documented behaviour.
+  // Either alone is insufficient: the fingerprint alone doesn't prove the rest of the skill ran
+  // correctly, and the reply text alone is exactly the forgeable signal the previous gate accepted.
+  const firstToolUse = assistantMsgs.flatMap((m) => m.message.content.filter((b) => b.type === 'tool_use'))[0] as
+    | { name: string; input: unknown }
+    | undefined;
+  const firstBashCmd =
+    firstToolUse && firstToolUse.name === 'Bash' ? String((firstToolUse.input as { command?: unknown }).command ?? '') : '';
+  const pilotStepZeroFingerprint = /git log --oneline -5/.test(firstBashCmd) && /git status --short/.test(firstBashCmd);
+  const isPilot = cmd === 'cockpit:pilot';
+
+  const ev = `cmd=${prompt} isPilot=${isPilot} pilotStepZeroFingerprint=${pilotStepZeroFingerprint} firstToolUse=${firstToolUse?.name ?? 'none'} firstBashCmd=${JSON.stringify(firstBashCmd.slice(0, 160))} expanded(<command-name> in user msg)=${expanded} tools=[${toolsUsed.join(',')}] result.subtype=${r.result?.subtype} text=${JSON.stringify(allText.slice(0, 220))}`;
+
+  if (isPilot) {
+    if (pilotStepZeroFingerprint && hit) cap('plugin_command', 'PASS', ev);
+    else if (pilotStepZeroFingerprint || hit) cap('plugin_command', 'PARTIAL', ev);
+    else cap('plugin_command', 'FAIL', `${failReason(r)} ${ev}`);
+  } else {
+    // No known per-skill fingerprint for whatever plugin command ran instead (cockpit:pilot was
+    // unavailable this run): tool use + on-topic text is suggestive, never proof, so this branch
+    // cannot reach PASS.
+    if (hit && toolsUsed.length > 0) cap('plugin_command', 'PARTIAL', `no fingerprint check available for ${cmd}; ${ev}`);
+    else cap('plugin_command', 'FAIL', `${failReason(r)} no fingerprint check available for ${cmd}; ${ev}`);
+  }
 }
 
 // ---------- e) AskUserQuestion via canUseTool ----------
@@ -345,7 +395,7 @@ if (wanted.has('e')) {
     ({ r, seen } = await attempt('default'));
     mode = 'default';
   }
-  usage.e = usageLine(r);
+  recordUsage('e', r);
   const asked = seen.find((s) => s.toolName === 'AskUserQuestion');
   const toolResult = r.messages.find((m) => m.type === 'user' && JSON.stringify(m.message.content).includes('tool_result'));
   const tur = toolResult ? (toolResult as { tool_use_result?: unknown }).tool_use_result : undefined;
@@ -363,7 +413,9 @@ if (wanted.has('f')) {
     if (input.hook_event_name === 'PreToolUse') {
       fired.push({ tool_name: input.tool_name, tool_use_id: input.tool_use_id, toolUseID, agent_id: input.agent_id, tool_input: input.tool_input });
     }
-    return {};
+    const res = {};
+    rec('f', 'hook_PreToolUse_response', res);
+    return res;
   };
   const r = await run({
     step: 'f',
@@ -372,7 +424,7 @@ if (wanted.has('f')) {
     hooks: { PreToolUse: [{ matcher: 'Task|Agent', hooks: [hook] }] },
     includeHookEvents: true,
   });
-  usage.f = usageLine(r);
+  recordUsage('f', r);
   const taskStarted = r.messages.filter((m) => m.type === 'system' && (m as { subtype: string }).subtype === 'task_started');
   const subMsgs = r.messages.filter((m) => (m.type === 'assistant' || m.type === 'user') && m.parent_tool_use_id);
   const taskNotif = r.messages.filter((m) => m.type === 'system' && (m as { subtype: string }).subtype === 'task_notification');
@@ -385,9 +437,182 @@ if (wanted.has('f')) {
   else cap('pretooluse_hook_task', 'FAIL', `${failReason(r)} ${ev}`);
 }
 
-// ---------- g) usage ----------
+// ---------- g) routing_lever: PreToolUse hook rewrites a sub-agent's model (SPEC R12) ----------
+// Sub-agent routing (SPEC R12) needs a lever that actually steers which model a spawned sub-agent
+// runs on. The candidate lever is PreToolUse.hookSpecificOutput.updatedInput on the Task/Agent
+// tool call (AgentInput.model, sdk-tools.d.ts:678, accepts 'sonnet'|'opus'|'haiku'|'fable'). This
+// step forces model:'haiku' from the hook and checks the STREAM for proof it took effect, using
+// exactly the three places the SDK could report it: task_started (no model field in the .d.ts —
+// recorded to confirm that absence rather than assume it), task_notification.usage (same), and
+// the final result's modelUsage keys (a per-model dictionary — a 'haiku' key with tokens>0 is
+// direct proof the sub-agent billed against that model). The undocumented-but-observed
+// tool_use_result.resolvedModel (claude-sdk-shapes.md §8.6) is recorded as corroborating evidence
+// alongside those three, not a substitute for them.
+if (wanted.has('g')) {
+  const hookCalls: Array<{ tool_name: string; tool_input: unknown }> = [];
+  const hook: HookCallback = async (input, toolUseID) => {
+    rec('g', 'hook_PreToolUse', { input, toolUseID });
+    if (input.hook_event_name === 'PreToolUse' && /^(Task|Agent)$/.test(input.tool_name)) {
+      hookCalls.push({ tool_name: input.tool_name, tool_input: input.tool_input });
+      const updatedInput = { ...(input.tool_input as Record<string, unknown>), model: 'haiku' };
+      const res = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse' as const,
+          permissionDecision: 'allow' as const,
+          updatedInput,
+        },
+      };
+      rec('g', 'hook_PreToolUse_response', res);
+      return res;
+    }
+    const res = {};
+    rec('g', 'hook_PreToolUse_response', res);
+    return res;
+  };
+  const r = await run({
+    step: 'g',
+    prompt: 'Use the Task tool to spawn a subagent that lists the top-level folder names in this directory, one per line.',
+    maxTurns: 6,
+    hooks: { PreToolUse: [{ matcher: 'Task|Agent', hooks: [hook] }] },
+  });
+  recordUsage('g', r);
+  const taskStarted = r.messages.filter((m) => m.type === 'system' && (m as { subtype: string }).subtype === 'task_started') as Array<
+    Record<string, unknown>
+  >;
+  const taskNotif = r.messages.filter((m) => m.type === 'system' && (m as { subtype: string }).subtype === 'task_notification') as Array<
+    Record<string, unknown>
+  >;
+  const taskResultFrame = r.messages.find(
+    (m) => m.type === 'user' && !m.parent_tool_use_id && JSON.stringify((m as { tool_use_result?: unknown }).tool_use_result ?? '').includes('resolvedModel'),
+  );
+  const resolvedModel = taskResultFrame
+    ? ((taskResultFrame as { tool_use_result?: { resolvedModel?: string } }).tool_use_result?.resolvedModel ?? null)
+    : null;
+  const modelUsageKeys = Object.keys(r.result?.modelUsage ?? {});
+  const haikuInModelUsage = modelUsageKeys.some((k) => /haiku/i.test(k));
+  const haikuInResolved = typeof resolvedModel === 'string' && /haiku/i.test(resolvedModel);
+  const ts0 = taskStarted[0];
+  const tn0 = taskNotif[0];
+  const ev =
+    `hookFired=${hookCalls.length} sentUpdatedInput.model='haiku'=${hookCalls.length > 0} ` +
+    `task_started.hasModelField=${!!(ts0 && 'model' in ts0)} task_started.fields=${ts0 ? JSON.stringify(Object.keys(ts0)) : 'n/a'} ` +
+    `task_notification.usage.hasModelField=${!!(tn0 && typeof tn0.usage === 'object' && tn0.usage !== null && 'model' in (tn0.usage as object))} ` +
+    `resolvedModel=${JSON.stringify(resolvedModel)} modelUsage keys=[${modelUsageKeys.join(',')}] final=${JSON.stringify(r.finalText.trim().slice(0, 100))}`;
+  if (hookCalls.length === 0) {
+    cap('routing_lever', 'FAIL', `hook never fired for a Task/Agent tool_use — could not attempt the override; ${ev}`);
+  } else if (haikuInModelUsage || haikuInResolved) {
+    cap('routing_lever', 'PASS', ev);
+  } else {
+    cap(
+      'routing_lever',
+      'FAIL',
+      `SDK ignored PreToolUse.hookSpecificOutput.updatedInput.model — the sub-agent billed against the inherited model, not haiku; ` +
+        `fallback (engine.md §5): deny the Task/Agent call from the hook (permissionDecision:'deny') and have capygen's own ` +
+        `dispatcher re-issue the equivalent work as a fresh query() with options.model set directly, instead of relying on the ` +
+        `CLI to honour an in-flight rewrite; ${ev}`,
+    );
+  }
+}
+
+// ---------- h) usage_reporting ----------
 for (const [k, v] of Object.entries(usage)) console.log(`USAGE ${k}: ${v}`);
-cap('usage_reporting', Object.values(usage).some((u) => /total_cost_usd=\d/.test(u)) ? 'PASS' : 'FAIL', Object.values(usage).some((u) => /total_cost_usd=\d/.test(u)) ? `result.usage + result.modelUsage + total_cost_usd present on ${Object.keys(usage).join(',')}` : 'no result messages carried usage');
+// PASS predicate (tightened after adversarial review): "some step somewhere reported a nonzero
+// cost" passed even when other model-calling steps silently reported nothing — a single lucky hit
+// hid missing usage everywhere else. Every step that actually calls the model — a, b, d, e, f (g
+// is the routing_lever probe, judged on its own evidence above, not folded into this average) —
+// must independently show input>0, output>0 AND total_cost_usd>0: proof each call reached the API
+// and was billed. Step c (/context) is a LOCAL command per the SDK's own contract (result.num_turns
+// is 0, no model is called) — a zero there is correct behaviour, not missing evidence, so it is
+// exempted from the check and labelled as local rather than counted for or against the capability.
+const MODEL_CALLING_STEPS = ['a', 'b', 'd', 'e', 'f'];
+const LOCAL_STEPS = ['c'];
+const ranModelSteps = MODEL_CALLING_STEPS.filter((s) => wanted.has(s));
+const zeroOrMissing = ranModelSteps.filter((s) => {
+  const n = usageNums[s];
+  return !n || !(n.input > 0 && n.output > 0 && n.cost > 0);
+});
+const detail = ranModelSteps
+  .map((s) => `${s}:in=${usageNums[s]?.input ?? '-'},out=${usageNums[s]?.output ?? '-'},cost=${usageNums[s]?.cost ?? '-'}`)
+  .join(' ');
+const localDetail = LOCAL_STEPS.filter((s) => wanted.has(s))
+  .map((s) => `${s}=local(cost=${usageNums[s]?.cost ?? 'n/a'})`)
+  .join(',');
+if (ranModelSteps.length === 0) {
+  cap('usage_reporting', 'FAIL', 'no model-calling step (a,b,d,e,f) ran; cannot verify usage reporting');
+} else if (zeroOrMissing.length === 0) {
+  cap('usage_reporting', 'PASS', `every model-calling step reports input>0,output>0,total_cost_usd>0: ${detail}; local (exempt, no model call): ${localDetail || 'none run'}`);
+} else {
+  cap(
+    'usage_reporting',
+    'FAIL',
+    `zero/missing usage on model-calling step(s) [${zeroOrMissing.join(',')}]: ${detail}; local (exempt, no model call): ${localDetail || 'none run'}`,
+  );
+}
+
+// ---------- evidence.json: trimmed, redacted, commit-able extract that backs every PASS above ----------
+// Per-step: the init summary (system/init, trimmed to the fields the gates actually key on), the
+// canUseTool call/return (step e), the PreToolUse hook input/output (steps f, g), and the per-step
+// usage line — i.e. exactly the frames a reviewer needs to check each CAP line without opening the
+// full (gitignored, ~350 KB raw) claude.raw.json.
+function trimInit(m: Record<string, unknown>): unknown {
+  const sc = (m.slash_commands as string[] | undefined) ?? [];
+  const tools = (m.tools as string[] | undefined) ?? [];
+  const skills = (m.skills as string[] | undefined) ?? [];
+  const plugins = (m.plugins as Array<{ name: string; version?: string }> | undefined) ?? [];
+  const pluginQualified = sc.filter((c) => c.includes(':'));
+  return {
+    model: m.model,
+    claude_code_version: m.claude_code_version,
+    apiKeySource: m.apiKeySource,
+    permissionMode: m.permissionMode,
+    output_style: m.output_style,
+    capabilities: m.capabilities ?? null,
+    mcp_servers: ((m.mcp_servers as Array<{ name: string; status: string }> | undefined) ?? []).map((s) => ({ name: s.name, status: s.status })),
+    slash_commands: { count: sc.length, sample: sc.slice(0, 15), hasCockpitPilot: sc.includes('cockpit:pilot') },
+    plugin_commands: { count: pluginQualified.length, sample: pluginQualified.slice(0, 10) },
+    tools: { count: tools.length, hasAskUserQuestion: tools.includes('AskUserQuestion'), hasTask: tools.includes('Task'), hasAgent: tools.includes('Agent') },
+    skills: { count: skills.length },
+    plugins: plugins.map((p) => ({ name: p.name, version: p.version })),
+  };
+}
+
+function buildEvidence(): unknown {
+  const initEntry = log.find(
+    (e) =>
+      e.kind === 'msg' &&
+      !!e.data &&
+      typeof e.data === 'object' &&
+      (e.data as { type?: string }).type === 'system' &&
+      (e.data as { subtype?: string }).subtype === 'init',
+  );
+  const canUseToolCalls = log.filter((e) => e.kind === 'canUseTool').map((e) => ({ step: e.step, data: e.data }));
+  const canUseToolResponses = log.filter((e) => e.kind === 'canUseTool_response').map((e) => ({ step: e.step, data: e.data }));
+  const hookIO = log
+    .filter((e) => e.kind === 'hook_PreToolUse' || e.kind === 'hook_PreToolUse_response')
+    .map((e) => ({ step: e.step, kind: e.kind, data: e.data }));
+  return {
+    generatedAt: new Date().toISOString(),
+    note:
+      'Trimmed, redacted evidence for the Phase 1 Claude SDK spike gates (docs/spikes/claude-sdk-shapes.md, ' +
+      'packages/engine/scripts/spike-claude.ts). Not the full raw stream — see claude.raw.json (gitignored, ' +
+      'much larger) for that. Emails/organizations are redacted the same way as the raw log (see redact() below).',
+    caps,
+    init: initEntry ? trimInit(initEntry.data as Record<string, unknown>) : null,
+    canUseTool: { calls: canUseToolCalls, responses: canUseToolResponses },
+    hooks: hookIO,
+    usage,
+  };
+}
+
+try {
+  const evidence = redact(buildEvidence());
+  const json = JSON.stringify(evidence, null, 1);
+  mkdirSync(dirname(EVIDENCE), { recursive: true });
+  writeFileSync(EVIDENCE, json, 'utf8');
+  console.log(`EVIDENCE ${EVIDENCE} (${(Buffer.byteLength(json) / 1024).toFixed(1)} KB)`);
+} catch (e) {
+  console.error(`evidence.json write failed: ${e instanceof Error ? e.message : String(e)}`);
+}
 
 rec('summary', 'caps', caps);
 rec('summary', 'usage', usage);

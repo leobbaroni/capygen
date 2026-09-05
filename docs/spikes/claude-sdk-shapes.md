@@ -12,7 +12,7 @@ Spike script: `packages/engine/scripts/spike-claude.ts`. Raw stream log: `docs/s
 
 Machine facts that matter: `claude` on PATH is `C:\Users\TugaPlayz\.local\bin\claude.exe` 2.1.261; the SDK
 also ships its own `claude.exe` (218 MB) in `@anthropic-ai/claude-agent-sdk-win32-x64@0.3.261` and uses it
-when `pathToClaudeCodeExecutable` is not set (`sdk.d.ts:1979`). User plugins installed under
+when `pathToClaudeCodeExecutable` is not set (`sdk.d.ts:1824`). User plugins installed under
 `~/.claude/plugins` (`installed_plugins.json`): `cockpit@cockpit` 3.0.0, `maestro@cockpit` 5.0.0,
 `hyperframes@claude-plugins-official` 0.8.4. `~/.claude/settings.json` sets `model: "sonnet"`,
 `permissions.defaultMode: "auto"`, `outputStyle: "Concise"` and a PowerShell command hook on eleven events
@@ -36,48 +36,52 @@ export declare function query(_params: {
 `supportedModels`, `supportedAgents`, `mcpServerStatus`, `getContextUsage`, `accountInfo`,
 `setMcpServers`, `streamInput`, `stopTask`, `backgroundTasks`, `close`, …) — `sdk.d.ts:2601-2951`. The
 header comment says control requests "are only supported when streaming input/output is used"
-(`sdk.d.ts:2602-2606`); the string-prompt form closes stdin after the prompt (`sdk.d.ts:1794-1806`,
-`perTaskStopAffordance` doc: "a one-shot run (the string `prompt` form and `-p`, which close stdin)").
+(`sdk.d.ts:2602-2606`); the string-prompt form closes stdin after the prompt (`perTaskStopAffordance`
+doc, `sdk.d.ts:1662-1663`: "a one-shot run (the string `prompt` form and `-p`, which close stdin)";
+field itself `:1672`).
 
-`Options` (`sdk.d.ts:1396-2286`) — the members capygen uses:
+`Options` (`sdk.d.ts:1396-2279`) — the members capygen uses. Citations below point to each field's
+own declaration line, or the field's full span when the declaration itself is multi-line (verified
+by grepping the member name in the installed `.d.ts` and reading the surrounding block — the
+previous version of this table cited a mix of stale and off-by-N-line ranges, corrected here):
 
 | Option | Type | Citation | Notes |
 |---|---|---|---|
-| `cwd` | `string` | `sdk.d.ts:1463-1466` | defaults to `process.cwd()` |
-| `permissionMode` | `PermissionMode` = `'default' \| 'acceptEdits' \| 'bypassPermissions' \| 'plan' \| 'dontAsk' \| 'auto'` | `sdk.d.ts:1982-1990`, `sdk.d.ts:2317` | |
-| `allowDangerouslySkipPermissions` | `boolean` | `sdk.d.ts:1999-2003` | must be `true` with `'bypassPermissions'` |
-| `permissionPrompts` | `'host' \| 'none'` | `sdk.d.ts:2010-2019` | `'none'` ⇒ `canUseTool` never called |
-| `canUseTool` | `CanUseTool` | `sdk.d.ts:1451-1455` | see §4 |
-| `hooks` | `Partial<Record<HookEvent, HookCallbackMatcher[]>>` | `sdk.d.ts:1626-1638` | see §5 |
-| `includeHookEvents` | `boolean` | `sdk.d.ts:1728-1737` | emits `hook_started/hook_progress/hook_response` |
-| `mcpServers` | `Record<string, McpServerConfig>` | `sdk.d.ts:1902-1915`; `McpServerConfig` union `sdk.d.ts:1110` (stdio `:1209`, sse `:1192`, http `:1073`, sdk `:1090`) | |
-| `strictMcpConfig` | `boolean` | `sdk.d.ts:2124-2132` | ignore `.mcp.json`/user/plugin MCP |
-| `settingSources` | `SettingSource[]` = `('user' \| 'project' \| 'local')[]` | `sdk.d.ts:2087-2097`, `sdk.d.ts:8273` | omitted ⇒ all; `[]` ⇒ isolation; must include `'project'` for CLAUDE.md |
-| `plugins` | `SdkPluginConfig[]` = `{ type: 'local'; path: string; skipMcpDiscovery?: boolean }[]` | `sdk.d.ts:2020-2034`, `sdk.d.ts:4883-4897` | `pluginDelivery: 'argv' \| 'initialize'` `sdk.d.ts:2035-2047` (initialize form avoids the 32 767-char Windows command-line cap) |
-| `skills` | `string[] \| 'all'` | `sdk.d.ts:2098-2117` | |
-| `model` | `string` | `sdk.d.ts:1920-1924` | examples `'claude-sonnet-5'`, `'claude-opus-4-8'`, `'claude-fable-5'`; `fallbackModel` `:1550-1556` |
-| `resume` | `string` (session id) | `sdk.d.ts:2075-2078` | `resumeSessionAt` `:2085-2093`, `resumeDropsTurn` `:2094-2151`, `forkSession` `:1608-1612`, `sessionId` `:2079-2084` |
-| `continue` | `boolean` | `sdk.d.ts:1458-1462` | mutually exclusive with `resume` |
-| `env` | `{ [k: string]: string \| undefined }` | `sdk.d.ts:1493-1512` | **replaces** the child env entirely — spread `process.env` yourself |
-| `pathToClaudeCodeExecutable` | `string` | `sdk.d.ts:1976-1979` | |
-| `executable` / `executableArgs` | `'bun' \| 'deno' \| 'node'` / `string[]` | `sdk.d.ts:1513-1521` | |
-| `spawnClaudeCodeProcess` | `(o: SpawnOptions) => SpawnedProcess` | `sdk.d.ts:2265-2285`, `SpawnOptions` `:8364-8402`, `SpawnedProcess` `:8312-8362` | custom spawn (e.g. `windowsHide`) |
-| `includePartialMessages` | `boolean` | `sdk.d.ts:1738-1742` | emits `stream_event` |
-| `forwardSubagentText` | `boolean` | `sdk.d.ts:1743-1749` | subagent text/thinking as messages with `parent_tool_use_id` |
-| `maxTurns` | `number` | `sdk.d.ts:1787-1791` | |
-| `maxBudgetUsd` | `number` | `sdk.d.ts:1792-1796` | result subtype `error_max_budget_usd` |
-| `thinking` | `ThinkingConfig` = `{type:'adaptive', display?}` \| `{type:'enabled', budgetTokens?, display?}` \| `{type:'disabled'}` | `sdk.d.ts:1750-1763`, `sdk.d.ts:8564-8589` | supersedes deprecated `maxThinkingTokens` `:1776-1786` |
-| `effort` | `EffortLevel` = `'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'` | `sdk.d.ts:1764-1775`, `sdk.d.ts:591` | |
-| `systemPrompt` | `string \| string[] \| {type:'custom',prompt,snapshot?} \| {type:'preset',preset:'claude_code',append?,excludeDynamicSections?,snapshot?}` | `sdk.d.ts:2133-2249` | `snapshot: true` recommended for cache stability (R24-relevant); `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` `:8513` |
-| `agents` / `agent` | `Record<string, AgentDefinition>` / `string` | `sdk.d.ts:1428-1443`, `AgentDefinition` `:38-103` | programmatic subagents |
-| `tools` / `allowedTools` / `disallowedTools` / `toolAliases` | | `sdk.d.ts:1493-1512`, `:1444-1450`, `:1467-1472`, `:1473-1502` | |
-| `outputFormat` | `{ type: 'json_schema'; schema }` | `sdk.d.ts:1925-1938`, `:968` | structured output |
-| `persistSession` | `boolean` | `sdk.d.ts:1668-1675` | `false` ⇒ no `~/.claude/projects` transcript |
-| `settings` / `managedSettings` | `string \| Settings` | `sdk.d.ts:2043-2060`, `:2061-2086` | flag-layer settings |
+| `cwd` | `string` | `sdk.d.ts:1463` | defaults to `process.cwd()` |
+| `permissionMode` | `PermissionMode` = `'default' \| 'acceptEdits' \| 'bypassPermissions' \| 'plan' \| 'dontAsk' \| 'auto'` | `sdk.d.ts:1833`, type `sdk.d.ts:2317` | |
+| `allowDangerouslySkipPermissions` | `boolean` | `sdk.d.ts:1845` | must be `true` with `'bypassPermissions'` |
+| `permissionPrompts` | `'host' \| 'none'` | `sdk.d.ts:1859` | `'none'` ⇒ `canUseTool` never called |
+| `canUseTool` | `CanUseTool` | `sdk.d.ts:1454`, type `sdk.d.ts:209-269` | see §4 |
+| `hooks` | `Partial<Record<HookEvent, HookCallbackMatcher[]>>` | `sdk.d.ts:1595` | see §5 |
+| `includeHookEvents` | `boolean` | `sdk.d.ts:1720` | emits `hook_started/hook_progress/hook_response` |
+| `mcpServers` | `Record<string, McpServerConfig>` | `sdk.d.ts:1802`; `McpServerConfig` union `sdk.d.ts:1110` (stdio `:1209`, sse `:1192`, http `:1073`, sdk `:1090`) | |
+| `strictMcpConfig` | `boolean` | `sdk.d.ts:2134` | ignore `.mcp.json`/user/plugin MCP |
+| `settingSources` | `SettingSource[]` = `('user' \| 'project' \| 'local')[]` | `sdk.d.ts:2085`, type `sdk.d.ts:8273` | omitted ⇒ all; `[]` ⇒ isolation; must include `'project'` for CLAUDE.md |
+| `plugins` | `SdkPluginConfig[]` = `{ type: 'local'; path: string; skipMcpDiscovery?: boolean }[]` | `sdk.d.ts:1874`, `SdkPluginConfig` `sdk.d.ts:4883-4896` | `pluginDelivery: 'argv' \| 'initialize'` `sdk.d.ts:1889` (initialize form avoids the 32 767-char Windows command-line cap) |
+| `skills` | `string[] \| 'all'` | `sdk.d.ts:2108` | |
+| `model` | `string` | `sdk.d.ts:1807` | examples `'claude-sonnet-5'`, `'claude-opus-4-8'`, `'claude-fable-5'`; `fallbackModel` `sdk.d.ts:1549` |
+| `resume` | `string` (session id) | `sdk.d.ts:1925` | `resumeSessionAt` `sdk.d.ts:1939`, `resumeDropsTurn` `sdk.d.ts:1990`, `forkSession` `sdk.d.ts:1574`, `sessionId` `sdk.d.ts:1931` |
+| `continue` | `boolean` | `sdk.d.ts:1459` | mutually exclusive with `resume` |
+| `env` | `{ [k: string]: string \| undefined }` | `sdk.d.ts:1525-1527` | **replaces** the child env entirely — spread `process.env` yourself |
+| `pathToClaudeCodeExecutable` | `string` | `sdk.d.ts:1824` | |
+| `executable` / `executableArgs` | `'bun' \| 'deno' \| 'node'` / `string[]` | `sdk.d.ts:1532` / `sdk.d.ts:1536` | |
+| `spawnClaudeCodeProcess` | `(o: SpawnOptions) => SpawnedProcess` | `sdk.d.ts:2278`, `SpawnOptions` `sdk.d.ts:8364-8398`, `SpawnedProcess` `sdk.d.ts:8312-8359` | custom spawn (e.g. `windowsHide`) — not exercised by the spike [untested] |
+| `includePartialMessages` | `boolean` | `sdk.d.ts:1725` | emits `stream_event` |
+| `forwardSubagentText` | `boolean` | `sdk.d.ts:1732` | subagent text/thinking as messages with `parent_tool_use_id` |
+| `maxTurns` | `number` | `sdk.d.ts:1772` | |
+| `maxBudgetUsd` | `number` | `sdk.d.ts:1777` | result subtype `error_max_budget_usd` |
+| `thinking` | `ThinkingConfig` = `{type:'adaptive', display?}` \| `{type:'enabled', budgetTokens?, display?}` \| `{type:'disabled'}` | `sdk.d.ts:1745`, `ThinkingConfig` `sdk.d.ts:8572` (variants `ThinkingAdaptive` `:8564-8567`, `ThinkingEnabled` `:8584-8588`, `ThinkingDisabled` `:8577-8579`) | supersedes deprecated `maxThinkingTokens` `sdk.d.ts:1767` |
+| `effort` | `EffortLevel` = `'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'` | `sdk.d.ts:1758`, type `sdk.d.ts:591` | |
+| `systemPrompt` | `string \| string[] \| {type:'custom',prompt,snapshot?} \| {type:'preset',preset:'claude_code',append?,excludeDynamicSections?,snapshot?}` | `sdk.d.ts:2237-2247` | `snapshot: true` recommended for cache stability (R24-relevant); `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` `sdk.d.ts:8513` |
+| `agents` / `agent` | `Record<string, AgentDefinition>` / `string` | `sdk.d.ts:1441` / `sdk.d.ts:1425`, `AgentDefinition` `sdk.d.ts:38-100` | programmatic subagents |
+| `tools` / `allowedTools` / `disallowedTools` / `toolAliases` | | `sdk.d.ts:1505-1508` / `sdk.d.ts:1449` / `sdk.d.ts:1469` / `sdk.d.ts:1495` | |
+| `outputFormat` | `{ type: 'json_schema'; schema }` | `sdk.d.ts:1820`, `JsonSchemaOutputFormat` `sdk.d.ts:968` | structured output |
+| `persistSession` | `boolean` | `sdk.d.ts:1680` | `false` ⇒ no `~/.claude/projects` transcript |
+| `settings` / `managedSettings` | `string \| Settings` | `sdk.d.ts:2050` / `sdk.d.ts:2074` | flag-layer settings |
 | `abortController` | `AbortController` | `sdk.d.ts:1397-1401` | |
-| `stderr` / `debug` / `debugFile` | callback / bool / path | `sdk.d.ts:2118-2123`, `:2103-2117` | |
-| `toolConfig.askUserQuestion.previewFormat` | `'markdown' \| 'html'` | `sdk.d.ts:1597-1607`, `:8600-8615` | HTML previews for web UIs |
-| `promptSuggestions`, `agentProgressSummaries`, `perTaskStopAffordance`, `onUserDialog`, `onElicitation` | | `:2050-2074`, `:1794-1815`, `:1660-1678`, `:1639-1659` | |
+| `stderr` / `debug` / `debugFile` | callback / bool / path | `sdk.d.ts:2126` / `sdk.d.ts:2116` / `sdk.d.ts:2121` | |
+| `toolConfig.askUserQuestion.previewFormat` | `'markdown' \| 'html'` | `sdk.d.ts:1569`, `ToolConfig` `sdk.d.ts:8600-8615`, `previewFormat` field `sdk.d.ts:8612` | HTML previews for web UIs |
+| `promptSuggestions`, `agentProgressSummaries`, `perTaskStopAffordance`, `onUserDialog`, `onElicitation` | | `sdk.d.ts:1910`, `sdk.d.ts:1920`, `sdk.d.ts:1672`, `sdk.d.ts:1630`, `sdk.d.ts:1616` | |
 
 Env handling observed in `sdk.mjs` (minified): `rn = J ? {...J} : {...process.env}` then it sets
 `CLAUDE_CODE_ENTRYPOINT="sdk-ts"` and `CLAUDE_AGENT_SDK_VERSION="0.3.261"` when absent (grep of
@@ -92,7 +96,7 @@ literals grepped from `sdk.mjs`).
 
 `sdk.d.ts:4681` — 39 members. The ones capygen renders:
 
-- **`SDKSystemMessage`** (`type:'system', subtype:'init'`) `sdk.d.ts:5148-5206`: `agents?: string[]`,
+- **`SDKSystemMessage`** (`type:'system', subtype:'init'`) `sdk.d.ts:5148-5208`: `agents?: string[]`,
   `apiKeySource: ApiKeySource` (`:127`: `'ANTHROPIC_API_KEY' | 'apiKeyHelper' | '/login managed key' | 'none' | …`),
   `betas?`, `claude_code_version: string`, `cwd: string`, `tools: string[]`,
   `mcp_servers: {name, status}[]`, `model: string`, `permissionMode`, **`slash_commands: string[]`**,
@@ -102,29 +106,31 @@ literals grepped from `sdk.mjs`).
   `'queued_notifications'`), `uuid`, `session_id`. Emitted "at the start of each turn" (`:5145-5147`).
 - **`SDKAssistantMessage`** (`type:'assistant'`) `sdk.d.ts:3318-3382`: `message: BetaMessage` (Anthropic
   Messages API shape: `id, model, role, content[], stop_reason, usage`), `parent_tool_use_id: string | null`
-  (non-null ⇒ subagent frame), `error?: SDKAssistantMessageError` (`:3384`), `uuid`, `session_id`,
+  (non-null ⇒ subagent frame), `error?: SDKAssistantMessageError` (type `:3384`), `uuid`, `session_id`,
   `request_id?`, `subagent_type?`, `task_description?`, `timestamp?`, **`context_usage?: SDKContextUsage`**
-  (only on `/context` results, `:3374-3377`; type `:3468-3532`).
+  (field+comment `:3364-3367`, only on `/context` results; type `:3468-3529`).
 - **`SDKUserMessage`** (`type:'user'`) `sdk.d.ts:5365-5414`: `message: MessageParam`
   (`{role:'user', content: string | block[]}`), `parent_tool_use_id`, `isSynthetic?`,
   **`tool_use_result?: unknown`** (the tool's full Output object; for Task it is the subagent's final report +
-  run totals, `:5379-5382`), `shouldQuery?`, `uuid?`, `session_id?`. `SDKUserMessageReplay` (`:5416`) is the
-  same plus `isReplay: true`.
-- **`SDKPartialAssistantMessage`** (`type:'stream_event'`) `sdk.d.ts:4826-4845`:
+  run totals, field+comment `:5373-5376`), `shouldQuery?`, `uuid?`, `session_id?`. `SDKUserMessageReplay`
+  (`:5416`) is the same plus `isReplay: true`.
+- **`SDKPartialAssistantMessage`** (`type:'stream_event'`) `sdk.d.ts:4826-4844`:
   `event: BetaRawMessageStreamEvent` (`message_start | content_block_start | content_block_delta |
   content_block_stop | message_delta | message_stop`), `parent_tool_use_id`, `uuid`, `session_id`, `ttft_ms?`.
-- **`SDKResultMessage`** = `SDKResultSuccess | SDKResultError` `sdk.d.ts:5003`. Success `:5005-5057`:
+- **`SDKResultMessage`** = `SDKResultSuccess | SDKResultError` `sdk.d.ts:5003`. Success `:5005-5054`:
   `subtype:'success'`, `duration_ms`, `duration_api_ms`, `ttft_ms?`, `is_error`, `num_turns`,
-  **`result: string`**, `stop_reason`, **`total_cost_usd`**, **`usage: NonNullableUsage`** (main loop only,
-  `:5021-5024`; keys are the Messages API `BetaUsage` keys: `input_tokens, output_tokens,
-  cache_creation_input_tokens, cache_read_input_tokens, …` `:1334-1336`), **`modelUsage:
-  Record<string, ModelUsage>`** ("the correct field for token/cost accounting", `:5025-5028`; `ModelUsage`
-  `:1307-1332`: `inputTokens, outputTokens, thinkingTokens?, cacheReadInputTokens, cacheCreationInputTokens,
-  webSearchRequests, costUSD, contextWindow, maxOutputTokens, canonicalModel?, provider?, costBasis?`),
-  `permission_denials: SDKPermissionDenial[]` (`:4846`), `structured_output?`, `terminal_reason?`
-  (`:8559`), `uuid`, `session_id`. Error `:4957-5001`: `subtype: 'error_during_execution' |
+  **`result: string`** (`:5026`), `stop_reason`, **`total_cost_usd`** (field+comment `:5028-5031`),
+  **`usage: NonNullableUsage`** (main loop only, field+comment `:5032-5035`; keys are the Messages API
+  `BetaUsage` keys: `input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, …`
+  `:1334-1336`), **`modelUsage: Record<string, ModelUsage>`** ("the correct field for token/cost
+  accounting", field+comment `:5036-5039`; `ModelUsage` `:1307-1332`: `inputTokens, outputTokens,
+  thinkingTokens?, cacheReadInputTokens, cacheCreationInputTokens, webSearchRequests, costUSD,
+  contextWindow, maxOutputTokens, canonicalModel?, provider?, costBasis?`), `permission_denials:
+  SDKPermissionDenial[]` (field `:5041`; type `:4846-4850`), `structured_output?` (`:5046`), `terminal_reason?`
+  (field `:5048`; type `:8559`), `uuid`, `session_id`. Error `:4957-4998`: `subtype: 'error_during_execution' |
   'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries'`, same usage fields,
-  `errors: string[]`. Exactly one result per turn; it is the turn-complete signal (`:4999-5001`).
+  `errors: string[]`. Exactly one result per turn; it is the turn-complete signal (comment `:5000-5001`
+  on the `SDKResultMessage` union, immediately above `:5003`).
 - **System subtypes** (all `type:'system'`): `status` (`:5133`, `status: 'compacting'|'requesting'|null`),
   `compact_boundary` (`:3430`), `local_command_output` (`:4621`, `content: string` — "output from a local
   slash command (e.g. /voice, /usage)"), `informational` (`:4591`, `content, level`), `notification`
@@ -138,18 +144,18 @@ literals grepped from `sdk.mjs`).
 - `SDKToolUseSummaryMessage` (`type:'tool_use_summary'`, `:5353`), `SDKPromptSuggestionMessage` (`:4914`),
   `SDKAuthStatusMessage` (`:3386`).
 
-`SDKControlInitializeResponse` (`Query.initializationResult()`, `sdk.d.ts:4035-4062`): `commands:
+`SDKControlInitializeResponse` (`Query.initializationResult()`, `sdk.d.ts:4035-4070`): `commands:
 SlashCommand[]`, `agents: AgentInfo[]`, `output_style`, `available_output_styles`, `models: ModelInfo[]`,
-`account: AccountInfo` (`:23-36`: `email?, organization?, subscriptionType?, tokenSource?, apiKeySource?,
-apiProvider?`), `hooks_applied?`, `plugins_applied?`. `SlashCommand` (`:8288-8306`): `{ name, description,
+`account: AccountInfo` (`:23-33`: `email?, organization?, subscriptionType?, tokenSource?, apiKeySource?,
+apiProvider?`), `hooks_applied?`, `plugins_applied?`. `SlashCommand` (`:8288-8305`): `{ name, description,
 argumentHint, aliases? }` — `name` has no leading slash.
 
 ## 3. Sending a slash command
 
 There is no dedicated API: a slash command is the prompt text. `AgentDefinition.initialPrompt` doc:
-"Slash commands are processed" (`sdk.d.ts:79-82`); `SDKLocalCommandOutputMessage` doc: "Output from a local
+"Slash commands are processed" (`sdk.d.ts:68-71`); `SDKLocalCommandOutputMessage` doc: "Output from a local
 slash command (e.g. /voice, /usage)" (`:4618-4620`); `SDKAssistantMessage.context_usage` doc: "carried on
-the synthetic assistant message that delivers the [/context] markdown table" (`:3374-3377`). So:
+the synthetic assistant message that delivers the [/context] markdown table" (`:3364-3367`). So:
 
 ```ts
 query({ prompt: '/context', options })                         // string form
@@ -165,7 +171,7 @@ assistant message (`message.model: "<synthetic>"`, `is_meta: true`, `local_comma
 
 ## 4. `AskUserQuestion` through `canUseTool`
 
-`CanUseTool` (`sdk.d.ts:209-270`):
+`CanUseTool` (`sdk.d.ts:209-269`):
 
 ```ts
 (toolName: string, input: Record<string, unknown>, options: {
@@ -186,18 +192,19 @@ assistant message (`message.model: "<synthetic>"`, `is_meta: true`, `local_comma
 `AskUserQuestionInput` (`sdk-tools.d.ts:1026-2602`): `questions: [{ question: string; header: string
 (≤12 chars); options: [{ label; description; preview? }, …2-4]; multiSelect: boolean }, …1-4]`,
 **`answers?: { [k: string]: string }`** — "User answers collected by the permission component"
-(`sdk-tools.d.ts:2571-2576`), `annotations?`, `metadata?`. `AskUserQuestionOutput`
-(`sdk-tools.d.ts:3665-3720`): `questions`, **`answers: { [k: string]: string }`** — "question text ->
-answer string; multi-select answers are comma-separated" (`:3690-3695`), `response?: string` (freeform),
+(field `sdk-tools.d.ts:2575-2577`), `annotations?`, `metadata?`. `AskUserQuestionOutput`
+(`sdk-tools.d.ts:3665-3851`): `questions`, **`answers: { [k: string]: string }`** — "question text ->
+answer string; multi-select answers are comma-separated" (field `:3825-3827`), `response?: string` (freeform),
 `annotations?`, `afkTimeoutMs?`.
 
 So the host answers a question by returning
 `{ behavior: 'allow', updatedInput: { ...input, answers: { [question.question]: option.label } } }` from
 `canUseTool` — the tool then completes with those answers as its output. Wire form on the CLI side is the
-`can_use_tool` control request (`SDKControlPermissionRequest`, `sdk.d.ts:4202-4247`: `tool_name, input,
+`can_use_tool` control request (`SDKControlPermissionRequest`, `sdk.d.ts:4202-4245`: `tool_name, input,
 permission_suggestions?, blocked_path?, decision_reason?, decision_reason_type?, title?, display_name?,
 tool_use_id, agent_id?, description?, requires_user_interaction?` — AskUserQuestion sets the last one,
-`:4243-4246`). Observed behaviour (which `permissionMode` still routes it to `canUseTool`) is in §8.
+field+comment `:4241-4244`). Observed behaviour (which `permissionMode` still routes it to `canUseTool`)
+is in §8.
 
 ## 5. Hooks — `PreToolUse` on `Task`
 
@@ -211,40 +218,57 @@ tool_name: string; tool_input: unknown; tool_use_id: string }`. `BaseHookInput` 
 subagent), `agent_type?`, `effort?: { level }`.
 
 Return value `HookJSONOutput` = `AsyncHookJSONOutput ({async:true, asyncTimeout?}) | SyncHookJSONOutput`
-(`:877`, `:129-132`, `:8489-8500`): `{ continue?, suppressOutput?, stopReason?, decision?: 'approve'|'block',
-systemMessage?, reason?, hookSpecificOutput?: PreToolUseHookSpecificOutput }` where
-`PreToolUseHookSpecificOutput` (`:2577-2583`) = `{ hookEventName: 'PreToolUse'; permissionDecision?:
+(`:877`, `:129-132`, `SyncHookJSONOutput` `:8489-8503`): `{ continue?, suppressOutput?, stopReason?,
+decision?: 'approve'|'block', systemMessage?, reason?, hookSpecificOutput?: PreToolUseHookSpecificOutput }`
+where `PreToolUseHookSpecificOutput` (`:2577-2583`) = `{ hookEventName: 'PreToolUse'; permissionDecision?:
 'allow'|'deny'|'ask'|'defer'; permissionDecisionReason?; updatedInput?: Record<string, unknown>;
-additionalContext? }`. Returning `{}` allows. **Routing lever for capygen (SPEC R14):** `updatedInput`
-lets the hook rewrite the Task tool's input — `AgentInput` (`sdk-tools.d.ts:662-706`): `description,
+additionalContext? }`. Returning `{}` allows. **Routing lever for capygen (SPEC R12):** `updatedInput`
+lets the hook rewrite the Task tool's input — `AgentInput` (`sdk-tools.d.ts:662-699`): `description,
 prompt, subagent_type?, model?: 'sonnet'|'opus'|'haiku'|'fable', run_in_background?, name?, isolation?:
 'worktree'|'remote'` — e.g. force `model` per routing policy, or `permissionDecision: 'deny'` to reroute to
 another backend.
+
+**Tested (capability `routing_lever`, step g): the lever works.** A `PreToolUse` hook matching
+`'Task|Agent'` returned `{ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow',
+updatedInput: { ...tool_input, model: 'haiku' } } }` for a spawned sub-agent. Neither `task_started` nor
+`task_notification.usage` carries a model field (confirmed absent from both this run's frames and the
+`.d.ts`), so the proof is in the final `result.modelUsage` keys: `["claude-sonnet-5",
+"claude-haiku-4-5-20251001"]` — a second, haiku-named key with its own nonzero `inputTokens`/`outputTokens`/
+`costUSD` exists only because the sub-agent actually billed against that model. Corroborating (undocumented)
+evidence: the Task tool's `tool_use_result.resolvedModel` on the completion frame read
+`"claude-haiku-4-5-20251001"` (§8.6 shows this same field resolving to `"claude-sonnet-5"` when no override
+is applied). **Fallback, if a future SDK version ignores this override:** deny the Task/Agent call from the
+hook (`permissionDecision: 'deny'`) and have capygen's own dispatcher re-issue the equivalent work as a
+fresh `query()` with `options.model` set directly, rather than depending on the CLI to honour an in-flight
+rewrite of a tool it is already committed to running.
 
 Related: `SubagentStartHookInput` (`:8448`: `agent_id, agent_type`), `SubagentStopHookInput` (`:8459`:
 `agent_id, agent_transcript_path, agent_type, last_assistant_message?`), `HOOK_EVENTS` (`:854`).
 
 ## 6. Usage / cost
 
-Per turn: `result.usage` (main loop only) and `result.modelUsage` (all models incl. subagents, cumulative
-within one `query()` in streaming-input sessions — "read the latest result rather than summing",
-`sdk.d.ts:5025-5028`), `result.total_cost_usd` (`:5017-5020`). Per subagent: `task_notification.usage`
-(`:5220-5224`). Per API response: `assistant.message.usage` (BetaMessage). Live context: `Query.
+Per turn: `result.usage` (main loop only, field+comment `sdk.d.ts:5032-5035`) and `result.modelUsage` (all
+models incl. subagents, cumulative within one `query()` in streaming-input sessions — "read the latest
+result rather than summing", field+comment `:5036-5039`), `result.total_cost_usd` (field+comment
+`:5028-5031`). Per subagent: `task_notification.usage` (`:5218-5222`). Per API response:
+`assistant.message.usage` (BetaMessage). Live context: `Query.
 getContextUsage({detail:'summary'|'full'})` → `SDKControlGetContextUsageResponse` (`:3638`), and the
-`/context` reply's `context_usage` (`SDKContextUsage`, `:3468-3532`: `model, total_tokens, raw_max_tokens,
+`/context` reply's `context_usage` (`SDKContextUsage`, `:3468-3529`: `model, total_tokens, raw_max_tokens,
 percentage, over_limit?, categories[{name,tokens,kind:'used'|'free'|'buffer'|'deferred'}], mcp_tools[],
 memory_files[], agents[], skills?[]`). Plan limits: `Query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`
-(`:2764-2782`).
+(`:2779-2798`; not exercised by the spike [untested]).
 
 ## 7. Spawning from inside a Claude Code session (spike-specific)
 
 The spike runs under a Claude Code session, so the child env is `process.env` minus `CLAUDECODE`,
 `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_AGENT_SDK_VERSION` and every `CLAUDE_CODE_*`, plus `PYTHONUTF8=1`,
-passed via `Options.env` (which replaces the child env wholesale, `sdk.d.ts:1493-1512`). The SDK then
+passed via `Options.env` (which replaces the child env wholesale, `sdk.d.ts:1525-1527`). The SDK then
 re-adds `CLAUDE_CODE_ENTRYPOINT=sdk-ts` and `CLAUDE_AGENT_SDK_VERSION`. In the app this stripping is
-unnecessary (Electron is not a Claude Code session) but harmless.
+unnecessary (Electron is not a Claude Code session) but harmless [assumed — not exercised from inside
+an Electron host by this spike].
 
-## 8. Observed shapes (from `docs/spikes/claude.raw.json`, run 2026-09-05, 108 log entries)
+## 8. Observed shapes (from `docs/spikes/claude.raw.json`, run 2026-09-05, 108 log entries; §8.9 is
+from a later same-day re-run, 139 entries, after the gate fixes below)
 
 Run: `corepack pnpm --dir packages/engine exec tsx scripts/spike-claude.ts` → all 7 `CAP … PASS`, exit 0,
 ~90 s wall. Every query: `cwd` = repo root, `settingSources: ['user','project']`,
@@ -298,7 +322,7 @@ displayName:"Default (recommended)", description, supportsEffort:true, supported
 usage","argumentHint":""}`, `{"name":"usage",…,"aliases":["cost","stats"]}`, `{"name":"clear",…,
 "argumentHint":"[name]","aliases":["reset","new"]}`. `supportedAgents()` (5): `{name, description, model?}`.
 All six control requests succeeded in streaming-input mode after the `result` (stdin held open); the
-string-prompt form was not tested for control requests.
+string-prompt form was not tested for control requests. [untested]
 
 ### 8.2 Text turn (step a): `status` → `stream_event`×7 → `assistant` → `rate_limit_event` → `result`
 
@@ -463,3 +487,40 @@ API prefix level — a persistent streaming-input session per agent (R24) is the
    `CLAUDECODE`/`CLAUDE_CODE_*` strip (§7) keeps the child from thinking it is nested.
 6. `result.usage` is main-loop only; `result.modelUsage` (+ `task_notification.usage`, Task
    `tool_use_result.totalTokens`) is what the usage meters must sum.
+
+### 8.9 Re-run after the gate fixes (step g `routing_lever`; tightened `plugin_command`/`usage_reporting`)
+
+Run: `corepack pnpm --dir packages/engine exec tsx scripts/spike-claude.ts`, same day, 139 log entries,
+all 8 `CAP … PASS` (`stream_text, system_init_commands, slash_context, plugin_command,
+ask_user_question, pretooluse_hook_task, routing_lever, usage_reporting`), exit 0, ~120 s wall. A
+redacted, trimmed extract of this run's frames is checked in at `docs/spikes/claude.evidence.json`
+(the raw stream itself, `claude.raw.json`, stays gitignored).
+
+**`plugin_command` fingerprint check.** The first top-level `tool_use` of the `/cockpit:pilot what's
+next` turn was `Bash` with `input.command` beginning
+`cd "…\capygen" && git log --oneline -5 && echo --- && git status --short && echo --- && tail -n 40
+PROJECT_LOG.md …` — both `git log --oneline -5` and `git status --short` present, in order, as the
+very first tool call, plus a reply text matching `/phase|plan/i` (`"**Phase: BUILD** — because PLAN.md
+has Phase 2 unchecked, …"`). Both conditions of the tightened PASS predicate (`spike-claude.ts` step d
+comment) are met by direct observation, not inference.
+
+**`routing_lever` (step g).** `PreToolUse` hook on matcher `'Task|Agent'` returned
+`{hookSpecificOutput:{hookEventName:'PreToolUse', permissionDecision:'allow',
+updatedInput:{...tool_input, model:'haiku'}}}`. Observed frames: `task_started` fields were `["type",
+"subtype","task_id","tool_use_id","description","subagent_type","is_backgrounded","spawn_depth",
+"task_type","prompt","uuid","session_id"]` — no `model` key (confirms the `.d.ts` has none, rather than
+assuming it); `task_notification.usage` likewise carried no model key. The result's `modelUsage` had
+**two** keys: `claude-sonnet-5` (main loop) and `claude-haiku-4-5-20251001` (`inputTokens:18,
+outputTokens:422, costUSD:0.0250, contextWindow:200000`) — direct proof the sub-agent billed against
+haiku. Corroborating: the Task tool's `tool_use_result.resolvedModel` on the completion frame read
+`"claude-haiku-4-5-20251001"` (contrast §8.6's unforced run, where the same field read
+`"claude-sonnet-5"`). The override took effect; no fallback was needed this run. If a future SDK
+version stops honouring `updatedInput.model`, the recorded fallback (§5 above) is: deny the Task/Agent
+call from the hook and have capygen's own dispatcher re-issue the work as a fresh `query()` with
+`options.model` set directly.
+
+**`usage_reporting`.** Per-step numbers this run (`result.usage.input_tokens`, `.output_tokens`,
+`result.total_cost_usd`): `a: in=2 out=4 cost=0.0676`, `b: in=2 out=4 cost=0.0676`, `d: in=12 out=2811
+cost=0.1888`, `e: in=4 out=127 cost=0.0780`, `f: in=4 out=252 cost=0.1755` — every model-calling step
+has all three fields greater than zero, and `c` (`/context`) correctly reported `cost=0`, exempted as a
+local command rather than counted as evidence either way.
