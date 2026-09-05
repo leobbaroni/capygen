@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.vite/
+*.tsbuildinfo
+docs/spikes/*.raw.json
+e2e-out/
