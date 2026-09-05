@@ -49,7 +49,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
 
 ## Build Phases
 
-- [ ] Phase 1: Engine spike — prove the headless capabilities on this machine
+- [x] Phase 1: Engine spike — prove the headless capabilities on this machine
       Done when: `pnpm spike` prints PASS for: Claude SDK stream text; `/context` built-in
       handled; a plugin command (`/cockpit:pilot what's next`) executed; `AskUserQuestion`
       surfaced via `canUseTool` and answered; a PreToolUse hook fired on `Task`; Codex
