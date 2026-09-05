@@ -77,8 +77,13 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       usage meter updates per turn.
       Steps: `Harness` interface (start, send, interrupt, resume, listCommands, capabilities);
       Codex app-server client; API-model agent loop + local tool runtime + MCP client;
-      permission modes; block renderer parity with reference `components/`; usage accounting.
-      Covers: R6, R7, R8, R9, R14, R23, R27; checks: A4.
+      permission modes; block renderer parity with reference `components/`; usage accounting;
+      **MCP Apps widget host** (spike first: how the widget's `ui://` HTML is obtained for
+      servers the CLI hosts — own MCP client connection to the same server config, or the
+      backend's resource read — then the sandboxed iframe host with the ext-apps bridge;
+      fixture = ext-apps basic example; live = user's Higgsfield connector); structured
+      interaction cards for AskUserQuestion / permission / elicitation / Codex approvals.
+      Covers: R6, R7, R8, R9, R14, R23, R27, R31, R32; checks: A4, A13.
 - [ ] Phase 4: Round-table and orchestration
       Done when: e2e: a session with Claude + Codex, "@codex review what @claude wrote" produces
       two turns in order; hop cap stops a ping-pong at 3; agent tree shows a routed sub-agent;
@@ -99,10 +104,13 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       Done when: nav test lists every section id; MCP/skills/plugins edits round-trip on temp
       homes for Claude and Codex; API key stored via safeStorage, absent from files/logs;
       setup panel shows steps with confirm + visible console (unit-tested gate).
-      Steps: port Omnigent settings sections; add Harnesses/MCP/Skills/Plugins/API keys/Dev
-      servers/Diagnostics; Claude plugin management via headless `claude` commands; Codex
-      config.toml editor; bootstrap panel (reuse the Omnigent-windows pattern).
-      Covers: R3, R19, R20, R21; checks: A9.
+      Steps: port Omnigent settings sections; add Harnesses/MCP/Skills/Plugins/Tools/API keys/
+      Dev servers/Diagnostics; Claude plugin management via headless `claude` commands + file
+      edits; Codex config.toml editor; **two-way sync** (chokidar watchers on `~/.claude`,
+      `.claude/`, `~/.codex`, plus the backends' live lists; app edits write the backends' own
+      files); global settings hub separate from per-backend config with per-agent overrides;
+      bootstrap panel (reuse the Omnigent-windows pattern).
+      Covers: R3, R19, R20, R21, R28, R29, R30; checks: A9, A14.
 - [ ] Phase 7: Projects, worktrees, git, imports (M2)
       Done when: create a worktree from the composer chip, session runs in it, diff pane shows
       changes, commit from the UI; import a Claude Code and a Codex transcript into sessions.
@@ -176,6 +184,8 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
 | A10 | Unsigned builds acceptable (SmartScreen warns) | prior project | install UX | Phase 12 |
 | A11 | Font may be bundled | no license found | wordmark | Phase 2 (SVG fallback) |
 | A12 | Local-only members/policies/sharing satisfy parity | scope: no cloud | M6 depth | Phase 9 |
+| A13 | MCP App widget HTML can be fetched by capygen's own MCP client for CLI-hosted servers (or via the backend's resource read) | ext-apps host model (verified: npm readme); SDK exposes resource_links only | widget rendering (R31) | Phase 3 spike |
+| A14 | Backend config files are the source of truth for plugins/skills/MCP; watchers + live lists keep the app in sync | user rule (R29) | settings hub design | Phase 6 |
 
 ## Open Items (none blocking)
 

@@ -144,6 +144,36 @@ Format: WHEN <trigger> THE SYSTEM SHALL <behaviour>. Each carries an acceptance 
   (Windows DPAPI) and never write it to plain files or logs. Check: grep test on the settings
   file + log redaction test.
 
+### Integrations management and MCP Apps (user, 2026-09-05: "very important")
+- R28 THE SYSTEM SHALL manage, from the app, plugins, skills, MCP servers (ComfyUI, Higgsfield,
+  claude.ai connectors, local stdio/HTTP servers) and tools for every backend: list with status,
+  enable/disable, add/remove/configure, and show which agents/sessions see them. Check: settings
+  pages backed by round-trip tests on temp homes for Claude and Codex.
+- R29 WHEN the user changes Claude Code or Codex configuration outside the app (settings.json,
+  `.claude/`, plugin installs, `~/.codex/config.toml`, MCP registrations) THE SYSTEM SHALL
+  reflect it on next open (file watchers + the backend's live lists such as `system/init`
+  slash_commands/skills/plugins/mcp_servers and Codex `mcpServerStatus/list`, `skills/list`,
+  `plugin/list`); WHEN the user changes them in the app THE SYSTEM SHALL write the backend's own
+  files so the CLIs see the same change. Two-way, the backend's files are the source of truth.
+  Check: edit outside → UI updates; edit inside → `claude`/`codex` CLIs list the change.
+- R30 THE SYSTEM SHALL keep global settings (API keys and providers, app behaviour, appearance,
+  default backend/model, efficiency thresholds, notifications, updates) in one Settings hub,
+  separate from per-backend configuration, with per-agent overrides layered on top. Check: UI
+  test + settings round-trip.
+- R31 WHEN a tool result carries an MCP App UI (a `ui://` resource referenced by the tool's
+  `_meta` per the MCP Apps extension, `@modelcontextprotocol/ext-apps` 1.7.5, verified: npm)
+  THE SYSTEM SHALL render it as a widget card in the transcript — sandboxed iframe, the host
+  side of the MCP Apps bridge (tool input/result delivery, `ui/*` messages, the widget calling
+  tools through the host, size negotiation), theme passthrough, and the widget's actions
+  (e.g. Higgsfield's Animate / Edit / Download) working — matching Claude Code desktop's
+  rendering. Non-App tool results keep the tool-call card. Check: fixture MCP server from the
+  ext-apps basic example rendered in a session; live check with the user's Higgsfield connector.
+- R32 WHEN a backend tool needs user interaction (AskUserQuestion, permission prompts,
+  elicitation with `_meta['anthropic/permissionDisplay']`, Codex approval and user-input
+  requests) THE SYSTEM SHALL render the same structured cards Claude Code shows (headers,
+  option buttons, multi-select, free text "Other"), and the answer reaches the tool. Check:
+  fixture-driven UI tests + the Phase 2 live AskUserQuestion e2e.
+
 ### Parity surfaces (see §P for the checklist)
 - R22 THE SYSTEM SHALL implement each Parity Inventory item with Omnigent's page layout and
   behaviour adapted to local-only operation. Check: per-item checkbox with an e2e or UI test.

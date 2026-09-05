@@ -48,8 +48,12 @@
 - Checks: install ok · typecheck ok (6 projects + e2e specs) · `pnpm test` 73 passed ·
   `pnpm build` ok · `pnpm e2e` 4 passed, `e2e-out/landing.png` + `chat.png` saved.
 
+## 2026-09-05 — Spec corrections (user)
+- R28–R32 added: manage plugins/skills/MCP servers (ComfyUI, Higgsfield, connectors)/tools from the app for every backend; two-way sync with Claude/Codex config files (backend files are the source of truth); one global Settings hub separate from per-backend config; MCP App widgets (ext-apps `ui://` resources) rendered in the transcript like Claude Code desktop; structured interaction cards (AskUserQuestion, permissions, elicitation, Codex approvals). PLAN Phases 3 and 6 extended; A13/A14 added.
+- User completed `codex login`.
+
 ## Open / next
-- USER ACTION: Codex sign-in is dead (`invalid_refresh_token` since 2026-09-03). Run `codex logout` then `codex login` in a terminal, then `corepack pnpm spike` should show the 4 Codex FAILs turn PASS. Phase 1 stays unchecked until then; Phase 2 proceeds on Claude.
+- USER ACTION (done 2026-09-05 evening): Codex sign-in was dead (`invalid_refresh_token` since 2026-09-03). Run `codex logout` then `codex login` in a terminal, then `corepack pnpm spike` should show the 4 Codex FAILs turn PASS. Phase 1 stays unchecked until then; Phase 2 proceeds on Claude.
 - Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
   AskUserQuestion cards.
