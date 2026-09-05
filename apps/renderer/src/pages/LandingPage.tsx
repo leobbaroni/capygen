@@ -13,10 +13,11 @@
  */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Folder } from "lucide-react";
+import { Folder, GitBranch } from "lucide-react";
 import { DEFAULT_HEADING, type Project } from "@capygen/shared";
 import { Composer } from "@/components/Composer";
 import { Mascot } from "@/components/Mascot";
+import { useMascotState } from "@/hooks/useMascotState";
 import { useAppStore } from "@/store/appStore";
 
 export function LandingPage() {
@@ -25,8 +26,10 @@ export function LandingPage() {
   const pickProject = useAppStore((s) => s.pickProject);
   const startSession = useAppStore((s) => s.startSession);
   const send = useAppStore((s) => s.send);
+  const commands = useAppStore((s) => s.commands);
   const bridgeAvailable = useAppStore((s) => s.bridgeAvailable);
   const error = useAppStore((s) => s.error);
+  const mascotState = useMascotState();
 
   const [selected, setSelected] = useState<Project | null>(null);
   const project = selected ?? projects[0] ?? null;
@@ -54,7 +57,7 @@ export function LandingPage() {
           840 − 80 = 760px max. */}
       <div className="flex w-full max-w-[840px] flex-col items-center gap-6 px-10 pt-8 pb-16 select-none">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
-          <Mascot state="idle" className="h-16 w-16" />
+          <Mascot state={mascotState} className="h-16 w-16" />
           <h1
             className="min-w-0 text-center text-[2.15em] font-normal tracking-[-0.05em] text-foreground"
             data-testid="landing-heading"
@@ -67,18 +70,41 @@ export function LandingPage() {
           onSubmit={handleSubmit}
           disabled={!bridgeAvailable}
           testId="landing-composer"
+          commands={commands}
           tray={
-            <button
-              type="button"
-              onClick={() => void pickProject().then((p) => p && setSelected(p))}
-              data-testid="project-chip"
-              className="flex h-6 cursor-pointer items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Folder className="ui-icon" />
-              <span className="max-w-40 truncate">
-                {project ? project.name : "Choose a folder"}
+            <>
+              {/* Host chip: capygen is local-only (no host/sandbox picker per
+                  SPEC's Out of Scope), so this always names this machine —
+                  the green dot is the reference's "online" indicator. */}
+              <span
+                data-testid="host-chip"
+                className="flex h-6 cursor-default items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground"
+              >
+                <span aria-hidden className="size-2 shrink-0 rounded-full bg-success" />
+                <span className="max-w-32 truncate">This machine</span>
               </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => void pickProject().then((p) => p && setSelected(p))}
+                data-testid="project-chip"
+                className="flex h-6 cursor-pointer items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Folder className="ui-icon" />
+                <span className="max-w-40 truncate">
+                  {project ? project.name : "Choose a folder"}
+                </span>
+              </button>
+              {/* Worktree chip: placeholder per the task brief — worktree
+                  creation (git ops, branch picker) lands in Phase 7 (P8). */}
+              <span
+                data-testid="worktree-chip"
+                title="Worktrees arrive in a later phase"
+                className="flex h-6 cursor-not-allowed items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground/60"
+              >
+                <GitBranch className="ui-icon" />
+                <span className="max-w-32 truncate">main</span>
+              </span>
+            </>
           }
         />
 

@@ -78,3 +78,51 @@
   no jsdom/@testing-library dependency added. 10 new tests, 83/83 passing repo-wide.
 - Commit `1712802` (17 files, mine only — `git add` named paths, not `-A`, since Phase 2's other
   concurrent tasks had unstaged/untracked edits in the same tree at commit time).
+
+## 2026-09-05 — Task B2: landing + chat UI ported from the reference
+- Landing (P1): composer grew attach/dictate buttons, an "agent picker + gear" pill (Claude Code
+  only for now; gear opens Settings ▸ Harnesses), and a footer tray of chips — host ("This
+  machine", green dot; no host/sandbox picker exists per SPEC's local-only scope), working
+  directory (existing `project-chip`, unchanged), and a worktree placeholder chip (Phase 7/P8
+  does real worktrees). Slash menu (R14): typing `/` filters `chat.listCommands` as you type,
+  Up/Down highlight, Enter or a click sends the command straight through.
+- Chat (P2): per-kind block cards under `components/blocks/` — text (`react-markdown` +
+  `remark-gfm`, no shiki: not installed, fenced code renders as plain monospace, noted as a
+  deviation from the reference's shiki stack), thinking (collapsed), tool_call (collapsible
+  trigger row + Parameters/Output panel, ported from `ToolCard.tsx`'s look), diff (simple
+  unified view, +/− counts), permission (`Alert`-based Allow/Deny → `permission.answer`, ported
+  from `ApprovalCard.tsx`), question (options-as-buttons + multiSelect → `question.answer`;
+  multi-select answers join with ", " since the contract's `answers` map is `string`, not
+  `string[]`), subagent (collapsible status card), error, usage line. Added `TurnRail` (a dot per
+  turn, click-to-scroll) and a queued-messages strip: `appStore.send` now queues text typed while
+  a turn is streaming and drains it on the next `chat.turnStatus` done/error/interrupted.
+- `hooks/useMascotState.ts` + the pure `lib/mascotState.ts` table: listening (mic) > pending
+  permission/question > session error > session waiting > running (thinking until the streaming
+  turn has a block, then working) > just-finished (`success`, 4s window) > 5-minutes-idle
+  (`sleeping`) > idle. 11 unit tests on the pure function.
+- Sidebar (P3): search box, project-name grouping (a session whose project isn't loaded falls
+  into "Loose sessions"), a per-row archive/unarchive button (`sessions.archive`, already in the
+  contract), and a "Show archived" toggle (`sessions.list({includeArchived})`, already in the
+  contract) — no `packages/shared` additions needed.
+- New shadcn ports (no Radix): `ui/alert.tsx`, `ui/badge.tsx`, `ui/collapsible.tsx` (hand-rolled
+  trigger/content/context — Radix would be one new dependency for one component).
+- Added `react-markdown` + `remark-gfm` (runtime) and `@testing-library/react` +
+  `@testing-library/jest-dom` + `@testing-library/user-event` + `jsdom` (dev) to
+  `apps/renderer/package.json`; a new `renderer` vitest project (jsdom, `src/test/setup.ts`,
+  excludes `src/brand/**` so it never double-runs Task B3's SSR tests) — that project entry in
+  `vitest.config.ts` is already on `main` (commit `1712802` swept it up; see that entry above),
+  so this task's diff to that file is empty.
+- 33 new tests (Composer submit: Enter/Shift+Enter/empty-guard/slash-menu; all 9 block kinds;
+  Sidebar search/grouping/archive; mascot-state table) — 114 passing repo-wide. Typecheck and
+  `pnpm build` both green. `pnpm e2e` still passes its first two tests (landing, seamless chrome);
+  the send/persist pair now fails on an unrelated 15s timeout because a concurrent task swapped
+  the echo stub for the real Claude harness mid-session (`apps/desktop/src/ipc/handlers.ts`,
+  `SessionRunner.ts` — not mine to fix). Verified the UI is not the cause with a throwaway
+  Playwright script (not committed): the real harness answered "reply with the word pong" with
+  "pong" and a usage line after ~20s; screenshots retaken against it —
+  `e2e-out/{landing,chat}.png`.
+- Files owned: `apps/renderer/src/**` except `brand/**` and `public/fonts` (untouched), per the
+  task boundary. Did not touch `apps/desktop`, `packages/engine`, or `packages/shared` (no
+  contract gaps found). `pnpm-lock.yaml` is left uncommitted: it now also reflects a concurrent
+  task's in-progress dependency additions (`@anthropic-ai/claude-agent-sdk` in `apps/desktop`,
+  `@capygen/shared` in `packages/engine`) that aren't mine to commit ahead of their own commit.

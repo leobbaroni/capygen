@@ -1,21 +1,27 @@
 /**
- * The renderer's single store. Deliberately thin for task A1: it holds what the
- * shell needs (projects, sessions, the open session's turns and blocks,
- * settings) and subscribes to the main-process event stream once.
+ * The renderer's single store. Holds what the shell needs (projects,
+ * sessions, the open session's turns and blocks, settings) and subscribes to
+ * the main-process event stream once.
  *
- * Two invariants that later phases depend on:
+ * Invariants later phases depend on:
  *   - blocks are keyed by id and *upserted*, because a streaming block is sent
  *     repeatedly as it grows (SPEC R23–R26: persist and render incrementally,
  *     never rebuild the turn);
  *   - nothing here talks to SQLite or a backend; every read and write is an IPC
  *     call, so the agent's context never sees the UI's chatter (R26).
+ *
+ * Task B2 additions: answering permission/question blocks, archiving
+ * sessions, a local send queue for messages typed while a turn is streaming,
+ * and the raw timestamps `hooks/useMascotState.ts` turns into a mascot state.
  */
 import { create } from "zustand";
 import {
   DEFAULT_SETTINGS,
   type Agent,
   type Block,
+  type PermissionBlock,
   type Project,
+  type QuestionBlock,
   type Session,
   type Settings,
   type SlashCommand,
@@ -43,6 +49,18 @@ export interface AppState {
   /** Turn id → live status, so the composer can disable while streaming. */
   turnStatus: Record<string, TurnStatus>;
 
+  /** Messages typed while a turn was streaming; drained in order as it frees up. */
+  queuedMessages: string[];
+  /** Mic button pressed (composer dictation UI — real speech-to-text is Phase 10). */
+  listening: boolean;
+  /** `Date.now()` of the most recent IPC event or user action, any session. */
+  lastActivityAt: number;
+  /** `Date.now()` the open session's last turn finished, or null. Feeds the
+   *  mascot's transient "success" state. */
+  lastDoneAt: number | null;
+  /** Sessions list includes archived rows when true (Sidebar's toggle). */
+  showArchived: boolean;
+
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
   startSession(projectId: string, title?: string): Promise<Session>;
@@ -50,6 +68,15 @@ export interface AppState {
   send(text: string): Promise<void>;
   interrupt(): Promise<void>;
   setSettings(patch: Partial<Settings>): Promise<void>;
+  answerPermission(
+    requestId: string,
+    behavior: "allow" | "deny",
+    opts?: { updatedInput?: unknown; message?: string; scope?: "once" | "session" | "always" },
+  ): Promise<void>;
+  answerQuestion(requestId: string, answers: Record<string, string>): Promise<void>;
+  archiveSession(sessionId: string, archived: boolean): Promise<void>;
+  setShowArchived(show: boolean): Promise<void>;
+  setListening(listening: boolean): void;
 }
 
 /** Blocks of one turn, in render order. */
@@ -64,8 +91,46 @@ export function isBusy(state: AppState): boolean {
   return state.turns.some((t) => (state.turnStatus[t.id] ?? t.status) === "streaming");
 }
 
+/**
+ * The oldest unanswered permission/question block in the open session, or
+ * null. There is at most one live request at a time in practice (the
+ * backend blocks on the answer before continuing), so "oldest" only matters
+ * for picking a stable one while more than one is technically unresolved.
+ */
+export function pendingInteractionBlock(
+  state: AppState,
+): PermissionBlock | QuestionBlock | null {
+  let found: PermissionBlock | QuestionBlock | null = null;
+  for (const block of Object.values(state.blocks)) {
+    if (block.kind === "permission" && block.decision === null) {
+      if (!found || block.createdAt < found.createdAt) found = block;
+    } else if (block.kind === "question" && block.answers === null) {
+      if (!found || block.createdAt < found.createdAt) found = block;
+    }
+  }
+  return found;
+}
+
+/**
+ * While the open session is `running`: whether the live agent turn has
+ * produced anything renderable yet. No blocks yet, or only a `thinking`
+ * block so far, reads as "thinking"; anything else (text, a tool call, …)
+ * reads as "working". Meaningless (but harmless) when nothing is running.
+ */
+export function activeTurnPhase(state: AppState): "thinking" | "working" {
+  const live = [...state.turns].reverse().find((t) => t.role === "agent" && t.status === "streaming");
+  if (!live) return "working";
+  const blocks = blocksOfTurn(state, live.id);
+  if (blocks.length === 0) return "thinking";
+  return blocks.every((b) => b.kind === "thinking") ? "thinking" : "working";
+}
+
 export const useAppStore = create<AppState>()((set, get) => {
   let subscribed = false;
+
+  function touchActivity(): void {
+    set({ lastActivityAt: Date.now() });
+  }
 
   /** Wire the main → renderer events exactly once. */
   function subscribe(): void {
@@ -76,17 +141,25 @@ export const useAppStore = create<AppState>()((set, get) => {
     client.on("chat.block", (block) => {
       if (block.sessionId !== get().activeSessionId) return;
       set((s) => ({ blocks: { ...s.blocks, [block.id]: block } }));
+      touchActivity();
     });
 
     client.on("chat.turnStatus", ({ sessionId, turnId, status }) => {
+      touchActivity();
       if (sessionId !== get().activeSessionId) return;
       set((s) => ({
         turnStatus: { ...s.turnStatus, [turnId]: status },
         turns: s.turns.map((t) => (t.id === turnId ? { ...t, status } : t)),
+        lastDoneAt: status === "done" ? Date.now() : s.lastDoneAt,
       }));
       // A turn the store has not seen yet (the agent turn `chat.send` opened)
       // arrives as a status first; pull the row so it renders in order.
       if (!get().turns.some((t) => t.id === turnId)) void refreshTurns(sessionId);
+      // The turn that was streaming freed up: dispatch the next queued
+      // message, if the user typed ahead while this one was running.
+      if (status === "done" || status === "error" || status === "interrupted") {
+        drainQueue(sessionId);
+      }
     });
 
     client.on("session.updated", (session) => {
@@ -120,6 +193,22 @@ export const useAppStore = create<AppState>()((set, get) => {
     return live;
   }
 
+  /** Actually call `chat.send` — the part `send()` defers while busy. */
+  async function dispatchNow(sessionId: string, text: string): Promise<void> {
+    await ipc().invoke("chat.send", { sessionId, text, agentId: null });
+    await refreshTurns(sessionId);
+  }
+
+  /** Pop and send the next queued message, if the session is free and one is waiting. */
+  function drainQueue(sessionId: string): void {
+    if (get().activeSessionId !== sessionId) return;
+    if (isBusy(get())) return;
+    const [next, ...rest] = get().queuedMessages;
+    if (next === undefined) return;
+    set({ queuedMessages: rest });
+    void dispatchNow(sessionId, next);
+  }
+
   return {
     ready: false,
     bridgeAvailable: hasBridge(),
@@ -133,6 +222,11 @@ export const useAppStore = create<AppState>()((set, get) => {
     turns: [],
     blocks: {},
     turnStatus: {},
+    queuedMessages: [],
+    listening: false,
+    lastActivityAt: Date.now(),
+    lastDoneAt: null,
+    showArchived: false,
 
     async init() {
       if (!hasBridge()) {
@@ -180,15 +274,29 @@ export const useAppStore = create<AppState>()((set, get) => {
         turns: [],
         blocks: {},
         turnStatus: {},
+        queuedMessages: [],
+        lastDoneAt: null,
       }));
       return session;
     },
 
     async openSession(sessionId) {
       if (get().activeSessionId === sessionId && get().turns.length > 0) return;
-      set({ activeSessionId: sessionId, turns: [], blocks: {}, turnStatus: {} });
-      const loaded = await ipc().invoke("sessions.get", { sessionId });
-      if (!loaded || get().activeSessionId !== sessionId) return;
+      set({
+        activeSessionId: sessionId,
+        turns: [],
+        blocks: {},
+        turnStatus: {},
+        queuedMessages: [],
+        lastDoneAt: null,
+      });
+      const [loaded, commands] = await Promise.all([
+        ipc().invoke("sessions.get", { sessionId }),
+        ipc().invoke("chat.listCommands", { sessionId }),
+      ]);
+      if (get().activeSessionId !== sessionId) return;
+      set({ commands });
+      if (!loaded) return;
       set({
         agents: loaded.agents,
         turns: loaded.turns,
@@ -199,9 +307,17 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     async send(text) {
       const sessionId = get().activeSessionId;
-      if (!sessionId || text.trim() === "") return;
-      await ipc().invoke("chat.send", { sessionId, text, agentId: null });
-      await refreshTurns(sessionId);
+      const trimmed = text.trim();
+      if (!sessionId || trimmed === "") return;
+      touchActivity();
+      // A turn is already streaming: queue rather than racing chat.send —
+      // the stub (and the real harnesses later) run one turn at a time per
+      // session, so a second send now would just supersede the first.
+      if (isBusy(get())) {
+        set((s) => ({ queuedMessages: [...s.queuedMessages, trimmed] }));
+        return;
+      }
+      await dispatchNow(sessionId, trimmed);
     },
 
     async interrupt() {
@@ -213,6 +329,40 @@ export const useAppStore = create<AppState>()((set, get) => {
     async setSettings(patch) {
       const settings = await ipc().invoke("settings.set", patch);
       set({ settings });
+    },
+
+    async answerPermission(requestId, behavior, opts) {
+      touchActivity();
+      await ipc().invoke("permission.answer", {
+        requestId,
+        behavior,
+        scope: opts?.scope ?? "once",
+        ...(opts?.updatedInput !== undefined ? { updatedInput: opts.updatedInput } : {}),
+        ...(opts?.message !== undefined ? { message: opts.message } : {}),
+      });
+    },
+
+    async answerQuestion(requestId, answers) {
+      touchActivity();
+      await ipc().invoke("question.answer", { requestId, answers });
+    },
+
+    async archiveSession(sessionId, archived) {
+      const session = await ipc().invoke("sessions.archive", { sessionId, archived });
+      set((s) => ({
+        sessions: s.sessions.map((x) => (x.id === session.id ? session : x)),
+      }));
+    },
+
+    async setShowArchived(show) {
+      set({ showArchived: show });
+      const sessions = await ipc().invoke("sessions.list", { includeArchived: show });
+      set({ sessions });
+    },
+
+    setListening(listening) {
+      touchActivity();
+      set({ listening });
     },
   };
 });

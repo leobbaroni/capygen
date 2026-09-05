@@ -35,19 +35,3 @@ export function Mascot({ state = "idle", className }: MascotProps) {
     />
   );
 }
-
-/** Session status → mascot state. One mapping, used by every surface. */
-export function mascotStateForSession(
-  status: "idle" | "running" | "waiting" | "error" | undefined,
-): MascotState {
-  switch (status) {
-    case "running":
-      return "working";
-    case "waiting":
-      return "waiting";
-    case "error":
-      return "error";
-    default:
-      return "idle";
-  }
-}

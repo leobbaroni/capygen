@@ -1,22 +1,61 @@
 /**
- * Sessions sidebar (P3, skeleton). Layout mirrors Omnigent's
- * reference/omnigent/web/src/shell/Sidebar.tsx: a `conversations-sidebar` panel
- * carrying the brand gradient, flush to the window edge, pushing main aside.
- * Search, filters, project grouping and archive land with P3 proper.
+ * Sessions sidebar (P3). Layout mirrors Omnigent's
+ * reference/omnigent/web/src/shell/Sidebar.tsx: a `conversations-sidebar`
+ * panel carrying the brand gradient, flush to the window edge, pushing main
+ * aside. Search filters by title; sessions group under the project they
+ * belong to (falling back to a "Loose sessions" bucket for a project the
+ * list hasn't loaded yet); archived sessions are hidden unless the toggle at
+ * the bottom is on, and each row grows an archive button on hover.
  */
+import { useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { Plus, Settings as SettingsIcon } from "lucide-react";
-import type { Session } from "@capygen/shared";
+import { ArchiveIcon, ArchiveRestoreIcon, Plus, SearchIcon, Settings as SettingsIcon } from "lucide-react";
+import type { Project, Session } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/store/appStore";
 
 export interface SidebarProps {
   sessions: Session[];
   activeSessionId: string | null;
 }
 
+const UNFILED_GROUP = "__capygen_unfiled__";
+
 export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
   const navigate = useNavigate();
+  const projects = useAppStore((s) => s.projects);
+  const showArchived = useAppStore((s) => s.showArchived);
+  const setShowArchived = useAppStore((s) => s.setShowArchived);
+  const archiveSession = useAppStore((s) => s.archiveSession);
+  const [query, setQuery] = useState("");
+
+  const projectById = useMemo(() => {
+    const map = new Map<string, Project>();
+    for (const p of projects) map.set(p.id, p);
+    return map;
+  }, [projects]);
+
+  const groups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const visible = sessions.filter((s) => {
+      if (!showArchived && s.archived) return false;
+      if (q === "") return true;
+      return (s.title || "Untitled session").toLowerCase().includes(q);
+    });
+    const byProject = new Map<string, Session[]>();
+    for (const session of visible) {
+      const key = projectById.has(session.projectId) ? session.projectId : UNFILED_GROUP;
+      const bucket = byProject.get(key);
+      if (bucket) bucket.push(session);
+      else byProject.set(key, [session]);
+    }
+    return Array.from(byProject.entries()).map(([projectId, rows]) => ({
+      projectId,
+      name: projectId === UNFILED_GROUP ? "Loose sessions" : (projectById.get(projectId)?.name ?? "Unknown project"),
+      rows,
+    }));
+  }, [sessions, showArchived, query, projectById]);
 
   return (
     <aside
@@ -28,7 +67,7 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
           the sidebar is on the left, so it just needs the title-bar height. */}
       <div className="flex h-9 items-center px-3" />
 
-      <div className="px-2 pb-2">
+      <div className="flex flex-col gap-2 px-2 pb-2">
         <Button
           variant="outline"
           className="w-full justify-start"
@@ -38,32 +77,86 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
           <Plus className="ui-icon" />
           New session
         </Button>
+        <div className="relative">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sessions"
+            aria-label="Search sessions"
+            data-testid="sidebar-search"
+            className="h-7 w-full rounded-md border border-border-weak bg-background pr-2 pl-7 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring"
+          />
+        </div>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2">
-        {sessions.length === 0 ? (
-          <p className="px-2 py-3 text-sm text-muted-foreground">No sessions yet.</p>
+        {groups.length === 0 ? (
+          <p className="px-2 py-3 text-sm text-muted-foreground">
+            {sessions.length === 0 ? "No sessions yet." : "No sessions match your search."}
+          </p>
         ) : (
-          <ul className="flex flex-col gap-0.5">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <NavLink
-                  to={`/c/${session.id}`}
-                  data-testid="session-row"
-                  className={cn(
-                    "sidebar-row block truncate rounded-md px-2 py-1 text-sm",
-                    session.id === activeSessionId
-                      ? "bg-sidebar-active text-sidebar-active-foreground"
-                      : "text-foreground hover:bg-accent hover:text-accent-foreground",
-                  )}
-                >
-                  {session.title || "Untitled session"}
-                </NavLink>
-              </li>
+          <div className="flex flex-col gap-3">
+            {groups.map((group) => (
+              <div key={group.projectId}>
+                <p className="truncate px-2 pb-1 text-xs font-medium text-muted-foreground">
+                  {group.name}
+                </p>
+                <ul className="flex flex-col gap-0.5">
+                  {group.rows.map((session) => (
+                    <li key={session.id} className="group/row relative">
+                      <NavLink
+                        to={`/c/${session.id}`}
+                        data-testid="session-row"
+                        data-archived={session.archived || undefined}
+                        className={cn(
+                          "sidebar-row flex items-center gap-1 truncate rounded-md py-1 pr-7 pl-2 text-sm",
+                          session.id === activeSessionId
+                            ? "bg-sidebar-active text-sidebar-active-foreground"
+                            : "text-foreground hover:bg-accent hover:text-accent-foreground",
+                          session.archived && "opacity-60",
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          {session.title || "Untitled session"}
+                        </span>
+                      </NavLink>
+                      <button
+                        type="button"
+                        title={session.archived ? "Unarchive" : "Archive"}
+                        aria-label={session.archived ? "Unarchive session" : "Archive session"}
+                        data-testid="session-archive-toggle"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void archiveSession(session.id, !session.archived);
+                        }}
+                        className="absolute top-1/2 right-1 -translate-y-1/2 rounded-md p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover/row:opacity-100 focus-visible:opacity-100"
+                      >
+                        {session.archived ? (
+                          <ArchiveRestoreIcon className="size-3.5" />
+                        ) : (
+                          <ArchiveIcon className="size-3.5" />
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </nav>
+
+      <label className="flex items-center gap-2 border-t border-border-weak px-4 py-2 text-sm text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={showArchived}
+          onChange={(e) => void setShowArchived(e.target.checked)}
+          data-testid="sidebar-show-archived"
+        />
+        Show archived
+      </label>
 
       <div className="border-t border-border-weak p-2">
         <Button
