@@ -36,14 +36,16 @@ capygen/
 Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) · `pnpm e2e`
 (Playwright Electron) · `pnpm build:win` (electron-builder NSIS + portable).
 
-## Crew (accepted by the user's "loop until done"; recorded once)
+## Crew (user rule, 2026-09-05: "orchestrate between Opus 5 and Sonnet to save tokens; Fable is the orchestrator and task setter")
 
 | Role | Model | Used for |
 |---|---|---|
-| Lead / designer | session model (Claude Fable 5.1) | decomposition, judgment, final review |
-| Hard | session model (strongest reasoner; up-route is a no-op) | engine, dispatcher, routing, packaging |
-| Mechanical | Sonnet 5 | page ports from the reference, boilerplate, docs, fixtures |
-| Review | Opus 5 (different model from implementers) | adversarial verify waves |
+| Lead / task setter | session model (Claude Fable 5.1) — never a subagent | decomposition, task briefs, acceptance, final judgment |
+| Hard | Opus 5 (`model: "opus"`) | engine, dispatcher, routing, packaging, anything that failed once |
+| Mechanical | Sonnet 5 (`model: "sonnet"`) | page ports from the reference, boilerplate, docs, fixtures, consolidation |
+| Review | the other one: Sonnet reviews Opus work, Opus reviews Sonnet work | adversarial verify waves |
+
+Every workflow `agent()` call sets `model` explicitly; Fable does no subagent work itself.
 
 ## Build Phases
 

@@ -17,4 +17,8 @@ Read `SPEC.md` (contract), `PLAN.md` (build order, assumptions), `CONTEXT.md` (t
   `corepack pnpm spike` (engine capability proof). Build: `corepack pnpm build:win`.
 - **Every change:** restate the ask, name the files, touch only those, run the check, append one
   line to `PROJECT_LOG.md`. Keep `COMPAT.md` in sync with any CLI/SDK contract the app relies on.
-- Crew for orchestrated batches is recorded in `PLAN.md` §Crew.
+- Crew for orchestrated batches is recorded in `PLAN.md` §Crew: the session model (Fable) only
+  orchestrates and sets tasks; subagents run on Opus 5 (hard) or Sonnet 5 (mechanical), and the
+  reviewer is the other model. Set `model` on every workflow `agent()` call.
+- Mascot: a real capybara face (bead eyes, blunt muzzle, ears, yuzu slice on the head, pink
+  hoodie with a `>_` badge) — never a visor/screen face; the user rejected the Codex-like look.
