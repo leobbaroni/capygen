@@ -27,6 +27,14 @@ export default defineConfig({
       },
       {
         test: {
+          name: "engine",
+          root: "./packages/engine",
+          environment: "node",
+          include: ["test/**/*.test.ts"],
+        },
+      },
+      {
+        test: {
           name: "desktop",
           root: "./apps/desktop",
           environment: "node",

@@ -13,6 +13,12 @@ export const LOG_FILE_NAME = "capygen-desktop.log";
 export const DEV_URL_ENV = "CAPYGEN_DEV_URL";
 /** Overrides Electron's userData dir; the e2e harness uses it for isolation. */
 export const USER_DATA_ENV = "CAPYGEN_USER_DATA_DIR";
+/**
+ * `stub` runs the offline echo engine instead of a real backend. The e2e suite
+ * sets it so the walking-skeleton run stays deterministic and spends no tokens;
+ * anything else (including unset) runs the real harnesses.
+ */
+export const ENGINE_ENV = "CAPYGEN_ENGINE";
 
 /** The eight mascot states (CONTEXT.md §Mascot). */
 export const MASCOT_STATES = [

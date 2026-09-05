@@ -30,6 +30,7 @@ import {
 import { openStore, type CapygenStore } from "@capygen/db";
 import {
   DEV_URL_ENV,
+  ENGINE_ENV,
   INVOKE_CHANNEL_NAMES,
   LOG_DIR_NAME,
   LOG_FILE_NAME,
@@ -53,6 +54,7 @@ import {
 } from "./win/windowState.js";
 import { resolveInitialProjectDir } from "./win/projectArg.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
+import { createStubEngine } from "./engine/stub.js";
 
 /**
  * dist/ after bundling. esbuild emits CommonJS here (Electron's main entry is
@@ -184,10 +186,17 @@ function broadcast<E extends EventChannel>(event: E, payload: EventInput<E>): vo
 }
 
 function registerIpc(activeStore: CapygenStore): IpcContext {
+  // The default engine is the real session runner (one Claude harness per
+  // agent). `CAPYGEN_ENGINE=stub` swaps in the offline echo double so the e2e
+  // walking-skeleton run is deterministic and spends no tokens.
+  const useStub = process.env[ENGINE_ENV] === "stub";
+  if (useStub) log.warn(`[engine] ${ENGINE_ENV}=stub — running the offline echo engine`);
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
     log,
+    ...(useStub ? { makeEngine: createStubEngine } : {}),
     pickDirectory: async () => {
       const owner = [...shellWindows][0];
       const result = await (owner

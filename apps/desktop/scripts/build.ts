@@ -36,7 +36,13 @@ await build({
   target: "node22",
   sourcemap: true,
   minify: false,
-  external: ["electron"],
+  // `electron` is provided by the runtime. The Claude Agent SDK stays external
+  // on purpose: it locates its bundled `claude.exe` through
+  // `createRequire(import.meta.url).resolve(...)`, which an inlined copy inside
+  // main.cjs could not resolve. It is ESM-only, and `require()` of an ESM
+  // package works on Electron 44's Node — verified with
+  // `node -e "require('@anthropic-ai/claude-agent-sdk')"`.
+  external: ["electron", "@anthropic-ai/claude-agent-sdk"],
   logLevel: "info",
   // `packagedMigrationsDir()` in @capygen/db reads `import.meta.url` when it
   // runs under ESM and falls back to `__dirname` here; esbuild's warning about

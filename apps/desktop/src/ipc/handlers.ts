@@ -11,29 +11,37 @@
 import type { CapygenStore } from "@capygen/db";
 import {
   BUILTIN_SLASH_COMMANDS,
-  newId,
   type Block,
-  type EventChannel,
-  type EventInput,
   type InvokeArgs,
   type InvokeChannel,
   type InvokeResult,
   type Project,
   type SlashCommand,
 } from "@capygen/shared";
-import { createStubEngine, type Engine } from "../engine/stub.js";
+import { createSessionRunner } from "../engine/SessionRunner.js";
+import { emitBlock as persistBlock, textBlock } from "../engine/persist.js";
+import type {
+  Broadcast,
+  Engine,
+  EngineDeps,
+  EngineFactory,
+  EngineLogger,
+} from "../engine/types.js";
 
-export type Broadcast = <E extends EventChannel>(event: E, payload: EventInput<E>) => void;
+export type { Broadcast };
 
 export interface IpcContextDeps {
   store: CapygenStore;
   broadcast: Broadcast;
-  log: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; error: (...a: unknown[]) => void };
+  log: EngineLogger;
   /** Native folder picker; resolves to null when the user cancels. */
   pickDirectory: () => Promise<string | null>;
   appInfo: () => InvokeResult<"app.version">;
-  /** Overridable for tests; defaults to the Phase 2 echo stub. */
-  makeEngine?: (hooks: Parameters<typeof createStubEngine>[0]) => Engine;
+  /**
+   * Overridable for tests, which run against the echo double; the app runs the
+   * real session runner (one Claude harness per agent).
+   */
+  makeEngine?: EngineFactory;
 }
 
 export type IpcHandlers = {
@@ -46,33 +54,13 @@ export interface IpcContext {
   dispose(): void;
 }
 
-function textBlock(
-  sessionId: string,
-  turnId: string,
-  index: number,
-  text: string,
-): Block {
-  const ts = Date.now();
-  return {
-    id: newId("block"),
-    turnId,
-    sessionId,
-    kind: "text",
-    index,
-    text,
-    createdAt: ts,
-    updatedAt: ts,
-  };
-}
-
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const { store, broadcast, log } = deps;
+  const engineDeps: EngineDeps = { store, broadcast, log };
 
   /** Persist a block and push it to every renderer (upsert by id). */
   function emitBlock(block: Block): Block {
-    const saved = store.blocks.upsert(block);
-    broadcast("chat.block", saved);
-    return saved;
+    return persistBlock(engineDeps, block);
   }
 
   function emitSession(sessionId: string): void {
@@ -80,35 +68,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     if (session) broadcast("session.updated", session);
   }
 
-  const makeEngine = deps.makeEngine ?? ((hooks) => createStubEngine(hooks));
-
-  const engine = makeEngine({
-    onText: ({ sessionId, turnId, text }) => {
-      emitBlock(textBlock(sessionId, turnId, store.blocks.nextIndex(turnId), text));
-    },
-    onDone: ({ sessionId, turnId }) => {
-      store.turns.setStatus(turnId, "done");
-      store.sessions.setStatus(sessionId, "idle");
-      broadcast("chat.turnStatus", { sessionId, turnId, status: "done" });
-      emitSession(sessionId);
-    },
-    onError: ({ sessionId, turnId, message }) => {
-      store.turns.setStatus(turnId, "error");
-      store.sessions.setStatus(sessionId, "error");
-      emitBlock({
-        id: newId("block"),
-        turnId,
-        sessionId,
-        kind: "error",
-        index: store.blocks.nextIndex(turnId),
-        message,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      broadcast("chat.turnStatus", { sessionId, turnId, status: "error", error: message });
-      emitSession(sessionId);
-    },
-  });
+  const engine = (deps.makeEngine ?? createSessionRunner)(engineDeps);
 
   const handlers: IpcHandlers = {
     "projects.pick": async (): Promise<Project | null> => {
@@ -212,13 +172,18 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       });
       emitSession(session.id);
 
-      engine.send({ sessionId: session.id, turnId: agentTurn.id, text: args.text });
+      engine.send({
+        sessionId: session.id,
+        turnId: agentTurn.id,
+        agentId,
+        text: args.text,
+      });
 
       return { userTurnId: userTurn.id, agentTurnId: agentTurn.id };
     },
 
-    "chat.interrupt": (args) => {
-      const stopped = engine.interrupt(args.sessionId);
+    "chat.interrupt": async (args) => {
+      const stopped = await engine.interrupt(args.sessionId);
       if (stopped) {
         const turns = store.turns.list(args.sessionId);
         const live = [...turns].reverse().find((t) => t.status === "streaming");
@@ -237,23 +202,38 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Built-ins only until the harness layer lands (Phase 3 adds the backend's
-     * own commands, skills and plugin commands on top — R14).
+     * Built-ins first, then whatever the session's backend reported in its own
+     * listing — for Claude that is `system/init.slash_commands`, which already
+     * contains the user's skills and every plugin command (R14). A backend name
+     * that collides with a built-in is dropped rather than duplicated.
      */
-    "chat.listCommands": (): SlashCommand[] =>
-      BUILTIN_SLASH_COMMANDS.map((c) => ({
+    "chat.listCommands": (args): SlashCommand[] => {
+      const commands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((c) => ({
         name: c.name,
         description: c.description,
         source: "builtin" as const,
-      })),
+      }));
+      const seen = new Set(commands.map((c) => c.name));
+      for (const command of args.sessionId ? engine.listCommands(args.sessionId) : []) {
+        if (seen.has(command.name)) continue;
+        seen.add(command.name);
+        commands.push(command);
+      }
+      return commands;
+    },
 
     /**
-     * Records the decision on the permission block. No engine consumes it yet;
-     * the harness layer wires it to `canUseTool` in Phase 3.
+     * Unblocks the backend first — the agent is what is actually waiting — then
+     * records the decision on the block so a relaunch can still show it.
      */
     "permission.answer": (args) => {
+      const delivered = engine.answerPermission(args.requestId, {
+        behavior: args.behavior,
+        ...(args.updatedInput !== undefined ? { updatedInput: args.updatedInput } : {}),
+        ...(args.message !== undefined ? { message: args.message } : {}),
+      });
       const block = findBlockByRequestId(store, args.requestId, "permission");
-      if (!block || block.kind !== "permission") return { ok: false };
+      if (!block || block.kind !== "permission") return { ok: delivered };
       emitBlock({
         ...block,
         decision: {
@@ -269,8 +249,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     "question.answer": (args) => {
+      const delivered = engine.answerQuestion(args.requestId, args.answers);
       const block = findBlockByRequestId(store, args.requestId, "question");
-      if (!block || block.kind !== "question") return { ok: false };
+      if (!block || block.kind !== "question") return { ok: delivered };
       emitBlock({ ...block, answers: args.answers, updatedAt: Date.now() });
       return { ok: true };
     },
@@ -294,9 +275,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
 }
 
 /**
- * Find a permission/question block by the id the backend used in its request.
- * Linear over the block table for now; Phase 3 keeps a live map on the harness,
- * at which point this becomes the restart-recovery path only.
+ * Find a permission/question block by the request id the harness minted. The
+ * harness holds the live promise; this lookup only exists so the decision is
+ * also written to the row the renderer re-reads after a relaunch.
  */
 function findBlockByRequestId(
   store: CapygenStore,

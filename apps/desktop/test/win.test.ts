@@ -22,7 +22,6 @@ import {
   parseWindowState,
 } from "../src/win/windowState.js";
 import { createTrayIntegration } from "../src/win/tray.js";
-import { createStubEngine } from "../src/engine/stub.js";
 import { resolveInitialProjectDir } from "../src/win/projectArg.js";
 
 const tempDirs: string[] = [];
@@ -277,39 +276,8 @@ describe("tray / close-to-tray", () => {
   });
 });
 
-describe("stub engine", () => {
-  it("echoes the prompt back after its delay", async () => {
-    const seen: string[] = [];
-    const done: string[] = [];
-    const engine = createStubEngine(
-      {
-        onText: ({ text }) => seen.push(text),
-        onDone: ({ turnId }) => done.push(turnId),
-        onError: () => {},
-      },
-      1,
-    );
-    engine.send({ sessionId: "ses_1", turnId: "trn_1", text: "hello" });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(seen).toEqual(["echo: hello"]);
-    expect(done).toEqual(["trn_1"]);
-    engine.dispose();
-  });
-
-  it("interrupt cancels the pending reply", async () => {
-    const seen: string[] = [];
-    const engine = createStubEngine(
-      { onText: ({ text }) => seen.push(text), onDone: () => {}, onError: () => {} },
-      20,
-    );
-    engine.send({ sessionId: "ses_1", turnId: "trn_1", text: "hello" });
-    expect(engine.interrupt("ses_1")).toBe(true);
-    expect(engine.interrupt("ses_1")).toBe(false);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(seen).toEqual([]);
-    engine.dispose();
-  });
-});
+// The echo double now writes through the store, so its tests moved to
+// `test/sessionRunner.test.ts`, where a real temp database is already open.
 
 describe("launch-time project folder", () => {
   // Forward slashes throughout: path.resolve normalises them on Windows, and

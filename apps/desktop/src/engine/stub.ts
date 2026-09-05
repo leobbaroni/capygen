@@ -1,39 +1,18 @@
 /**
- * Placeholder engine for Phase 2 task A1.
+ * The echo double.
  *
- * It echoes `echo: <text>` as one text block after 300 ms so the whole IPC path
- * — send → turn row → block rows → `chat.block` / `chat.turnStatus` events →
- * transcript — is exercised and testable before the real Claude harness lands
- * (Phase 2, task A2+). It implements the same tiny surface the real harness will
- * expose (`send`, `interrupt`), so swapping it out is a one-line change in
- * `createIpcContext`.
- *
- * Nothing here calls a model or spawns a process.
+ * It answers `echo: <text>` after 300 ms, exercising the whole path a real
+ * harness uses — block row, `chat.block`, turn status, session status — without
+ * a model, a process or a network call. The handler tests run against it; the
+ * app runs `createSessionRunner` instead (see `ipc/handlers.ts`).
  */
-export interface EngineSendArgs {
-  sessionId: string;
-  turnId: string;
-  text: string;
-}
-
-export interface EngineHooks {
-  /** Called once with the reply text; the caller turns it into a block. */
-  onText: (args: { sessionId: string; turnId: string; text: string }) => void;
-  onDone: (args: { sessionId: string; turnId: string }) => void;
-  onError: (args: { sessionId: string; turnId: string; message: string }) => void;
-}
-
-export interface Engine {
-  send(args: EngineSendArgs): void;
-  /** Cancel the in-flight turn for a session, if any. Returns true if one was. */
-  interrupt(sessionId: string): boolean;
-  dispose(): void;
-}
+import { emitBlock, finishTurn, textBlock } from "./persist.js";
+import type { Engine, EngineDeps } from "./types.js";
 
 export const ECHO_DELAY_MS = 300;
 
-export function createStubEngine(hooks: EngineHooks, delayMs = ECHO_DELAY_MS): Engine {
-  const inFlight = new Map<string, { timer: NodeJS.Timeout; turnId: string }>();
+export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Engine {
+  const inFlight = new Map<string, { timer: ReturnType<typeof setTimeout>; turnId: string }>();
 
   return {
     send({ sessionId, turnId, text }) {
@@ -44,14 +23,19 @@ export function createStubEngine(hooks: EngineHooks, delayMs = ECHO_DELAY_MS): E
       const timer = setTimeout(() => {
         inFlight.delete(sessionId);
         try {
-          hooks.onText({ sessionId, turnId, text: `echo: ${text}` });
-          hooks.onDone({ sessionId, turnId });
+          emitBlock(
+            deps,
+            textBlock(
+              sessionId,
+              turnId,
+              deps.store.blocks.nextIndex(turnId),
+              `echo: ${text}`,
+            ),
+          );
+          finishTurn(deps, sessionId, turnId, "done");
         } catch (err) {
-          hooks.onError({
-            sessionId,
-            turnId,
-            message: err instanceof Error ? err.message : String(err),
-          });
+          const message = err instanceof Error ? err.message : String(err);
+          finishTurn(deps, sessionId, turnId, "error", message);
         }
       }, delayMs);
       timer.unref?.();
@@ -65,6 +49,10 @@ export function createStubEngine(hooks: EngineHooks, delayMs = ECHO_DELAY_MS): E
       inFlight.delete(sessionId);
       return true;
     },
+
+    answerPermission: () => false,
+    answerQuestion: () => false,
+    listCommands: () => [],
 
     dispose() {
       for (const { timer } of inFlight.values()) clearTimeout(timer);

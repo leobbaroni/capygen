@@ -16,6 +16,7 @@ import {
   type InvokeChannel,
 } from "@capygen/shared";
 import { createIpcContext, type IpcContext } from "../src/ipc/handlers.js";
+import { createStubEngine } from "../src/engine/stub.js";
 
 const MIGRATIONS_DIR = fileURLToPath(
   new URL("../../../packages/db/migrations", import.meta.url),
@@ -47,6 +48,9 @@ beforeEach(() => {
     store,
     broadcast: (channel, payload) => events.push({ channel, payload }),
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // The handlers own the turn rows; which engine fills them in is the
+    // session runner's business, tested in `sessionRunner.test.ts`.
+    makeEngine: createStubEngine,
     pickDirectory: async () => picked,
     appInfo: () => ({
       name: "capygen",

@@ -52,10 +52,10 @@
 - R28–R32 added: manage plugins/skills/MCP servers (ComfyUI, Higgsfield, connectors)/tools from the app for every backend; two-way sync with Claude/Codex config files (backend files are the source of truth); one global Settings hub separate from per-backend config; MCP App widgets (ext-apps `ui://` resources) rendered in the transcript like Claude Code desktop; structured interaction cards (AskUserQuestion, permissions, elicitation, Codex approvals). PLAN Phases 3 and 6 extended; A13/A14 added.
 - User completed `codex login`; Codex spike re-run: codex-auth, sdk-runStreamed-pong, sdk-resumeThread, appserver-thread-turn-stream, appserver-thread-resume, appserver-command-approval (item/commandExecution/requestApproval → accept), appserver-discovery all PASS; sdk-command-approval PARTIAL by design. Phase 1 ✅ (engine.md table to be refreshed by the next spike run; Sonnet owns that file in the running Phase 2 workflow).
 
-## Open / next
-- Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
+## Open / next (superseded — see the entry for Task B1 below)
+- ~~Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
-  AskUserQuestion cards.
+  AskUserQuestion cards.~~ Done in Task B1.
 
 ## 2026-09-05 — Task B3: mascot component, wordmark, app icons
 - `apps/renderer/src/brand/{Mascot,Wordmark,BrandLogo}.tsx` + `brand.css`: cross-fading,
@@ -126,3 +126,51 @@
   contract gaps found). `pnpm-lock.yaml` is left uncommitted: it now also reflects a concurrent
   task's in-progress dependency additions (`@anthropic-ai/claude-agent-sdk` in `apps/desktop`,
   `@capygen/shared` in `packages/engine`) that aren't mine to commit ahead of their own commit.
+
+## 2026-09-06 — Phase 2 / B1: Claude harness + session runner
+- `packages/engine`: the `Harness` contract (`src/harness.ts`) — `start / send → AsyncIterable<EngineEvent> /
+  interrupt / listCommands / capabilities / answerPermission / answerQuestion / backendSessionId / dispose`.
+  `EngineEvent` maps 1:1 onto what the app already models: `block` (a `BlockPatch`, which is the shared
+  `Block` union minus the envelope the store owns, so a new block kind widens it automatically), `turn`,
+  `permission`, `question`, `usage`, `session`.
+- `ClaudeHarness` (`src/claude/ClaudeHarness.ts`) drives `@anthropic-ai/claude-agent-sdk` 0.3.261:
+  **one streaming-input `query()` per agent, reused across turns** — each `query()` is a fresh process
+  with a cold ~20 k-token prefix (spike §8.7), so reuse is what keeps `cache_read` high and injects no
+  per-turn system text (SPEC R24; no `systemPrompt` is ever set). `stream_event` text/thinking deltas and
+  the settled `assistant` message share one block key per content block (`msg:<message id>:<index>`), so a
+  growing reply upserts one row. `tool_use`/`tool_result` → `tool_call` blocks keyed `tool:<toolUseId>`,
+  output stubbed past 64 KB (R25). `canUseTool` → `question` events for AskUserQuestion (answers ride back
+  on `updatedInput.answers`, the proven shape) and `permission` events for everything else; with no turn
+  open it **denies** rather than auto-approving (R27). `PreToolUse` on matcher `'Task|Agent'` (the wire
+  name is `Agent`) emits sub-agent blocks and carries the routing-policy lever — stubbed, fail-open,
+  returns `{}` (R12). `result` closes the turn and produces the usage event; **`modelUsage` is cumulative
+  in a streaming session, so per-turn usage is the delta** (`deltaUsage`, clamped at zero when a new
+  process resets the counters). `interrupt()` calls `Query.interrupt()` and settles the turn after a 5 s
+  grace. Resume via `options.resume`. `cleanEnv()` (`src/env.ts`) builds the complete child env the SDK
+  requires: nested-session markers dropped, UTF-8 forced.
+- `apps/desktop/src/engine/SessionRunner.ts` replaces the echo stub as the default engine: one harness per
+  `(session, agent)`, blocks persisted as they arrive (block key → a fixed row id/index/created-at slot),
+  `usage_events` per usage event, permission/question answers routed back to the waiting harness, and the
+  backend session id stored under `engine.backendSession.<agentId>` so the first send after a relaunch
+  resumes instead of starting a new conversation. A turn that ends without a status is closed loudly
+  rather than left `streaming`.
+- `stub.ts` is now the offline echo *double* over the same `Engine` interface; `CAPYGEN_ENGINE=stub`
+  selects it (the e2e suite sets it, so the walking-skeleton run stays deterministic and spends no
+  tokens). Blocks and turn closure moved to `engine/persist.ts` so the double and the real runner cannot
+  drift.
+- The SDK is **external** to the esbuild bundle (`apps/desktop/scripts/build.ts`): it resolves its own
+  `claude.exe` through `createRequire(import.meta.url)`, which an inlined copy could not. Verified inside
+  Electron 44 (`electron=44.2.0 node=24.20.0 query=function`) and from the built `dist/` directory.
+- Checks: `pnpm test` 141 passed (16 new engine tests against a fake SDK, 11 new runner tests against a
+  fake harness + a real temp database); `pnpm typecheck` clean; `pnpm build` clean; `pnpm e2e` 4 passed;
+  `corepack pnpm --dir packages/engine live:claude` → `LIVE PASS - text="pong" cost=0.0074862` (second run,
+  warm cache: `cacheRead=37211`); the real app answered "pong" in the transcript in 18.6 s (throwaway
+  Playwright run, not committed).
+- `COMPAT.md` written: every SDK member the app now relies on, with its `.d.ts`/spike citation and a
+  fallback.
+
+## Open / next
+- Phase 2 remaining: the e2e walking-skeleton still asserts the echo reply (`CAPYGEN_ENGINE=stub`); a
+  live-Claude e2e (PLAN Phase 2 "reply with the word pong") wants its own opt-in spec.
+- Sub-agent routing policy is a stub (`ClaudeHarness` `routeSubagent` dep, fail-open) — Phase 4 fills it in.
+- Round-table queuing: the runner allows one in-flight turn per session; Phase 4 adds the dispatcher.

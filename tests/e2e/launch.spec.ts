@@ -48,6 +48,10 @@ test.beforeAll(async () => {
       ...process.env,
       CAPYGEN_USER_DATA_DIR: userDataDir,
       CAPYGEN_PROJECT_DIR: projectDir,
+      // The walking-skeleton run must be deterministic and offline: the echo
+      // engine stands in for the Claude harness, which has its own live check
+      // (`corepack pnpm --dir packages/engine live:claude`).
+      CAPYGEN_ENGINE: "stub",
       // Electron's own noise off; the app's rotating log is the record we keep.
       ELECTRON_ENABLE_LOGGING: "0",
     },
