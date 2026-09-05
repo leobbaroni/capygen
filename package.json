@@ -1,0 +1,19 @@
+{
+  "name": "capygen-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "spike": "pnpm --filter @capygen/engine spike",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "tsx": "^4.20.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "cell": 256,
+  "states": [
+    {
+      "name": "idle",
+      "index": 0
+    },
+    {
+      "name": "thinking",
+      "index": 1
+    },
+    {
+      "name": "working",
+      "index": 2
+    },
+    {
+      "name": "waiting",
+      "index": 3
+    },
+    {
+      "name": "success",
+      "index": 4
+    },
+    {
+      "name": "error",
+      "index": 5
+    },
+    {
+      "name": "sleeping",
+      "index": 6
+    },
+    {
+      "name": "listening",
+      "index": 7
+    }
+  ]
+}
