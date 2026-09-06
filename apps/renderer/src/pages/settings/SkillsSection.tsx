@@ -1,0 +1,209 @@
+/**
+ * Settings ▸ Skills (Task B2 item 2, SPEC R28-R29): per-backend list with
+ * scope/plugin, enable/disable, a Create-skill dialog (name + markdown
+ * editor) and Open (reveals the file — `SessionRunner`'s call, main decides
+ * Editor pane vs. OS shell, per `integrations.skill.open`'s own doc comment).
+ */
+import { useState } from "react";
+import type { Backend, SkillScope } from "@capygen/shared";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  SectionError,
+  SectionIntro,
+  SectionLoading,
+  SettingInput,
+  SettingSelect,
+  SettingToggle,
+  SettingsCard,
+} from "@/components/settings/primitives";
+import { useIntegrations } from "@/components/settings/useIntegrations";
+import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { ipc } from "@/lib/ipc";
+
+const BACKENDS: Backend[] = ["claude", "codex", "api"];
+const SCOPE_OPTIONS: { value: SkillScope; label: string }[] = [
+  { value: "user", label: "User" },
+  { value: "project", label: "Project" },
+];
+
+export function SkillsSection() {
+  const [tab, setTab] = useState<Backend>("claude");
+  return (
+    <div data-testid="settings-skills">
+      <SectionIntro title="Skills" description="Reusable instructions each backend can invoke." />
+      <div className="mb-4 flex gap-1 border-b border-border-weak" role="tablist" aria-label="Backend">
+        {BACKENDS.map((b) => (
+          <button
+            key={b}
+            type="button"
+            role="tab"
+            aria-selected={tab === b}
+            data-testid={`skills-tab-${b}`}
+            onClick={() => setTab(b)}
+            className={`px-3 py-2 text-sm ${tab === b ? "border-b-2 border-primary font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            {BACKEND_LABEL[b]}
+          </button>
+        ))}
+      </div>
+      <SkillsBackendPanel backend={tab} />
+    </div>
+  );
+}
+
+function SkillsBackendPanel({ backend }: { backend: Backend }) {
+  const { data, loading, error, reload } = useIntegrations(backend);
+  const [creating, setCreating] = useState(false);
+
+  async function toggle(name: string, scope: SkillScope, enabled: boolean): Promise<void> {
+    await ipc().invoke("integrations.skill.setEnabled", { backend, name, enabled, scope });
+    await reload();
+  }
+
+  async function open(path: string): Promise<void> {
+    await ipc().invoke("integrations.skill.open", { path });
+  }
+
+  if (error) return <SectionError message={error} />;
+  if (loading && !data) return <SectionLoading />;
+
+  const skills = data?.skills ?? [];
+
+  return (
+    <div data-testid={`skills-panel-${backend}`} className="flex flex-col gap-3">
+      <div className="flex justify-end">
+        <Button size="sm" data-testid="skill-create-button" onClick={() => setCreating(true)}>
+          Create skill
+        </Button>
+      </div>
+      {skills.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No skills found for this backend.</p>
+      ) : (
+        skills.map((skill) => (
+          <SettingsCard
+            key={`${skill.scope}:${skill.name}`}
+            testId={`skill-row-${skill.name}`}
+            title={skill.name}
+            subtitle={skill.description ?? skill.path}
+            action={
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">{skill.scope}</Badge>
+                {skill.pluginName ? <Badge variant="default">{skill.pluginName}</Badge> : null}
+                <Button size="sm" variant="outline" data-testid={`skill-open-${skill.name}`} onClick={() => void open(skill.path)}>
+                  Open
+                </Button>
+                <SettingToggle
+                  checked={skill.enabled}
+                  onChange={(checked) => void toggle(skill.name, skill.scope, checked)}
+                  data-testid={`skill-toggle-${skill.name}`}
+                  aria-label={`Enable ${skill.name}`}
+                />
+              </div>
+            }
+          />
+        ))
+      )}
+      {creating ? (
+        <CreateSkillDialog
+          backend={backend}
+          onClose={() => setCreating(false)}
+          onCreated={async () => {
+            setCreating(false);
+            await reload();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CreateSkillDialog({
+  backend,
+  onClose,
+  onCreated,
+}: {
+  backend: Backend;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<SkillScope>("user");
+  const [markdown, setMarkdown] = useState("---\nname: \ndescription: \n---\n\n");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const nameError = name.trim() === "" ? "Name is required." : null;
+  const markdownError = markdown.trim() === "" ? "The skill's markdown body cannot be empty." : null;
+  const valid = !nameError && !markdownError;
+
+  async function save(): Promise<void> {
+    if (!valid) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await ipc().invoke("integrations.skill.create", { backend, scope, name: name.trim(), markdown });
+      await onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent data-testid="skill-create-dialog" className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create skill</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-3">
+            <label className="flex flex-1 flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Name</span>
+              <SettingInput value={name} onChange={setName} data-testid="skill-input-name" aria-label="Skill name" />
+              {nameError ? <span className="text-xs text-destructive">{nameError}</span> : null}
+            </label>
+            <label className="flex w-40 flex-col gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Scope</span>
+              <SettingSelect
+                value={scope}
+                onChange={(v) => setScope(v as SkillScope)}
+                options={SCOPE_OPTIONS}
+                data-testid="skill-select-scope"
+                aria-label="Scope"
+              />
+            </label>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">Markdown</span>
+            <Textarea
+              value={markdown}
+              onChange={(e) => setMarkdown(e.target.value)}
+              rows={10}
+              data-testid="skill-input-markdown"
+              aria-label="Skill markdown"
+              className="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+            />
+            {markdownError ? <span className="text-xs text-destructive">{markdownError}</span> : null}
+          </label>
+          {error ? (
+            <p role="alert" data-testid="skill-create-error" className="text-xs text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} data-testid="skill-dialog-cancel">
+            Cancel
+          </Button>
+          <Button disabled={!valid || saving} onClick={() => void save()} data-testid="skill-dialog-save">
+            {saving ? "Creating…" : "Create"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -10,28 +10,20 @@
  * surface — a fixed strip that stops short of the buttons. Everything below and
  * right of it stays clickable.
  */
-import { useEffect } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "@/store/appStore";
+import { useApplyGlobalTheme } from "@/lib/theme";
 
 export function AppShell() {
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const theme = useAppStore((s) => s.settings.theme);
 
-  // `.dark` on <html> is what the copied Omnigent palettes key off.
-  useEffect(() => {
-    const root = document.documentElement;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = (): void => {
-      const dark = theme === "dark" || (theme === "system" && media.matches);
-      root.classList.toggle("dark", dark);
-    };
-    apply();
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
-  }, [theme]);
+  // Phase 6: `.dark`/`data-theme`/font-scale/reduced-motion, live from
+  // `GlobalSettings.appearance` (Settings ▸ Appearance) rather than the flat
+  // Phase-2 `Settings.theme` this used to read directly — see
+  // `lib/theme.ts`'s doc comment.
+  useApplyGlobalTheme();
 
   return (
     // `overflow-hidden`: nothing a page renders may scroll the *shell*
