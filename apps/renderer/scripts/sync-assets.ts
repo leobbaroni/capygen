@@ -25,6 +25,10 @@ interface CopyJob {
 }
 
 const jobs: CopyJob[] = [
+  {
+    from: path.join(repoRoot, "assets", "mascot", "pixel-animations.png"),
+    to: path.join(publicDir, "mascot", "pixel-animations.png"),
+  },
   ...MASCOT_STATES.map((state) => ({
     from: path.join(repoRoot, "assets", "mascot", "states", `${state}.png`),
     to: path.join(publicDir, "mascot", `${state}.png`),

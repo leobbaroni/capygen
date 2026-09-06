@@ -25,189 +25,34 @@
   line-height: 1;
 }
 
-/* --- Mascot --------------------------------------------------------------
- * Two stacked layers (current + outgoing) cross-fade on `opacity` over
- * 150ms when `state` changes; the per-state micro-animation lives on the
- * `<img>` inside the active layer so it never fights the cross-fade (they
- * animate different elements). Every keyframe drives only `transform`/
- * `opacity` — no layout properties — so it stays GPU-friendly.
- */
-
+/* Each step selects one drawn atlas cell. The element itself never moves. */
 .capygen-mascot {
-  position: relative;
   display: inline-block;
   flex-shrink: 0;
   user-select: none;
-}
-
-.capygen-mascot__layer {
-  position: absolute;
-  inset: 0;
-  transition: opacity 150ms ease;
-}
-
-.capygen-mascot__layer--in {
-  opacity: 1;
-}
-
-/* The outgoing frame is mounted only once the state has already changed, so it
-   has no previous opacity to transition *from* — a `transition` would never
-   run and the mascot would hard-cut. An animation plays on mount instead. */
-.capygen-mascot__layer--out {
-  opacity: 0;
-  animation: capygen-mascot-out 150ms ease forwards;
-}
-
-@keyframes capygen-mascot-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-.capygen-mascot__img {
-  display: block;
-  width: 100%;
-  height: 100%;
+  background-repeat: no-repeat;
+  background-position-x: 0;
   image-rendering: pixelated;
-  -webkit-user-drag: none;
-  user-select: none;
+  animation: capygen-frames 1.6s steps(4, end) infinite;
 }
 
-@keyframes capygen-bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-2px);
-  }
+@keyframes capygen-frames {
+  from { background-position-x: 0; }
+  to { background-position-x: calc(var(--mascot-size) * -4); }
 }
 
-@keyframes capygen-bob-slow {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-1px);
-  }
-}
-
-@keyframes capygen-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-@keyframes capygen-blink {
-  0%,
-  92%,
-  100% {
-    opacity: 1;
-  }
-  96% {
-    opacity: 0.15;
-  }
-}
-
-@keyframes capygen-jitter {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-  25% {
-    transform: translate(0, -1px);
-  }
-  50% {
-    transform: translate(0, 0);
-  }
-  75% {
-    transform: translate(0, 1px);
-  }
-}
-
-@keyframes capygen-bounce {
-  0% {
-    transform: translateY(0);
-  }
-  30% {
-    transform: translateY(-6px);
-  }
-  55% {
-    transform: translateY(0);
-  }
-  75% {
-    transform: translateY(-2px);
-  }
-  100% {
-    transform: translateY(0);
-  }
-}
-
-@keyframes capygen-shake {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  20% {
-    transform: translateX(-3px);
-  }
-  40% {
-    transform: translateX(3px);
-  }
-  60% {
-    transform: translateX(-2px);
-  }
-  80% {
-    transform: translateX(2px);
-  }
-}
-
-.capygen-mascot__img--idle {
-  animation: capygen-bob 1.2s ease-in-out infinite;
-}
-
-.capygen-mascot__img--thinking {
-  animation: capygen-pulse 1.6s ease-in-out infinite;
-}
-
-.capygen-mascot__img--working {
-  animation: capygen-jitter 0.6s steps(4, end) infinite;
-}
-
-.capygen-mascot__img--waiting {
-  animation: capygen-blink 3.2s ease-in-out infinite;
-}
-
-.capygen-mascot__img--success {
-  animation: capygen-bounce 0.6s ease-out 1;
-}
-
-.capygen-mascot__img--error {
-  animation: capygen-shake 0.5s ease-in-out 1;
-}
-
-.capygen-mascot__img--sleeping {
-  animation: capygen-bob-slow 2.4s ease-in-out infinite;
-}
-
-.capygen-mascot__img--listening {
-  animation: capygen-pulse 1s ease-in-out infinite;
-}
+.capygen-mascot--working { animation-duration: 0.8s; }
+.capygen-mascot--waiting { animation-duration: 2.4s; }
+.capygen-mascot--success { animation-duration: 1.2s; }
+.capygen-mascot--error { animation-duration: 1.6s; }
+.capygen-mascot--sleeping { animation-duration: 3.2s; }
+.capygen-mascot--listening { animation-duration: 1.2s; }
 
 @media (prefers-reduced-motion: reduce) {
-  .capygen-mascot__img {
-    animation: none !important;
-  }
-  .capygen-mascot__layer {
-    transition: none !important;
-    animation: none !important;
-  }
+  .capygen-mascot { animation: none; background-position-x: 0; }
+}
+
+:root:has(#capygen-reduced-motion) .capygen-mascot {
+  animation: none;
+  background-position-x: 0;
 }

@@ -244,7 +244,9 @@ home and skips when the machine's own OAuth session is unusable. It says which:
   ~/.claude/.credentials.json — sign in with `claude` and re-run
 ```
 
-Fix it with `claude` in a terminal (`/login`), then re-run. **A Claude Code terminal is not a
+If this error appears, sign in with `claude` in a terminal (`/login`). For automated live
+proofs, use a persistent dedicated test home as specified in `docs/plans/phases7-12.md`;
+do not copy personal credentials into a disposable home. **A Claude Code terminal is not a
 terminal for this purpose**: a host that refreshes auth for its children out of process leaves
 `.credentials.json` holding empty token strings, and capygen's own `harness.list` now reports
 that as "the Claude credentials file holds no token" rather than offering a backend whose every
@@ -406,3 +408,14 @@ logged with its real message before it is re-thrown to the renderer.
   re-attaches (re-navigating to the same URL) on show. The address survives; the back/forward
   history does not. Keeping it alive needs a "park it off-screen" mode the contract does not have
   yet — see PLAN.md's Phase 5 deviations.
+
+## Pixel mascot authoring (2026-09-06)
+
+Use `python scripts/mascot-pixels.py` from the repo root with the existing Python/Pillow
+installation, then `corepack pnpm build`. No install occurs in the generator. The source,
+frame layout and preview are documented in `assets/mascot/README.md`; generated assets are
+committed under `assets/mascot`, while renderer/public remains staged output.
+`corepack pnpm exec playwright test tests/e2e/mascot.spec.ts` checks real frame changes,
+sharp rendering, the larger landing mascot, and OS/app reduced-motion behavior on isolated
+backend homes. It runs offline. The desktop's minimum window width remains the supported
+layout; a 380px renderer screenshot is a stress check, not a mobile-support claim.

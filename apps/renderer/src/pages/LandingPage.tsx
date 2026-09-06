@@ -130,9 +130,8 @@ export function LandingPage() {
           840 − 80 = 760px max. */}
       <div className="flex w-full max-w-[840px] flex-col items-center gap-6 px-10 pt-8 pb-16 select-none">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
-          {/* h-14 (56px) inside the reference's h-16 hero box:
-              NewChatDialog.tsx `<BrandLogo variant="eyes" className="h-14 w-auto" />`. */}
-          <Mascot state={mascotState} size={56} />
+          {/* The 72px pixel drawing at an exact 2x scale, per the mascot brief. */}
+          <Mascot state={mascotState} size={144} />
           <h1
             className="min-w-0 text-center text-[2.15em] font-normal tracking-[-0.05em] text-foreground"
             data-testid="landing-heading"

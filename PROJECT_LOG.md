@@ -1103,3 +1103,65 @@ corepack pnpm build
   accommodation, not a runtime fix. Final complete gate is recorded with the mascot task below.
 - Review artifacts/logs retained locally in ignored `e2e-out/review/`; runtime findings remain
   open, with acceptance tests assigned to their implementation tasks. Nothing pushed.
+
+## 2026-09-06 — Sharp pixel mascot with drawn frame animation
+
+- Preserved the supplied reference as `assets/mascot/pixel-reference.png`. Two imagegen atlas
+  drafts failed true transparency/grid requirements; the user explicitly authorized finishing
+  with code. `scripts/mascot-pixels.py` uses the existing Windows Python/Pillow installation,
+  not a newly installed dependency, and preserves the reference's 29-colour palette.
+- Generated 8 states × 4 distinct drawn frames at 72 logical pixels, exported 4× nearest-neighbor
+  to a 1152×2304 RGBA atlas. Only alpha 0/255; no smoothed edges. Updated static state assets,
+  manifest/legacy strip and animated review board. Removed enclosed background in the listening
+  headband. Source and authoring instructions are in `assets/mascot/README.md`.
+- Replaced static-image bobbing/fades with CSS stepped atlas playback. Landing size is 144px
+  (2× logical pixels); existing inline icon layout stays intact. Accessible state labels and
+  stationary first-frame handling work for both OS and Settings reduced motion. Renderer staging
+  copies the atlas for dev/build/file:// use; no generated-home path is a production dependency.
+- Verification discipline: updated Mascot unit expectations failed first (3 assertions against
+  the old implementation), then all four passed. The new offline Electron test decodes the actual
+  atlas, captures four distinct frames, checks 144px/pixelated/steps(4), OS/app reduced motion,
+  and supported minimum viewport. The legacy skeleton test's static img/src expectation failed
+  in the full suite; updated that check to decode the actual CSS atlas, preserving its original
+  pre-live image-load guarantee. No existing live-turn assertions removed.
+- Visually inspected the supplied reference, all-state animated-frame board, native desktop
+  screenshot and supported 860×560 minimum: mascot and composer fit. A 380px stress screenshot
+  exposes the existing fixed sidebar constraint, outside the supported desktop minimum;
+  no mobile-support claim or unrelated responsive redesign. Screenshots: `e2e-out/mascot-*.png`.
+- Opus independently decoded the PNG twice: 32 unique/nonblank cells, binary alpha, original
+  palette membership, correct row/column math. Two consecutive clean reviews; the second covered
+  the final generator, skeleton test, minimum-size check and documentation changes.
+- **Final full gate: exit 0**, native Windows Node 22.16, final implementation and test changes.
+  Commands: `corepack pnpm typecheck && corepack pnpm test && corepack pnpm build &&
+  corepack pnpm exec playwright test`. E2e launched through the local PowerShell fixture wrapper
+  with fresh `CLAUDE_CONFIG_DIR` / `CODEX_HOME` plus the CAPYGEN equivalents, empty API-key env,
+  and only the non-secret installed-plugin inventory mirrored for the legacy registry assertion.
+  No personal credentials copied, no real-user configuration changed, no live models invoked.
+  Complete output: ignored `e2e-out/review/full-gate.log`; fixture wrapper retained alongside it.
+
+```text
+packages/shared typecheck: Done
+packages/db typecheck: Done
+packages/engine typecheck: Done
+apps/renderer typecheck: Done
+apps/desktop typecheck: Done
+
+Test Files 99 passed (99)
+Tests 1296 passed | 4 skipped (1300)
+Duration 33.99s
+
+Done in 261ms
+[build] desktop bundle written to .../apps/desktop/dist
+
+ok 33 ... (e) dragging the Terminal tab under the Browser group survives a restart
+ok 34 ... (f) the fixture dev server is detected, started, and loaded in the Browser pane
+ok 35 ... (g) the native overlay tracks its placeholder through maximise and a window resize
+12 skipped
+23 passed (58.0s)
+```
+
+- Unit skips are the opt-in live config checks; e2e skips require authenticated Claude/Codex/API
+  homes. Reauthenticated review workers do not make disposable app test homes signed in. The
+  full gate is green with those explicit skips; it does not re-prove the historical live phases.
+- Local review/preparation commit: `7f94de2`. Mascot task committed separately. No pushes.
+  Phases 7–12 remain open, and R-A–R-D remain reviewed corrective implementation tasks.

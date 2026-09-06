@@ -6,17 +6,20 @@ describe("Mascot", () => {
   it("renders the idle frame by default", () => {
     const html = renderToStaticMarkup(<Mascot />);
     expect(html).toContain('data-state="idle"');
-    expect(html).toContain("mascot/idle.png");
+    expect(html).toContain("mascot/pixel-animations.png");
+    expect(html).toContain('role="img"');
+    expect(html).toContain("width:144px");
     expect(html).toContain("capygen mascot, idle");
-    expect(html).toContain("capygen-mascot__img--idle");
+    expect(html).toContain("capygen-mascot--idle");
   });
 
   it("renders the requested state's frame and label", () => {
     const html = renderToStaticMarkup(<Mascot state="error" />);
     expect(html).toContain('data-state="error"');
-    expect(html).toContain("mascot/error.png");
+    expect(html).toContain("mascot/pixel-animations.png");
+    expect(html).toContain("background-position-y:-720px");
     expect(html).toContain("capygen mascot, something went wrong");
-    expect(html).toContain("capygen-mascot__img--error");
+    expect(html).toContain("capygen-mascot--error");
   });
 
   it("sizes the wrapper from the size prop and forwards className", () => {
@@ -27,9 +30,10 @@ describe("Mascot", () => {
     expect(html).toContain("capygen-mascot");
   });
 
-  it("mounts a single frame on first render (no outgoing layer yet)", () => {
+  it("presents one accessible image with no fading duplicate", () => {
     const html = renderToStaticMarkup(<Mascot state="working" />);
-    const layerCount = html.split("capygen-mascot__layer ").length - 1;
-    expect(layerCount).toBe(1);
+    expect(html.split('role="img"').length - 1).toBe(1);
+    expect(html).not.toContain("layer--out");
+    expect(html).toContain("capygen mascot, working");
   });
 });

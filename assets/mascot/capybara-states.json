@@ -1,5 +1,11 @@
 {
-  "cell": 256,
+  "cell": 288,
+  "logicalCell": 72,
+  "scale": 4,
+  "frames": 4,
+  "atlas": "pixel-animations.png",
+  "columns": 4,
+  "rows": 8,
   "states": [
     {
       "name": "idle",
