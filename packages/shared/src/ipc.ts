@@ -22,6 +22,17 @@ import {
   ApiProviderSchema,
   BackendSchema,
   BlockSchema,
+  BoundsSchema,
+  DevServerDraftSchema,
+  DevServerRunSchema,
+  DevServerSchema,
+  DevServerWithRunSchema,
+  FileChangeSchema,
+  FileEntrySchema,
+  FileListResultSchema,
+  FileReadResultSchema,
+  GitDiffSchema,
+  GitStatusSchema,
   HarnessInfoSchema,
   MentionNameSchema,
   PermissionRequestSchema,
@@ -33,11 +44,15 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   SlashCommandSchema,
+  TaskPatchSchema,
+  TaskSchema,
+  TerminalInfoSchema,
   TimestampSchema,
   ToolOutputSchema,
   TurnSchema,
   TurnStatusSchema,
   UsageEventSchema,
+  WorkspaceLayoutSchema,
 } from "./domain.js";
 
 /** One request/response pair. */
@@ -359,6 +374,164 @@ export const INVOKE_CHANNELS = {
       dbFile: z.string(),
     }),
   ),
+
+  // -------------------------------------------------------------------------
+  // Workspace panes (Phase 5, SPEC R16-R18) — layout, files, git, terminal,
+  // dev servers, tasks, browser view. See `@capygen/shared/domain.js` for the
+  // entity doc comments (`WorkspaceLayout`, `DevServer`, `Task`,
+  // `TerminalInfo`, `FileEntry`, `GitStatus`, `GitDiff`).
+  // -------------------------------------------------------------------------
+
+  /** The dockview arrangement for one project (R17). `null` when the project
+   *  has never saved one — the workspace host falls back to its own default
+   *  layout rather than treating that as an error. */
+  "layout.get": channel(
+    z.object({ projectId: z.string().min(1) }),
+    WorkspaceLayoutSchema.nullable(),
+  ),
+  /** Debounced by the caller (R23-R26: no per-drag IPC chatter) — one write
+   *  per settle, not one per frame. */
+  "layout.set": channel(
+    z.object({ projectId: z.string().min(1), layoutJson: z.unknown() }),
+    WorkspaceLayoutSchema,
+  ),
+
+  /** Bounded directory listing (R23: node_modules/.git/dist ignored, capped
+   *  entries) — `depth` limits recursion, omitted = the one directory named. */
+  "fs.list": channel(
+    z.object({
+      projectId: z.string().min(1),
+      dir: z.string().default(""),
+      depth: z.number().int().nonnegative().optional(),
+    }),
+    FileListResultSchema,
+  ),
+  "fs.read": channel(
+    z.object({
+      projectId: z.string().min(1),
+      path: z.string().min(1),
+      maxBytes: z.number().int().positive().optional(),
+    }),
+    FileReadResultSchema,
+  ),
+  "fs.write": channel(
+    z.object({ projectId: z.string().min(1), path: z.string().min(1), content: z.string() }),
+    OkSchema,
+  ),
+  "fs.search": channel(
+    z.object({
+      projectId: z.string().min(1),
+      query: z.string().min(1),
+      limit: z.number().int().positive().optional(),
+    }),
+    FileListResultSchema,
+  ),
+  /** Start/stop the project's chokidar watcher; `fs.changed` events follow
+   *  while it is on. Idempotent — watching an already-watched project (or
+   *  unwatching one that is not) is not an error. */
+  "fs.watch": channel(z.object({ projectId: z.string().min(1) }), OkSchema),
+  "fs.unwatch": channel(z.object({ projectId: z.string().min(1) }), OkSchema),
+
+  /** `null` when `projectId` is not a git repository at all — not an error
+   *  (the Phase 5 workflow brief: "safe on non-repos"). */
+  "git.status": channel(z.object({ projectId: z.string().min(1) }), GitStatusSchema.nullable()),
+  "git.diff": channel(
+    z.object({
+      projectId: z.string().min(1),
+      path: z.string().min(1).optional(),
+      staged: z.boolean().default(false),
+    }),
+    z.array(GitDiffSchema),
+  ),
+  /** `paths` omitted commits everything currently staged/changed, matching
+   *  plain `git commit -a` — not "nothing to commit". */
+  "git.commit": channel(
+    z.object({
+      projectId: z.string().min(1),
+      message: z.string().min(1),
+      paths: z.array(z.string().min(1)).optional(),
+    }),
+    z.object({ ok: z.boolean(), sha: z.string().optional() }),
+  ),
+
+  "terminal.create": channel(
+    z.object({
+      projectId: z.string().min(1),
+      sessionId: z.string().min(1).nullable().default(null),
+      cwd: z.string().min(1).optional(),
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    TerminalInfoSchema,
+  ),
+  "terminal.write": channel(z.object({ id: z.string().min(1), data: z.string() }), OkSchema),
+  "terminal.resize": channel(
+    z.object({ id: z.string().min(1), cols: z.number().int().positive(), rows: z.number().int().positive() }),
+    OkSchema,
+  ),
+  "terminal.kill": channel(z.object({ id: z.string().min(1) }), OkSchema),
+  /** Answered from `TerminalService`'s in-memory registry, not SQL — see
+   *  `TerminalInfoSchema`'s doc comment for why nothing persists a terminal. */
+  "terminal.list": channel(z.object({ projectId: z.string().min(1) }), z.array(TerminalInfoSchema)),
+
+  /** Re-scan the four detectors (R18) and persist anything new; returns the
+   *  same shape as `servers.list` so the pane can render straight from
+   *  either call. */
+  "servers.detect": channel(
+    z.object({ projectId: z.string().min(1) }),
+    z.array(DevServerWithRunSchema),
+  ),
+  "servers.list": channel(
+    z.object({ projectId: z.string().min(1) }),
+    z.array(DevServerWithRunSchema),
+  ),
+  "servers.start": channel(z.object({ serverId: z.string().min(1) }), DevServerRunSchema),
+  "servers.stop": channel(z.object({ serverId: z.string().min(1) }), DevServerRunSchema),
+  "servers.logs": channel(
+    z.object({ serverId: z.string().min(1), tail: z.number().int().positive().optional() }),
+    z.object({ lines: z.array(z.string()) }),
+  ),
+  "servers.saveCustom": channel(
+    z.object({ projectId: z.string().min(1), server: DevServerDraftSchema }),
+    DevServerSchema,
+  ),
+  "servers.remove": channel(z.object({ serverId: z.string().min(1) }), OkSchema),
+
+  "tasks.list": channel(
+    z.object({
+      sessionId: z.string().min(1).optional(),
+      projectId: z.string().min(1).optional(),
+    }),
+    z.array(TaskSchema),
+  ),
+  "tasks.update": channel(
+    z.object({ id: z.string().min(1), patch: TaskPatchSchema }),
+    TaskSchema,
+  ),
+
+  /**
+   * A native `WebContentsView` overlaying the renderer's placeholder box
+   * (Omnigent's pattern — never a deprecated `<webview>`). `viewId` is the
+   * Browser pane instance's own id, minted by the renderer, so more than one
+   * tab/pane can exist without the main process guessing which is which.
+   */
+  "browser.attach": channel(
+    z.object({ viewId: z.string().min(1), bounds: BoundsSchema, url: z.string().min(1).optional() }),
+    OkSchema,
+  ),
+  "browser.detach": channel(z.object({ viewId: z.string().min(1) }), OkSchema),
+  /** `url` carries either an address to load or the literal control words
+   *  `"back"` / `"forward"` / `"reload"` — the Browser pane's own toolbar
+   *  actions, kept on this one channel rather than four. */
+  "browser.navigate": channel(
+    z.object({ viewId: z.string().min(1), url: z.string().min(1) }),
+    OkSchema,
+  ),
+  "browser.setBounds": channel(
+    z.object({ viewId: z.string().min(1), bounds: BoundsSchema }),
+    OkSchema,
+  ),
+  "browser.devtools": channel(z.object({ viewId: z.string().min(1) }), OkSchema),
 } as const satisfies Record<string, ChannelDef>;
 
 export type InvokeChannels = typeof INVOKE_CHANNELS;
@@ -424,6 +597,38 @@ export const EVENT_CHANNELS = {
     kind: z.string(),
     message: z.string(),
     ts: TimestampSchema,
+  }),
+
+  /** Debounced batch from the project's chokidar watcher (R23: never raw
+   *  per-event noise) — fires only while `fs.watch` is active for `projectId`. */
+  "fs.changed": z.object({
+    projectId: z.string(),
+    changes: z.array(FileChangeSchema),
+  }),
+  /** One chunk of a terminal's output (ConPTY), unthrottled at this layer —
+   *  `TerminalService` owns any coalescing before it reaches here. */
+  "terminal.data": z.object({ id: z.string(), data: z.string() }),
+  /** `exitCode` is `null` when the process was killed rather than exiting on
+   *  its own (e.g. `terminal.kill`, or the app closing). */
+  "terminal.exit": z.object({ id: z.string(), exitCode: z.number().int().nullable() }),
+  /** A dev server's run state changed (starting/running/stopped/failed, a
+   *  discovered URL, an exit code) — one event per transition. */
+  "servers.status": z.object({ run: DevServerRunSchema }),
+  /** One ring-buffered log line (R23: capped, never the whole history). */
+  "servers.log": z.object({ serverId: z.string(), line: z.string() }),
+  /** The Tasks pane replaces its list wholesale on this event, the same
+   *  "whole roster" pattern `agents.updated` uses, for the same reason: a
+   *  derived task's status can change out from under an id the renderer
+   *  never had a chance to diff against. */
+  "tasks.updated": z.object({ sessionId: z.string(), tasks: z.array(TaskSchema) }),
+  /** The Browser pane's toolbar state, pushed after every navigation. */
+  "browser.state": z.object({
+    viewId: z.string(),
+    url: z.string(),
+    title: z.string(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+    loading: z.boolean(),
   }),
 } as const satisfies Record<string, z.ZodTypeAny>;
 

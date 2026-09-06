@@ -560,6 +560,68 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return next;
     },
 
+    // -------------------------------------------------------------------
+    // Workspace panes (Phase 5 contracts, SPEC R16-R18).
+    //
+    // `layout.*`, `tasks.*` and the `servers.*` rows backed by a saved
+    // `DevServer` definition are pure `@capygen/db` CRUD, so they are wired
+    // for real here. Everything that needs a live OS resource — the
+    // filesystem, git, a `node-pty` terminal, a spawned dev-server process,
+    // a `WebContentsView` — is Phase 5's **Build** task
+    // (`apps/desktop/src/workspace/**`: FsService, GitService,
+    // TerminalService, DevServerService, BrowserViewService) and is stubbed
+    // here so `IpcHandlers` compiles against the full contract before that
+    // service exists, rather than leaving the channel unimplemented.
+    // -------------------------------------------------------------------
+
+    "layout.get": (args) => store.workspaceLayouts.get(args.projectId),
+    "layout.set": (args) => store.workspaceLayouts.set(args.projectId, args.layoutJson),
+
+    "fs.list": () => notImplemented("fs.list"),
+    "fs.read": () => notImplemented("fs.read"),
+    "fs.write": () => notImplemented("fs.write"),
+    "fs.search": () => notImplemented("fs.search"),
+    "fs.watch": () => notImplemented("fs.watch"),
+    "fs.unwatch": () => notImplemented("fs.unwatch"),
+
+    "git.status": () => notImplemented("git.status"),
+    "git.diff": () => notImplemented("git.diff"),
+    "git.commit": () => notImplemented("git.commit"),
+
+    "terminal.create": () => notImplemented("terminal.create"),
+    "terminal.write": () => notImplemented("terminal.write"),
+    "terminal.resize": () => notImplemented("terminal.resize"),
+    "terminal.kill": () => notImplemented("terminal.kill"),
+    "terminal.list": () => notImplemented("terminal.list"),
+
+    "servers.detect": () => notImplemented("servers.detect"),
+    /** No live run tracker exists yet (`DevServerService`, Phase 5 Build), so
+     *  every row reports `run: null` — an honest "nothing started this",
+     *  never a guess at a status nothing is tracking. */
+    "servers.list": (args) =>
+      store.devServers
+        .listByProject(args.projectId)
+        .map((server) => ({ server, run: null })),
+    "servers.start": () => notImplemented("servers.start"),
+    "servers.stop": () => notImplemented("servers.stop"),
+    "servers.logs": () => notImplemented("servers.logs"),
+    "servers.saveCustom": (args) =>
+      store.devServers.create({ projectId: args.projectId, server: args.server }),
+    "servers.remove": (args) => ({ ok: store.devServers.remove(args.serverId) }),
+
+    "tasks.list": (args) =>
+      store.tasks.list({
+        ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+        ...(args.projectId ? { projectId: args.projectId } : {}),
+      }),
+    "tasks.update": (args) => store.tasks.update(args.id, args.patch),
+
+    "browser.attach": () => notImplemented("browser.attach"),
+    "browser.detach": () => notImplemented("browser.detach"),
+    "browser.navigate": () => notImplemented("browser.navigate"),
+    "browser.setBounds": () => notImplemented("browser.setBounds"),
+    "browser.devtools": () => notImplemented("browser.devtools"),
+
     "app.version": () => deps.appInfo(),
   };
 
@@ -586,6 +648,20 @@ function backendOf(
   const wanted = agentId ?? session.leadAgentId;
   if (!wanted) return null;
   return store.sessions.agent(wanted)?.backend ?? null;
+}
+
+/**
+ * A workspace-pane channel this build declares but has no service for yet
+ * (Phase 5 Build owns `apps/desktop/src/workspace/**`). Fails loudly with the
+ * channel name rather than returning an empty/placeholder value, matching
+ * SPEC's "default posture: fail loudly ... never swallow" — a silent empty
+ * file list or a no-op terminal would look like a real, empty answer instead
+ * of an unbuilt feature.
+ */
+function notImplemented(channel: string): never {
+  throw new Error(
+    `${channel}: not implemented yet — Phase 5 Build wires the real workspace service`,
+  );
 }
 
 /**

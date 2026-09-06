@@ -10,13 +10,24 @@ import {
   BlockSchema,
   DEFAULT_SESSION_SETTINGS,
   DEFAULT_SETTINGS,
+  DevServerDraftSchema,
+  DevServerRunSchema,
+  DevServerSchema,
   EVENT_CHANNEL_NAMES,
+  FileEntrySchema,
+  GitDiffSchema,
+  GitStatusSchema,
   HarnessInfoSchema,
   INVOKE_CHANNEL_NAMES,
   IpcContractError,
+  PANE_KINDS,
   SessionSchema,
   SessionSettingsSchema,
   SettingsSchema,
+  TaskPatchSchema,
+  TaskSchema,
+  TerminalInfoSchema,
+  WorkspaceLayoutSchema,
   defineIpc,
   deriveMentionName,
   isInvokeChannel,
@@ -69,6 +80,36 @@ describe("IPC contract", () => {
       "settings.get",
       "settings.set",
       "app.version",
+      "layout.get",
+      "layout.set",
+      "fs.list",
+      "fs.read",
+      "fs.write",
+      "fs.search",
+      "fs.watch",
+      "fs.unwatch",
+      "git.status",
+      "git.diff",
+      "git.commit",
+      "terminal.create",
+      "terminal.write",
+      "terminal.resize",
+      "terminal.kill",
+      "terminal.list",
+      "servers.detect",
+      "servers.list",
+      "servers.start",
+      "servers.stop",
+      "servers.logs",
+      "servers.saveCustom",
+      "servers.remove",
+      "tasks.list",
+      "tasks.update",
+      "browser.attach",
+      "browser.detach",
+      "browser.navigate",
+      "browser.setBounds",
+      "browser.devtools",
     ]);
     expect(EVENT_CHANNEL_NAMES).toEqual([
       "chat.block",
@@ -80,6 +121,13 @@ describe("IPC contract", () => {
       "question.request",
       "elicitation.request",
       "app.status",
+      "fs.changed",
+      "terminal.data",
+      "terminal.exit",
+      "servers.status",
+      "servers.log",
+      "tasks.updated",
+      "browser.state",
     ]);
   });
 
@@ -444,5 +492,101 @@ describe("Phase 4: session modes, agents, dispatcher, routing", () => {
     });
     expect(info.usage.cached).toBe(900);
     expect(info.others).toHaveLength(1);
+  });
+});
+
+describe("Phase 5: workspace panes, dev servers, tasks (contracts)", () => {
+  it("lists the eight pane kinds SPEC R16 names", () => {
+    expect(PANE_KINDS).toEqual([
+      "files",
+      "editor",
+      "diff",
+      "browser",
+      "terminal",
+      "agents",
+      "tasks",
+      "servers",
+    ]);
+  });
+
+  it("round-trips a saved workspace layout", () => {
+    const layout = WorkspaceLayoutSchema.parse({
+      projectId: newId("project"),
+      layoutJson: { grid: { root: {} } },
+      updatedAt: 1,
+    });
+    expect(layout.layoutJson).toEqual({ grid: { root: {} } });
+  });
+
+  it("defaults a dev server's args to an empty array and accepts a custom draft", () => {
+    const server = DevServerSchema.parse({
+      id: newId("devServer"),
+      projectId: newId("project"),
+      name: "web",
+      source: "package.json",
+      command: "npm",
+      cwd: "C:\\proj",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    expect(server.args).toEqual([]);
+
+    const draft = DevServerDraftSchema.parse({ name: "web", command: "npm run dev", cwd: "C:\\proj" });
+    expect(draft.source).toBe("custom");
+  });
+
+  it("mints a dev server run without a pid/url until one is known", () => {
+    const run = DevServerRunSchema.parse({ serverId: newId("devServer"), status: "starting" });
+    expect(run.pid).toBeUndefined();
+    expect(run.url).toBeUndefined();
+  });
+
+  it("defaults a task's status/source/order and lets tasks.update patch only the editable fields", () => {
+    const task = TaskSchema.parse({
+      id: newId("task"),
+      title: "Fix the flaky test",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    expect(task).toMatchObject({
+      sessionId: null,
+      agentId: null,
+      status: "pending",
+      source: "manual",
+      order: 0,
+    });
+
+    const patch = TaskPatchSchema.parse({ status: "in_progress" });
+    expect(patch).toEqual({ status: "in_progress" });
+    // Identity fields are not part of the patch shape at all.
+    expect("source" in TaskPatchSchema.shape).toBe(false);
+    expect("sessionId" in TaskPatchSchema.shape).toBe(false);
+  });
+
+  it("validates a live terminal info shape (never persisted — see TerminalInfoSchema's doc comment)", () => {
+    const info = TerminalInfoSchema.parse({
+      id: newId("terminal"),
+      projectId: newId("project"),
+      title: "PowerShell",
+      cwd: "C:\\proj",
+      shell: "pwsh.exe",
+      cols: 80,
+      rows: 24,
+    });
+    expect(info.sessionId).toBeNull();
+  });
+
+  it("round-trips a file entry, a git status (and its non-repo null), and a diff", () => {
+    expect(FileEntrySchema.parse({ path: "src/a.ts", name: "a.ts", kind: "file" }).kind).toBe("file");
+    expect(GitStatusSchema.nullable().parse(null)).toBeNull();
+    const status = GitStatusSchema.parse({
+      branch: "main",
+      ahead: 1,
+      behind: 0,
+      entries: [{ path: "a.ts", status: "M" }],
+    });
+    expect(status.entries).toHaveLength(1);
+    const diff = GitDiffSchema.parse({ path: "a.ts", unified: "@@ -1 +1 @@" });
+    expect(diff.binary).toBeUndefined();
   });
 });

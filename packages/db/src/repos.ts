@@ -8,13 +8,16 @@ import {
   AgentSchema,
   BlockSchema,
   DEFAULT_SETTINGS,
+  DevServerSchema,
   ProjectSchema,
   SessionSchema,
   SessionSettingsSchema,
   SettingsSchema,
+  TaskSchema,
   ToolOutputSchema,
   TurnSchema,
   UsageEventSchema,
+  WorkspaceLayoutSchema,
   deriveMentionName,
   newId,
   type Agent,
@@ -23,6 +26,9 @@ import {
   type AgentRole,
   type Backend,
   type Block,
+  type DevServer,
+  type DevServerDraft,
+  type DevServerPatch,
   type Project,
   type RoutingTarget,
   type Session,
@@ -31,11 +37,15 @@ import {
   type SessionSettingsPatch,
   type SessionStatus,
   type Settings,
+  type Task,
+  type TaskPatch,
+  type TaskStatus,
   type ToolOutput,
   type Turn,
   type TurnRole,
   type TurnStatus,
   type UsageEvent,
+  type WorkspaceLayout,
 } from "@capygen/shared";
 import {
   boolToInt,
@@ -952,5 +962,338 @@ export class SettingsRepo {
       JSON.stringify(value ?? null),
       now(),
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// workspace_layouts (migration 0004, Phase 5 SPEC R17)
+// ---------------------------------------------------------------------------
+
+function rowToWorkspaceLayout(row: Row): WorkspaceLayout {
+  return WorkspaceLayoutSchema.parse({
+    projectId: row.project_id,
+    layoutJson: fromJson<unknown>(row.layout_json, null),
+    updatedAt: Number(row.updated_at),
+  });
+}
+
+/** One row per project — `layout.get`/`layout.set`. Distinct from
+ *  `ProjectsRepo.setLayout` (a Phase 2 placeholder nothing else reads; see
+ *  migration 0004's header comment). */
+export class WorkspaceLayoutsRepo {
+  constructor(private readonly db: Database) {}
+
+  get(projectId: string): WorkspaceLayout | null {
+    const row = this.db.get<Row>(
+      "SELECT * FROM workspace_layouts WHERE project_id = ?",
+      projectId,
+    );
+    return row ? rowToWorkspaceLayout(row) : null;
+  }
+
+  /** Insert or replace the one row a project has. */
+  set(projectId: string, layoutJson: unknown): WorkspaceLayout {
+    const ts = now();
+    this.db.run(
+      `INSERT INTO workspace_layouts (project_id, layout_json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(project_id) DO UPDATE SET layout_json = excluded.layout_json,
+                                              updated_at = excluded.updated_at`,
+      projectId,
+      JSON.stringify(layoutJson),
+      ts,
+    );
+    return WorkspaceLayoutSchema.parse({ projectId, layoutJson, updatedAt: ts });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// dev_servers (migration 0004, Phase 5 SPEC R18)
+// ---------------------------------------------------------------------------
+
+function rowToDevServer(row: Row): DevServer {
+  return DevServerSchema.parse({
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    source: row.source,
+    command: row.command,
+    args: fromJson<string[]>(row.args_json, []),
+    cwd: row.cwd,
+    port: row.port === null || row.port === undefined ? undefined : Number(row.port),
+    url: (row.url as string | null) ?? undefined,
+    env: fromJson<Record<string, string> | undefined>(row.env_json, undefined),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  });
+}
+
+/** A dev server's *definition* only — its live run state is never persisted
+ *  (see migration 0004's header comment and `DevServerRunSchema`'s doc
+ *  comment in `@capygen/shared`). */
+export class DevServersRepo {
+  constructor(private readonly db: Database) {}
+
+  private insert(s: DevServer): void {
+    this.db.run(
+      `INSERT INTO dev_servers
+         (id, project_id, name, source, command, args_json, cwd, port, url, env_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      s.id,
+      s.projectId,
+      s.name,
+      s.source,
+      s.command,
+      toJson(s.args),
+      s.cwd,
+      s.port ?? null,
+      s.url ?? null,
+      toJson(s.env ?? null),
+      s.createdAt,
+      s.updatedAt,
+    );
+  }
+
+  /** `servers.saveCustom` — mints a new id. */
+  create(input: { projectId: string; server: DevServerDraft }): DevServer {
+    const ts = now();
+    const draft = input.server;
+    const server: DevServer = {
+      id: newId("devServer"),
+      projectId: input.projectId,
+      name: draft.name,
+      source: draft.source,
+      command: draft.command,
+      args: draft.args,
+      cwd: draft.cwd,
+      ...(draft.port !== undefined ? { port: draft.port } : {}),
+      ...(draft.url !== undefined ? { url: draft.url } : {}),
+      ...(draft.env !== undefined ? { env: draft.env } : {}),
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    this.insert(server);
+    return server;
+  }
+
+  /**
+   * Insert or replace a fully-formed row by id — for a detector (`servers.detect`,
+   * Phase 5 Build) that mints its own deterministic id (e.g. derived from
+   * `projectId` + `name` + `source`) so re-detecting the same script does not
+   * duplicate the row.
+   */
+  upsert(server: DevServer): DevServer {
+    const parsed = DevServerSchema.parse(server);
+    this.db.run(
+      `INSERT INTO dev_servers
+         (id, project_id, name, source, command, args_json, cwd, port, url, env_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name       = excluded.name,
+         source     = excluded.source,
+         command    = excluded.command,
+         args_json  = excluded.args_json,
+         cwd        = excluded.cwd,
+         port       = excluded.port,
+         url        = excluded.url,
+         env_json   = excluded.env_json,
+         updated_at = excluded.updated_at`,
+      parsed.id,
+      parsed.projectId,
+      parsed.name,
+      parsed.source,
+      parsed.command,
+      toJson(parsed.args),
+      parsed.cwd,
+      parsed.port ?? null,
+      parsed.url ?? null,
+      toJson(parsed.env ?? null),
+      parsed.createdAt,
+      parsed.updatedAt,
+    );
+    return parsed;
+  }
+
+  get(id: string): DevServer | null {
+    const row = this.db.get<Row>("SELECT * FROM dev_servers WHERE id = ?", id);
+    return row ? rowToDevServer(row) : null;
+  }
+
+  listByProject(projectId: string): DevServer[] {
+    return this.db
+      .all<Row>(
+        "SELECT * FROM dev_servers WHERE project_id = ? ORDER BY created_at, rowid",
+        projectId,
+      )
+      .map(rowToDevServer);
+  }
+
+  /** Merge-patch a saved definition (e.g. a detector filling in the `port`/
+   *  `url` a start just discovered). */
+  update(id: string, patch: DevServerPatch): DevServer {
+    const existing = this.get(id);
+    if (!existing) throw new Error(`unknown dev server: ${id}`);
+    const merged = DevServerSchema.parse({
+      ...existing,
+      ...patch,
+      port: patch.port === undefined ? existing.port : (patch.port ?? undefined),
+      url: patch.url === undefined ? existing.url : (patch.url ?? undefined),
+      env: patch.env === undefined ? existing.env : (patch.env ?? undefined),
+      updatedAt: now(),
+    });
+    this.upsert(merged);
+    return merged;
+  }
+
+  remove(id: string): boolean {
+    return this.db.run("DELETE FROM dev_servers WHERE id = ?", id) > 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tasks (0001 table; agent_id/order_index added in migration 0004)
+// ---------------------------------------------------------------------------
+
+function rowToTask(row: Row): Task {
+  return TaskSchema.parse({
+    id: row.id,
+    sessionId: row.session_id ?? null,
+    agentId: (row.agent_id as string | null) ?? null,
+    title: row.title,
+    status: row.status as TaskStatus,
+    source: row.source,
+    order: Number(row.order_index ?? 0),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  });
+}
+
+export class TasksRepo {
+  constructor(private readonly db: Database) {}
+
+  private insert(t: Task): void {
+    this.db.run(
+      `INSERT INTO tasks
+         (id, session_id, agent_id, title, status, source, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      t.id,
+      t.sessionId,
+      t.agentId,
+      t.title,
+      t.status,
+      t.source,
+      t.order,
+      t.createdAt,
+      t.updatedAt,
+    );
+  }
+
+  /** A manually-added task (`tasks.list`'s counterpart write path is
+   *  `update`; creation has no dedicated IPC channel yet — the Tasks pane's
+   *  "add" action goes through this repo method directly from the handler). */
+  create(input: {
+    sessionId?: string | null;
+    agentId?: string | null;
+    title: string;
+    status?: TaskStatus;
+    source?: Task["source"];
+    order?: number;
+  }): Task {
+    const ts = now();
+    const task: Task = {
+      id: newId("task"),
+      sessionId: input.sessionId ?? null,
+      agentId: input.agentId ?? null,
+      title: input.title,
+      status: input.status ?? "pending",
+      source: input.source ?? "manual",
+      order: input.order ?? 0,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    this.insert(task);
+    return task;
+  }
+
+  /**
+   * Insert or replace a fully-formed row by id — how `TasksService` (Phase 5
+   * Build) keeps a session's tasks in sync with an agent's own plan: a
+   * `TodoWrite`/Codex-plan-derived task carries a deterministic id (e.g. tied
+   * to the block that produced it) so re-sending the same plan updates the
+   * same rows instead of duplicating them.
+   */
+  upsert(task: Task): Task {
+    const parsed = TaskSchema.parse(task);
+    this.db.run(
+      `INSERT INTO tasks
+         (id, session_id, agent_id, title, status, source, order_index, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         session_id  = excluded.session_id,
+         agent_id    = excluded.agent_id,
+         title       = excluded.title,
+         status      = excluded.status,
+         source      = excluded.source,
+         order_index = excluded.order_index,
+         updated_at  = excluded.updated_at`,
+      parsed.id,
+      parsed.sessionId,
+      parsed.agentId,
+      parsed.title,
+      parsed.status,
+      parsed.source,
+      parsed.order,
+      parsed.createdAt,
+      parsed.updatedAt,
+    );
+    return parsed;
+  }
+
+  get(id: string): Task | null {
+    const row = this.db.get<Row>("SELECT * FROM tasks WHERE id = ?", id);
+    return row ? rowToTask(row) : null;
+  }
+
+  /** `tasks.list {sessionId?|projectId?}` — a project filter joins through
+   *  `sessions` since `tasks` itself has no `project_id` column. Both omitted
+   *  lists every task (the Tasks *page*, P10, spans sessions). */
+  list(opts: { sessionId?: string; projectId?: string } = {}): Task[] {
+    if (opts.sessionId) return this.listBySession(opts.sessionId);
+    if (opts.projectId) return this.listByProject(opts.projectId);
+    return this.db.all<Row>("SELECT * FROM tasks ORDER BY updated_at DESC").map(rowToTask);
+  }
+
+  listBySession(sessionId: string): Task[] {
+    return this.db
+      .all<Row>(
+        "SELECT * FROM tasks WHERE session_id = ? ORDER BY order_index, created_at",
+        sessionId,
+      )
+      .map(rowToTask);
+  }
+
+  listByProject(projectId: string): Task[] {
+    return this.db
+      .all<Row>(
+        `SELECT t.* FROM tasks t
+           JOIN sessions s ON s.id = t.session_id
+          WHERE s.project_id = ?
+          ORDER BY t.updated_at DESC`,
+        projectId,
+      )
+      .map(rowToTask);
+  }
+
+  /** `tasks.update` — merge-patch the user/agent-editable fields
+   *  (`TaskPatchSchema`: title, status, agentId, order). */
+  update(id: string, patch: TaskPatch): Task {
+    const existing = this.get(id);
+    if (!existing) throw new Error(`unknown task: ${id}`);
+    const merged = TaskSchema.parse({ ...existing, ...patch, updatedAt: now() });
+    this.upsert(merged);
+    return merged;
+  }
+
+  remove(id: string): boolean {
+    return this.db.run("DELETE FROM tasks WHERE id = ?", id) > 0;
   }
 }

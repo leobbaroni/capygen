@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { newId, type Block, type TextBlock } from "@capygen/shared";
+import { newId, type Block, type Task, type TextBlock } from "@capygen/shared";
 import {
   openStore,
   openDatabase,
@@ -102,6 +102,8 @@ describe("migrations", () => {
       "policies",
       "approvals",
       "tool_outputs",
+      "workspace_layouts",
+      "dev_servers",
       "schema_migrations",
     ]) {
       expect(names, `missing table ${table}`).toContain(`table:${table}`);
@@ -139,6 +141,7 @@ describe("migrations", () => {
       "0001_init",
       "0002_widgets_elicitations_tool_outputs",
       "0003_round_table_agents",
+      "0004_workspace_panes",
     ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
@@ -186,6 +189,7 @@ describe("migrations", () => {
       "0001_init",
       "0002_widgets_elicitations_tool_outputs",
       "0003_round_table_agents",
+      "0004_workspace_panes",
     ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),
@@ -735,5 +739,171 @@ describe("reopening after a crash", () => {
     store = open();
     expect(store.reconciled).toEqual({ turns: 0, sessions: 0 });
     expect(store.sessions.get(session.id)?.status).toBe("idle");
+  });
+});
+
+describe("Phase 5: workspace_layouts, dev_servers, tasks (migration 0004)", () => {
+  it("workspace_layouts: get() is null until set(), then round-trips and survives a reopen", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "layout") });
+    expect(store.workspaceLayouts.get(project.id)).toBeNull();
+
+    const saved = store.workspaceLayouts.set(project.id, { grid: { root: { type: "leaf" } } });
+    expect(saved.layoutJson).toEqual({ grid: { root: { type: "leaf" } } });
+
+    store.close();
+    store = open();
+    expect(store.workspaceLayouts.get(project.id)?.layoutJson).toEqual({
+      grid: { root: { type: "leaf" } },
+    });
+  });
+
+  it("workspace_layouts: set() overwrites the one row a project has, never appends", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "layout2") });
+    store.workspaceLayouts.set(project.id, { v: 1 });
+    store.workspaceLayouts.set(project.id, { v: 2 });
+    expect(store.workspaceLayouts.get(project.id)?.layoutJson).toEqual({ v: 2 });
+    expect(store.db.all("SELECT project_id FROM workspace_layouts")).toHaveLength(1);
+  });
+
+  it("dev_servers: create() mints an id, defaults args to [], and round-trips port/url/env", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "servers") });
+    const server = store.devServers.create({
+      projectId: project.id,
+      server: {
+        name: "web",
+        source: "custom",
+        command: "npm run dev",
+        args: [],
+        cwd: project.path,
+        port: 3000,
+        url: "http://localhost:3000",
+        env: { NODE_ENV: "development" },
+      },
+    });
+    expect(server.id).toMatch(/^srv_[0-9a-f]{32}$/);
+    expect(store.devServers.get(server.id)).toEqual(server);
+    expect(store.devServers.listByProject(project.id)).toEqual([server]);
+  });
+
+  it("dev_servers: update() merge-patches without clobbering unrelated fields, and null clears port/url/env", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "servers2") });
+    const server = store.devServers.create({
+      projectId: project.id,
+      server: { name: "web", source: "package.json", command: "npm run dev", args: [], cwd: project.path },
+    });
+    expect(server.port).toBeUndefined();
+
+    const withUrl = store.devServers.update(server.id, { port: 4000, url: "http://localhost:4000" });
+    expect(withUrl).toMatchObject({ name: "web", port: 4000, url: "http://localhost:4000" });
+
+    const cleared = store.devServers.update(server.id, { port: null });
+    expect(cleared.port).toBeUndefined();
+    expect(cleared.url).toBe("http://localhost:4000"); // untouched by the port-only patch
+  });
+
+  it("dev_servers: upsert() by id updates in place instead of duplicating (a re-detected script)", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "servers3") });
+    const ts = Date.now();
+    const detected = {
+      id: "srv_deterministic",
+      projectId: project.id,
+      name: "web",
+      source: "package.json" as const,
+      command: "npm run dev",
+      args: [],
+      cwd: project.path,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    store.devServers.upsert(detected);
+    store.devServers.upsert({ ...detected, url: "http://localhost:5173", updatedAt: ts + 1 });
+    const rows = store.devServers.listByProject(project.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ url: "http://localhost:5173" });
+  });
+
+  it("dev_servers: remove() deletes the row", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "servers4") });
+    const server = store.devServers.create({
+      projectId: project.id,
+      server: { name: "web", source: "custom", command: "npm run dev", args: [], cwd: project.path },
+    });
+    expect(store.devServers.remove(server.id)).toBe(true);
+    expect(store.devServers.get(server.id)).toBeNull();
+    expect(store.devServers.remove(server.id)).toBe(false);
+  });
+
+  it("tasks: create() defaults status/source/order, and reads back sessionId/agentId as null when omitted", () => {
+    const task = store.tasks.create({ title: "Wire the terminal pane" });
+    expect(task).toMatchObject({
+      title: "Wire the terminal pane",
+      status: "pending",
+      source: "manual",
+      order: 0,
+      sessionId: null,
+      agentId: null,
+    });
+    expect(store.tasks.get(task.id)).toEqual(task);
+  });
+
+  it("tasks: upsert() by id keeps a TodoWrite-derived task's row stable across re-sends", () => {
+    const { session, agents } = seedSession();
+    const ts = Date.now();
+    const derived: Task = {
+      id: "tsk_todo_0",
+      sessionId: session.id,
+      agentId: agents[0]!.id,
+      title: "Read the SPEC",
+      status: "in_progress",
+      source: "todo_write",
+      order: 0,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    store.tasks.upsert(derived);
+    store.tasks.upsert({ ...derived, status: "completed", updatedAt: ts + 1 });
+
+    const rows = store.tasks.listBySession(session.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "completed", source: "todo_write" });
+  });
+
+  it("tasks: list() dispatches on sessionId, then projectId (joined through sessions), else everything", () => {
+    const { project, session } = seedSession();
+    store.tasks.create({ sessionId: session.id, title: "In this session" });
+    store.tasks.create({ title: "Belongs to nothing" });
+
+    expect(store.tasks.list({ sessionId: session.id }).map((t) => t.title)).toEqual([
+      "In this session",
+    ]);
+    expect(store.tasks.list({ projectId: project.id }).map((t) => t.title)).toEqual([
+      "In this session",
+    ]);
+    expect(store.tasks.list().map((t) => t.title).sort()).toEqual([
+      "Belongs to nothing",
+      "In this session",
+    ]);
+  });
+
+  it("tasks: update() merge-patches only title/status/agentId/order, never source or sessionId", () => {
+    const { session } = seedSession();
+    const task = store.tasks.create({ sessionId: session.id, title: "Draft", source: "codex_plan" });
+
+    const patched = store.tasks.update(task.id, { status: "completed", order: 3 });
+    expect(patched).toMatchObject({
+      title: "Draft",
+      status: "completed",
+      source: "codex_plan",
+      sessionId: session.id,
+      order: 3,
+    });
+
+    expect(() => store.tasks.update("tsk_nope", { status: "completed" })).toThrow(/unknown task/);
+  });
+
+  it("tasks: remove() deletes the row", () => {
+    const task = store.tasks.create({ title: "Throwaway" });
+    expect(store.tasks.remove(task.id)).toBe(true);
+    expect(store.tasks.get(task.id)).toBeNull();
   });
 });

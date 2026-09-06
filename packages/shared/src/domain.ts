@@ -977,3 +977,285 @@ export const AgentDescribeSchema = z.object({
   others: z.array(AgentDescribeOtherSchema).default([]),
 });
 export type AgentDescribe = z.infer<typeof AgentDescribeSchema>;
+
+// ---------------------------------------------------------------------------
+// Workspace panes (Phase 5, SPEC R16-R18) — dockable panes, per-project
+// layout, dev servers, tasks, terminals, and the fs/git primitives the Files
+// and Diff panes read. Migration 0004 (`@capygen/db`) is the physical home
+// for `WorkspaceLayout`, `DevServer` and `Task`; `TerminalInfo` is a live-only
+// shape (see its own doc comment for why nothing persists it).
+// ---------------------------------------------------------------------------
+
+/** A dockable workspace panel (CONTEXT.md §Pane). */
+export const PaneKindSchema = z.enum([
+  "files",
+  "editor",
+  "diff",
+  "browser",
+  "terminal",
+  "agents",
+  "tasks",
+  "servers",
+]);
+export type PaneKind = z.infer<typeof PaneKindSchema>;
+export const PANE_KINDS = PaneKindSchema.options;
+
+/**
+ * One project's saved dockview arrangement (R17: "layout is saved per
+ * project"). `layoutJson` is dockview's own `SerializedDockview` — opaque to
+ * capygen, round-tripped whole through `DockviewApi.fromJSON`/`toJSON()` — so
+ * it is `unknown` here rather than modelled field-by-field; the workspace
+ * shell (Phase 5 Build) owns its actual shape.
+ *
+ * Distinct from `Project.layout` (a leftover free-form slot from Phase 2,
+ * unused since no pane system existed yet): this table is the one both
+ * `layout.get`/`layout.set` and the workspace host actually read and write.
+ */
+export const WorkspaceLayoutSchema = z.object({
+  projectId: z.string().min(1),
+  layoutJson: z.unknown(),
+  updatedAt: TimestampSchema,
+});
+export type WorkspaceLayout = z.infer<typeof WorkspaceLayoutSchema>;
+
+/** Where a dev server's definition came from (R18's four detectors, plus a
+ *  user-entered one). */
+export const DevServerSourceSchema = z.enum([
+  "launch.json",
+  "package.json",
+  "python",
+  "docker-compose",
+  "custom",
+]);
+export type DevServerSource = z.infer<typeof DevServerSourceSchema>;
+
+/**
+ * A detected or hand-entered long-running dev process (CONTEXT.md §Dev
+ * server). `port`/`url` are filled in once known — a freshly detected
+ * `package.json` script may have neither until its first successful start
+ * discovers them (stdout URL, or a port probe), at which point the detector
+ * persists them back onto this row so the next `servers.list` already knows.
+ */
+export const DevServerSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  name: z.string().min(1),
+  source: DevServerSourceSchema,
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().min(1),
+  port: z.number().int().positive().optional(),
+  url: z.string().min(1).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type DevServer = z.infer<typeof DevServerSchema>;
+
+/** Creation input for `servers.saveCustom` — `id`/`projectId` are assigned by
+ *  the repo; `source` defaults to `"custom"` since every other source is
+ *  minted by a detector, never typed in by hand. */
+export const DevServerDraftSchema = z.object({
+  name: z.string().min(1),
+  source: DevServerSourceSchema.default("custom"),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().min(1),
+  port: z.number().int().positive().optional(),
+  url: z.string().min(1).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+export type DevServerDraft = z.infer<typeof DevServerDraftSchema>;
+
+/** Merge-patch input for updating a saved `DevServer` definition (e.g. a
+ *  detector filling in the `port`/`url` it just discovered). Hand-written,
+ *  no defaults — see `AgentPatchSchema`'s doc comment for why a `.default()`
+ *  field (`args`) must never be wrapped in `.partial()`'s `.optional()`. */
+export const DevServerPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  command: z.string().min(1).optional(),
+  args: z.array(z.string()).optional(),
+  cwd: z.string().min(1).optional(),
+  port: z.number().int().positive().nullable().optional(),
+  url: z.string().min(1).nullable().optional(),
+  env: z.record(z.string(), z.string()).nullable().optional(),
+});
+export type DevServerPatch = z.infer<typeof DevServerPatchSchema>;
+
+/** A dev server's live process state — held in memory by the desktop's
+ *  `DevServerService` (Phase 5 Build), never persisted: a `pid` from the last
+ *  run is meaningless after a restart, and `dev_servers` (migration 0004)
+ *  stores only the server's *definition*. `servers.status` events and
+ *  `servers.list`/`.start`/`.stop` responses are this shape's only home. */
+export const DevServerRunStatusSchema = z.enum(["starting", "running", "stopped", "failed"]);
+export type DevServerRunStatus = z.infer<typeof DevServerRunStatusSchema>;
+
+export const DevServerRunSchema = z.object({
+  serverId: z.string().min(1),
+  status: DevServerRunStatusSchema,
+  pid: z.number().int().optional(),
+  url: z.string().min(1).optional(),
+  startedAt: TimestampSchema.optional(),
+  exitCode: z.number().int().optional(),
+});
+export type DevServerRun = z.infer<typeof DevServerRunSchema>;
+
+/** A `DevServer` definition paired with its current (possibly absent) live
+ *  run — what the Servers pane actually renders one row from. */
+export const DevServerWithRunSchema = z.object({
+  server: DevServerSchema,
+  run: DevServerRunSchema.nullable(),
+});
+export type DevServerWithRun = z.infer<typeof DevServerWithRunSchema>;
+
+/** Where a `Task` row came from (CONTEXT.md's agent-derived plan surfaces,
+ *  plus a user-typed one). */
+export const TaskStatusSchema = z.enum(["pending", "in_progress", "completed", "cancelled"]);
+export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+
+export const TaskSourceSchema = z.enum(["todo_write", "codex_plan", "manual"]);
+export type TaskSource = z.infer<typeof TaskSourceSchema>;
+
+/**
+ * One item in the Tasks pane / Tasks page (P10): an agent's own plan item
+ * (Claude `TodoWrite`, a Codex plan turn) or a manually added one.
+ * `sessionId`/`agentId` are nullable, not merely optional — a manually added
+ * task may belong to neither, and the derivation service that upserts one
+ * from a `TodoWrite` call always has both, so the column is genuinely absent
+ * rather than "not sent this time" (the same distinction `Turn.agentId`/
+ * `Session.leadAgentId` already draw elsewhere in this file).
+ */
+export const TaskSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1).nullable().default(null),
+  agentId: z.string().min(1).nullable().default(null),
+  title: z.string().min(1),
+  status: TaskStatusSchema.default("pending"),
+  source: TaskSourceSchema.default("manual"),
+  /** Display order within its session/list; agent-derived tasks keep the
+   *  todo list's own order. */
+  order: z.number().int().nonnegative().default(0),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+});
+export type Task = z.infer<typeof TaskSchema>;
+
+/**
+ * `tasks.update`'s patch. Hand-written, no defaults — same jitless-defaults
+ * hazard `AgentPatchSchema` documents (`status`/`source`/`order` all carry
+ * `.default()` on `TaskSchema`). `source` and `sessionId` are deliberately
+ * excluded: which derivation produced a task, and which session it belongs
+ * to, are identity facts fixed at creation, not user-editable fields.
+ */
+export const TaskPatchSchema = z.object({
+  title: z.string().min(1).optional(),
+  status: TaskStatusSchema.optional(),
+  agentId: z.string().min(1).nullable().optional(),
+  order: z.number().int().nonnegative().optional(),
+});
+export type TaskPatch = z.infer<typeof TaskPatchSchema>;
+
+/**
+ * A live terminal session (CONTEXT.md, R16). **Not persisted** — migration
+ * 0004 deliberately has no `terminals` table. A `node-pty` process is a live
+ * OS handle: it does not survive the app closing, so a row surviving a
+ * restart would describe a terminal that no longer exists, and the composer
+ * would have nothing to reconnect it to (unlike a dev server, which at least
+ * has a definition worth keeping). `TerminalService` (Phase 5 Build) holds
+ * these in memory only; `terminal.list` answers from that registry, not SQL.
+ */
+export const TerminalInfoSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  sessionId: z.string().min(1).nullable().default(null),
+  title: z.string().min(1),
+  cwd: z.string().min(1),
+  shell: z.string().min(1),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+export type TerminalInfo = z.infer<typeof TerminalInfoSchema>;
+
+/** One row in the Files pane's tree (R16). */
+export const FileEntrySchema = z.object({
+  path: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.enum(["file", "dir"]),
+  size: z.number().int().nonnegative().optional(),
+  mtime: TimestampSchema.optional(),
+});
+export type FileEntry = z.infer<typeof FileEntrySchema>;
+
+/** `fs.list`/`fs.search`'s shared shape: bounded per SPEC R23-R26 ("file
+ *  watchers bounded ... depth/size caps"), so `truncated` says outright when
+ *  a directory or a search hit the cap rather than the caller inferring it
+ *  from a suspiciously round count. */
+export const FileListResultSchema = z.object({
+  entries: z.array(FileEntrySchema).default([]),
+  truncated: z.boolean().default(false),
+});
+export type FileListResult = z.infer<typeof FileListResultSchema>;
+
+/** `fs.read`'s result. `binary` files still return `content` (base64, per
+ *  `encoding`) rather than refusing outright — the Editor pane opens them
+ *  read-only instead of failing the call. */
+export const FileReadResultSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+  encoding: z.enum(["utf8", "base64"]).default("utf8"),
+  size: z.number().int().nonnegative(),
+  truncated: z.boolean().default(false),
+  binary: z.boolean().default(false),
+});
+export type FileReadResult = z.infer<typeof FileReadResultSchema>;
+
+/** One chokidar event, batched into `fs.changed` (R23: debounced, never
+ *  raw per-event noise into the model's context — this event is UI-only). */
+export const FileChangeKindSchema = z.enum(["add", "change", "unlink", "addDir", "unlinkDir"]);
+export type FileChangeKind = z.infer<typeof FileChangeKindSchema>;
+
+export const FileChangeSchema = z.object({
+  path: z.string().min(1),
+  kind: FileChangeKindSchema,
+});
+export type FileChange = z.infer<typeof FileChangeSchema>;
+
+/** One row of `git.status`'s working tree (porcelain-style short status
+ *  code, e.g. `"M"`, `"??"`, `"A"` — free-form rather than a fixed enum since
+ *  the exact vocabulary is `simple-git`'s/`git`'s own). */
+export const GitStatusEntrySchema = z.object({
+  path: z.string().min(1),
+  status: z.string().min(1),
+});
+export type GitStatusEntry = z.infer<typeof GitStatusEntrySchema>;
+
+/** A project's git status, or `null` when it is not a repository at all
+ *  (`git.status`'s IPC output is `GitStatusSchema.nullable()` — "safe on
+ *  non-repos" per the Phase 5 workflow brief, not an error). */
+export const GitStatusSchema = z.object({
+  branch: z.string(),
+  ahead: z.number().int().nonnegative(),
+  behind: z.number().int().nonnegative(),
+  entries: z.array(GitStatusEntrySchema),
+});
+export type GitStatus = z.infer<typeof GitStatusSchema>;
+
+/** One file's unified diff (Diff pane, R16). `binary` files carry an empty
+ *  `unified` and the flag rather than a patch the renderer cannot show. */
+export const GitDiffSchema = z.object({
+  path: z.string().min(1),
+  unified: z.string(),
+  binary: z.boolean().optional(),
+});
+export type GitDiff = z.infer<typeof GitDiffSchema>;
+
+/** A rectangle in the renderer's own coordinate space — how the Browser
+ *  pane's placeholder tells the main-process `WebContentsView` where to sit
+ *  (`browser.attach`/`.setBounds`; Omnigent's own pattern, not `<webview>`). */
+export const BoundsSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number().nonnegative(),
+  height: z.number().nonnegative(),
+});
+export type Bounds = z.infer<typeof BoundsSchema>;

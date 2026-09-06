@@ -12,6 +12,9 @@ const PREFIXES = {
   usage: "usg",
   request: "req",
   toolOutput: "tout",
+  task: "tsk",
+  devServer: "srv",
+  terminal: "term",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;
