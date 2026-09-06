@@ -273,3 +273,18 @@ logged with its real message before it is re-thrown to the renderer.
   `node_modules/@openai/codex-sdk` failed and the machine's own CLI — a different protocol version
   — is being driven, on which approvals never fire. `@openai/codex-sdk` must stay a dependency of
   `apps/desktop`, not only of `packages/engine`.
+- **The Terminal pane is empty in a packaged build but fine in `pnpm dev`**: `node-pty` was packed
+  into the asar. Its binding loader does a relative `require("../build/Release/pty.node")` and it
+  launches `conpty.dll` / `OpenConsole.exe` as *files*, neither of which works from inside an
+  archive. Phase 12 must `asarUnpack` `**/node_modules/node-pty/**` — see
+  `docs/adr/0005-terminal-node-pty.md`. Nothing needs rebuilding: node-pty 1.1.0's prebuilds are
+  N-API and load under Electron 44 and Node 22.16 unchanged (both measured).
+- **Stopping a dev server leaves the port taken**: the stop path must tree-kill *synchronously*.
+  `taskkill /T` walks the process tree by parent pid, so firing it asynchronously and then calling
+  `child.kill()` kills the shell first and reparents the server that actually holds the port.
+  `killProcessTree` uses `spawnSync` for exactly this reason, and
+  `apps/desktop/test/workspaceServers.test.ts` asserts the port stops answering.
+- **"Port 3000 is already in use by PID …" instead of a start**: that is deliberate. When a dev
+  server's declared port already answers, capygen adopts the running server and hands you its URL
+  rather than spawning a second one that would die on EADDRINUSE. Stopping an adopted server kills
+  nothing — capygen did not start it.

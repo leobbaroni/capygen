@@ -1,0 +1,19 @@
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8085:80"
+    depends_on:
+      - db
+  api:
+    image: node:22-alpine
+    command: node server.js
+    ports:
+      - "127.0.0.1:4310:4310/tcp"
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: example
+
+volumes:
+  pgdata:

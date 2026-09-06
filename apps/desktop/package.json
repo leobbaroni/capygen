@@ -14,7 +14,10 @@
     "@capygen/db": "workspace:*",
     "@capygen/engine": "workspace:*",
     "@capygen/shared": "workspace:*",
-    "@openai/codex-sdk": "^0.153.4"
+    "@openai/codex-sdk": "^0.153.4",
+    "chokidar": "^5.0.0",
+    "node-pty": "^1.1.0",
+    "simple-git": "^3.36.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

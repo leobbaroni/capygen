@@ -19,6 +19,7 @@ import {
   BrowserWindow,
   Menu,
   Tray,
+  WebContentsView,
   app,
   dialog,
   ipcMain,
@@ -66,6 +67,7 @@ import {
   createWidgetHost,
   type WidgetHostHandlers,
 } from "./ipc/widgets.js";
+import { createBrowserViewService } from "./workspace/BrowserViewService.js";
 import { ECHO_DELAY_MS, createStubEngine } from "./engine/stub.js";
 import type { EngineDeps } from "./engine/types.js";
 
@@ -326,12 +328,26 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     log: { warn: (m) => log.warn(m) },
   });
 
+  // [B1] The Browser pane (SPEC R16). A native `WebContentsView` positioned
+  // over the renderer's placeholder — Omnigent's pattern, never a deprecated
+  // `<webview>`. It is built here rather than in `workspace/` because it is
+  // the one workspace service that needs Electron, and `handlers.ts` keeps
+  // its no-Electron-import rule by taking it as an injected dependency.
+  const browserViews = createBrowserViewService({
+    window: () => [...shellWindows].find((win) => !win.isDestroyed()) ?? null,
+    WebContentsView,
+    openExternal: (url) => void shell.openExternal(url),
+    broadcast,
+    log,
+  });
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
     log,
     widgets,
     pools: mcpPools,
+    browser: browserViews,
     ...(useStub
       ? {
           makeEngine: (engineDeps: EngineDeps) =>

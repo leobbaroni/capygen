@@ -1,0 +1,11 @@
+{
+  "name": "capygen-fixture-node",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite --port 5199",
+    "start": "node server.js",
+    "preview": "vite preview",
+    "build": "vite build"
+  }
+}

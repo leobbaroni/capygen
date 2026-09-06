@@ -42,7 +42,14 @@ await build({
   // main.cjs could not resolve. It is ESM-only, and `require()` of an ESM
   // package works on Electron 44's Node — verified with
   // `node -e "require('@anthropic-ai/claude-agent-sdk')"`.
-  external: ["electron", "@anthropic-ai/claude-agent-sdk"],
+  // `node-pty` (Terminal pane, SPEC R16) must stay external too, for a
+  // different reason: its loader does a *relative* `require("../build/Release/
+  // pty.node")` from inside `lib/utils.js`, so it only resolves when the
+  // package keeps its real directory layout on disk. Bundled, that require
+  // would look next to `dist/main.cjs` and find nothing. Its prebuilds are
+  // N-API, so no rebuild step is involved either way
+  // (docs/adr/0005-terminal-node-pty.md).
+  external: ["electron", "@anthropic-ai/claude-agent-sdk", "node-pty"],
   logLevel: "info",
   // `packagedMigrationsDir()` in @capygen/db reads `import.meta.url` when it
   // runs under ESM and falls back to `__dirname` here; esbuild's warning about

@@ -671,3 +671,13 @@ Not fixed, on purpose
   `overflow-hidden` stop the Agents pane scrolling the whole shell sideways.
 - Gate: typecheck, 731 unit tests (was 696), build, 16/17 Playwright (the API-key case is skipped —
   no key on this machine).
+
+- [Phase 5 · B1] Workspace services: FsService (bounded list/read/write/search + chokidar 5 watcher),
+  GitService (simple-git 3.36, null on non-repos), TerminalService (node-pty 1.1.0 — verified to load
+  under Electron 44 and Node 22.16 with no rebuild, ADR-0005), DevServerService (four detectors,
+  ring-buffered logs, stdout-URL then port-probe discovery, port-in-use adoption with the owning PID),
+  TasksService (TodoWrite / Codex plan derivation via a broadcast tap, no tokens spent) and
+  BrowserViewService (WebContentsView per pane, own partition, http(s) only). All 30 workspace IPC
+  channels wired in apps/desktop/src/ipc/workspace.ts; the notImplemented stubs are gone.
+- Gate: typecheck ok for shared/db/engine/desktop + tests/tsconfig (renderer red on another agents
+  in-flight src/panes/**); desktop vitest project 279/279 green (20 files).
