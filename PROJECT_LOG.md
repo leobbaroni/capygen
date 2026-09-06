@@ -544,3 +544,32 @@ Not fixed, on purpose
   table records that as inapplicable rather than missing, and Phase 4 owns it.
 - `harness.list`'s Codex probe spawns a child every 60 s of use. If that ever shows up in a profile,
   the fix is a longer TTL plus an explicit refresh button in Settings ▸ Harnesses, not a weaker check.
+
+## 2026-09-06 — Phase 4 / B1: round-table dispatcher, hop cap, sub-agent routing + delegation
+
+- `packages/engine/src/roundtable/` is pure: mention parsing (code spans and email addresses are
+  blanked in place, so reported offsets still index the original text), target resolution
+  (explicit pick > mentions in order > lead > first agent), the absolute hop index (a user turn is
+  0, so "until the user speaks" needs no flag to clear), the labelled context delta and the
+  session-stable prompt addition. `apps/desktop/src/engine/RoundTable.ts` is the stateful half:
+  turn rows, the queue, `chat.chainStopped`, and the pending hop `chat.continue` resumes.
+- R23 in one sentence: a stateful backend is never re-sent the transcript. What Claude and Codex
+  get is `[@name (Backend)]: …` for the other speakers' turns **since their own last turn**, then
+  the addressed message. `api` starts its delta at the later of that and the history watermark
+  `history.ts` replayed from, or a relaunch would send the same turns twice.
+- R24: the roster/`delegate_task` text goes in `HarnessAgent.promptAddition`, applied once per
+  backend session — Claude `systemPrompt.append` on the `claude_code` preset with `snapshot: true`,
+  Codex `developerInstructions`, `api` `buildSystemPrompt({extra})`. A solo session with no routing
+  override gets `undefined`, so its prompt stays byte-identical to Phase 2's.
+- Sub-agent routing (ADR-0004): same backend → the `PreToolUse` hook rewrites `updatedInput.model`;
+  cross-backend → `delegate_task`, an in-process MCP server for Claude (`createSdkMcpServer`) and
+  one more `ToolDefinition` for `api`. Every failure inherits the parent's model instead.
+- A Codex agent cannot be handed `delegate_task`: `codex app-server` reads MCP servers from the
+  user's `~/.codex/config.toml`, which capygen will not write behind their back. It fails open and
+  the opt-in server is Phase 6 work.
+- Two round-level defects found while reviewing the interrupted first attempt and fixed with
+  regression tests: a round that blocked *two* chains kept only the last (Continue silently
+  dropped the other) and wrote one "chain stopped" line per blocked agent; and under
+  `parallelAgents`, two hops addressed to the same agent raced, so the runner refused the second
+  outright. Blocked chains are now a list resumed together under one notice, and a parallel round
+  runs one lane per agent.

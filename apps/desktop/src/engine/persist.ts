@@ -6,7 +6,7 @@
  * written in the same call, always upserted by id (SPEC R23: persist
  * incrementally, never rebuild a turn).
  */
-import { newId, type Block, type TurnStatus } from "@capygen/shared";
+import { newId, type Block, type Turn, type TurnStatus } from "@capygen/shared";
 import type { EngineDeps } from "./types.js";
 
 /** Store the block and push the stored value (never the caller's draft). */
@@ -33,6 +33,82 @@ export function textBlock(
     createdAt: ts,
     updatedAt: ts,
   };
+}
+
+/**
+ * [B1] The user's turn: stored complete, its text emitted as one block, and its
+ * `mentions` recorded so the transcript keeps *who the message was addressed
+ * to* rather than re-deriving it from the text later (ADR-0002).
+ */
+export function recordUserTurn(
+  deps: EngineDeps,
+  sessionId: string,
+  text: string,
+  mentions: readonly string[] = [],
+): Turn {
+  const turn = deps.store.turns.create({
+    sessionId,
+    role: "user",
+    status: "done",
+    mentions: [...mentions],
+  });
+  emitBlock(deps, textBlock(sessionId, turn.id, 0, text));
+  deps.broadcast("chat.turnStatus", { sessionId, turnId: turn.id, status: "done" });
+  return turn;
+}
+
+/**
+ * [B1] One agent turn, opened `streaming` for an engine to fill in. Every
+ * round-table field is set here rather than by the caller so a turn created by
+ * `chat.send`, by a hop and by `chat.continue` carry the same shape:
+ * `parentTurnId` orders the transcript, `triggeredByTurnId` remembers the
+ * mention that started the chain, `speakerLabel` freezes the header so a later
+ * rename cannot rewrite history (see `TurnSchema`).
+ */
+export function openAgentTurn(
+  deps: EngineDeps,
+  args: {
+    sessionId: string;
+    agentId: string | null;
+    parentTurnId: string | null;
+    hopIndex: number;
+    triggeredByTurnId?: string | null;
+    speakerLabel?: string;
+    mentions?: readonly string[];
+  },
+): Turn {
+  const turn = deps.store.turns.create({
+    sessionId: args.sessionId,
+    agentId: args.agentId,
+    role: "agent",
+    status: "streaming",
+    parentTurnId: args.parentTurnId,
+    hopIndex: args.hopIndex,
+    triggeredByTurnId: args.triggeredByTurnId ?? null,
+    ...(args.speakerLabel !== undefined ? { speakerLabel: args.speakerLabel } : {}),
+    mentions: [...(args.mentions ?? [])],
+  });
+  deps.store.sessions.setStatus(args.sessionId, "running");
+  deps.broadcast("chat.turnStatus", {
+    sessionId: args.sessionId,
+    turnId: turn.id,
+    status: "streaming",
+  });
+  const session = deps.store.sessions.get(args.sessionId);
+  if (session) deps.broadcast("session.updated", session);
+  return turn;
+}
+
+/**
+ * [B1] A `system` turn — capygen speaking in the transcript rather than an
+ * agent. Today only the hop-cap notice (SPEC R11); it is a real turn so it
+ * survives a relaunch and so the "Continue" affordance has something to sit on.
+ */
+export function systemTurn(deps: EngineDeps, sessionId: string, text: string): Turn {
+  const turn = deps.store.turns.create({ sessionId, role: "system", status: "done" });
+  emitBlock(deps, textBlock(sessionId, turn.id, 0, text));
+  deps.broadcast("chat.turnStatus", { sessionId, turnId: turn.id, status: "done" });
+  return turn;
 }
 
 export function errorBlock(

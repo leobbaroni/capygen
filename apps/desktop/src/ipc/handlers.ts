@@ -297,49 +297,24 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
 
     "turns.usage": (args) => ({ events: store.usage.listBySession(args.sessionId) }),
 
+    /**
+     * [B1] Round-table dispatch (ADR-0002, SPEC R11). Both turn rows are the
+     * engine's to write now, not this handler's: how many agent turns one
+     * message opens depends on its @-mentions, and *when* the next one opens
+     * depends on when the last finished — neither of which a request/response
+     * handler can see. `agentTurnId` stays the first of them, which is what
+     * the contract promises and what the composer scrolls to.
+     */
     "chat.send": (args) => {
-      const session = store.sessions.get(args.sessionId);
-      if (!session) throw new Error(`unknown session: ${args.sessionId}`);
-
-      // The user's turn is complete the moment it is stored.
-      const userTurn = store.turns.create({
-        sessionId: session.id,
-        role: "user",
-        status: "done",
-      });
-      emitBlock(textBlock(session.id, userTurn.id, 0, args.text));
-      broadcast("chat.turnStatus", {
-        sessionId: session.id,
-        turnId: userTurn.id,
-        status: "done",
-      });
-
-      // The agent's turn opens as streaming and the engine fills it in.
-      const agentId = args.agentId ?? session.leadAgentId;
-      const agentTurn = store.turns.create({
-        sessionId: session.id,
-        agentId,
-        role: "agent",
-        status: "streaming",
-        parentTurnId: userTurn.id,
-        hopIndex: userTurn.hopIndex + 1,
-      });
-      store.sessions.setStatus(session.id, "running");
-      broadcast("chat.turnStatus", {
-        sessionId: session.id,
-        turnId: agentTurn.id,
-        status: "streaming",
-      });
-      emitSession(session.id);
-
-      engine.send({
-        sessionId: session.id,
-        turnId: agentTurn.id,
-        agentId,
+      const dispatched = engine.dispatch({
+        sessionId: args.sessionId,
         text: args.text,
+        agentId: args.agentId,
       });
-
-      return { userTurnId: userTurn.id, agentTurnId: agentTurn.id };
+      return {
+        userTurnId: dispatched.userTurnId,
+        agentTurnId: dispatched.agentTurnId,
+      };
     },
 
     /**
@@ -403,45 +378,14 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Resume a round-table chain the dispatcher stopped at the hop cap
-     * (ADR-0002, SPEC R11). The dispatcher itself (mention parsing, hop-cap
-     * enforcement in `chat.send`, the queue) is a later Phase 4 task; what
-     * this handler provides is the baseline mechanics it builds on — a plain
-     * continuation turn, addressed to whoever spoke last, chained onto that
-     * turn via both `parentTurnId` (transcript order) and `triggeredByTurnId`
-     * (the mention that started the chain this resumes). `agentTurnId` is
-     * `null` when there is nothing to continue: a turn is already streaming,
-     * or the session has no turns yet.
+     * [B1] Resume a chain the hop cap stopped (ADR-0002, SPEC R11: "until the
+     * user speaks or presses Continue"). One press buys exactly one more hop —
+     * the dispatcher remembered which agents the refused hop was for, and the
+     * cap applies again to whatever *that* hop mentions. `agentTurnId` is
+     * `null` when there is nothing to continue: a turn is already streaming, or
+     * the session has no agent turn to resume from.
      */
-    "chat.continue": (args) => {
-      const session = store.sessions.get(args.sessionId);
-      if (!session) throw new Error(`unknown session: ${args.sessionId}`);
-      if (store.turns.hasStreaming(session.id)) return { ok: false, agentTurnId: null };
-
-      const turns = store.turns.list(session.id);
-      const last = turns[turns.length - 1];
-      const agentId = last?.agentId ?? session.leadAgentId;
-      if (!last || !agentId) return { ok: false, agentTurnId: null };
-
-      const agentTurn = store.turns.create({
-        sessionId: session.id,
-        agentId,
-        role: "agent",
-        status: "streaming",
-        parentTurnId: last.id,
-        hopIndex: last.hopIndex + 1,
-        triggeredByTurnId: last.triggeredByTurnId ?? last.id,
-      });
-      store.sessions.setStatus(session.id, "running");
-      broadcast("chat.turnStatus", {
-        sessionId: session.id,
-        turnId: agentTurn.id,
-        status: "streaming",
-      });
-      emitSession(session.id);
-      engine.send({ sessionId: session.id, turnId: agentTurn.id, agentId, text: "Continue." });
-      return { ok: true, agentTurnId: agentTurn.id };
-    },
+    "chat.continue": (args) => engine.continueChain(args.sessionId),
 
     /**
      * Unblocks the backend first — the agent is what is actually waiting — then

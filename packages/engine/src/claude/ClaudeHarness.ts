@@ -79,6 +79,14 @@ export interface SubagentRouteRequest {
 export interface SubagentRoute {
   /** `'sonnet' | 'opus' | 'haiku' | 'fable'` — rewrites `AgentInput.model`. */
   model?: string;
+  /**
+   * [B1] The backend the sub-agent runs on. Only ever this harness's own
+   * backend here: the hook's single lever is `updatedInput.model`, so a
+   * cross-backend decision is enforced by `delegate_task` instead and the
+   * router returns nothing at all (`routing/policy.ts`). Recorded on the
+   * `subagent` block so the agent tree (R13) can show where a spawn went.
+   */
+  backend?: Backend;
 }
 
 export interface ClaudeHarnessDeps {
@@ -89,10 +97,25 @@ export interface ClaudeHarnessDeps {
   env?: EnvRecord;
   log?: HarnessLogger;
   /**
-   * Sub-agent routing policy (SPEC R12). A stub today: the default returns
-   * nothing, the hook returns `{}` and the sub-agent inherits its model.
+   * Sub-agent routing policy (SPEC R12). With nothing wired the hook returns
+   * `{}` and the sub-agent inherits its parent's model; `routing/policy.ts`'s
+   * `createSubagentRouter` is what the desktop passes.
    */
   routeSubagent?: (req: SubagentRouteRequest) => SubagentRoute | null | undefined;
+  /**
+   * [B1] Extra `mcpServers` for the backend session — today only capygen's own
+   * in-process `delegate_task` server (SPEC R12, `routing/sdkMcp.ts`).
+   *
+   * Resolved **once**, when the session's `query()` is created, never per
+   * turn: `mcpServers` is part of the request shape the prompt cache keys on
+   * (R24), and an MCP server list that changed between turns would cost the
+   * whole prefix each time. Returning `null` is normal — it means this agent's
+   * sub-agents run natively and there is nothing to add.
+   */
+  mcpServers?: () =>
+    | Promise<Record<string, unknown> | null>
+    | Record<string, unknown>
+    | null;
   /** `settingSources` for the child (spike §8.8 gotcha 4). */
   settingSources?: ("user" | "project" | "local")[];
   /** Tool output kept in a block before it is stubbed (SPEC R25). */
@@ -125,7 +148,16 @@ interface ActiveTurn {
   /** task_id → tool_use id, for the `system/task_*` frames. */
   taskToolUse: Map<string, string>;
   /** Sub-agent blocks by tool_use id, keyed for later status updates. */
-  subagents: Map<string, { name: string; description: string; model: string | null }>;
+  subagents: Map<
+    string,
+    {
+      name: string;
+      description: string;
+      model: string | null;
+      backend: Backend;
+      delegated: boolean;
+    }
+  >;
   /** tool_use ids of INTERACTION_TOOLS calls, whose frames are not re-rendered. */
   interactionToolUseIds: Set<string>;
   settled: boolean;
@@ -286,7 +318,17 @@ export class ClaudeHarness implements Harness {
     this.queryInput = inputQueue;
     this.abort = abort;
 
-    const options = this.buildOptions(session, agent, abort);
+    // Resolved before `buildOptions` so it is part of the one options object
+    // this backend session is built from (see `mcpServers` on the deps).
+    let extraServers: Record<string, unknown> | null = null;
+    try {
+      extraServers = (await this.deps.mcpServers?.()) ?? null;
+    } catch (err) {
+      // R12 fails open: no delegation tool beats no session.
+      this.log.warn("[claude] the extra MCP server list could not be built", err);
+    }
+
+    const options = this.buildOptions(session, agent, abort, extraServers);
     this.log.info(
       `[claude] starting session for agent ${agent.agentId} model=${agent.model}` +
         `${options.resume ? ` resume=${options.resume}` : ""}`,
@@ -307,6 +349,7 @@ export class ClaudeHarness implements Harness {
     session: HarnessSession,
     agent: HarnessAgent,
     abort: AbortController,
+    extraServers: Record<string, unknown> | null = null,
   ): ClaudeOptions {
     const config = readClaudeConfig(agent.config);
     const permissionMode = agent.permissionMode ?? config.permissionMode ?? "default";
@@ -331,6 +374,26 @@ export class ClaudeHarness implements Harness {
       },
       stderr: (chunk: string) => this.log.warn(`[claude:stderr] ${chunk.trimEnd()}`),
     };
+    // [B1] The round table's session-stable addition (ADR-0002). `append` on
+    // the `claude_code` preset, not a custom prompt: the preset *is* what the
+    // CLI sends, and replacing it would cost the cache and the CLI's own
+    // behaviour. `snapshot: true` records the rendered prompt for the
+    // conversation, so a later launch with a changed roster does not silently
+    // rewrite the prefix mid-session (sdk.d.ts on `systemPrompt.snapshot`).
+    if (agent.promptAddition) {
+      options.systemPrompt = {
+        type: "preset",
+        preset: "claude_code",
+        append: agent.promptAddition,
+        snapshot: true,
+      };
+    }
+    if (extraServers && Object.keys(extraServers).length > 0) {
+      options.mcpServers = {
+        ...(options.mcpServers ?? {}),
+        ...extraServers,
+      } as ClaudeOptions["mcpServers"];
+    }
     if (permissionMode === "bypassPermissions") options.allowDangerouslySkipPermissions = true;
     if (this.sdkSessionId) options.resume = this.sdkSessionId;
     if (config.strictMcpConfig !== undefined) options.strictMcpConfig = config.strictMcpConfig;
@@ -861,7 +924,16 @@ export class ClaudeHarness implements Harness {
         input,
       });
       if (route?.model) {
-        if (turn) this.upsertSubagent(turn, anchor, { model: route.model });
+        // The decision is recorded on the block, not only applied: `delegated`
+        // is false because the Claude CLI still spawns this sub-agent itself —
+        // capygen only rewrote which model it runs on (SPEC R12).
+        if (turn) {
+          this.upsertSubagent(turn, anchor, {
+            model: route.model,
+            backend: route.backend ?? this.backend,
+            delegated: false,
+          });
+        }
         return {
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
@@ -974,27 +1046,39 @@ export class ClaudeHarness implements Harness {
       description?: string;
       model?: string | null;
       status?: "spawned" | "running" | "done" | "error";
+      /** [B1] Where the routing policy sent it (SPEC R12); the harness's own
+       *  backend unless a future route says otherwise. */
+      backend?: Backend;
+      /** [B1] True only when capygen ran the sub-agent itself
+       *  (`delegate_task`); a hook-routed native spawn stays false. */
+      delegated?: boolean;
     },
   ): void {
     const prev = turn.subagents.get(toolUseId) ?? {
       name: "sub-agent",
       description: "",
       model: null,
+      backend: this.backend,
+      delegated: false,
     };
     const next = {
       name: patch.name ?? prev.name,
       description: patch.description ?? prev.description,
       model: patch.model !== undefined ? patch.model : prev.model,
+      backend: patch.backend ?? prev.backend,
+      delegated: patch.delegated ?? prev.delegated,
     };
     turn.subagents.set(toolUseId, next);
     this.emitBlock(`subagent:${toolUseId}`, {
       kind: "subagent",
       agentId: null,
+      parentAgentId: this.agent?.agentId ?? null,
       name: next.name,
-      backend: this.backend,
+      backend: next.backend,
       model: next.model,
       description: next.description,
       status: patch.status ?? "spawned",
+      delegated: next.delegated,
     });
   }
 

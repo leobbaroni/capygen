@@ -124,6 +124,22 @@ export interface HarnessAgent {
   resumeSessionId?: string | null;
   /** Free-form per-agent config (routing policy, skills, …). */
   config?: unknown;
+  /**
+   * [B1] Session-stable text appended to the backend's own system prompt —
+   * the round-table roster and the `delegate_task` notice
+   * (`buildRoundTablePrompt`, ADR-0002).
+   *
+   * Every harness applies it **once**, where its backend takes a system
+   * prompt for the whole session: Claude as `systemPrompt.append` on the
+   * `claude_code` preset, Codex as `thread/start.developerInstructions`, the
+   * `api` loop as `buildSystemPrompt({extra})`. Nothing per-turn may be put
+   * in here — a string that changed between turns would invalidate the cached
+   * prefix on every one of them, which is exactly what SPEC R24 forbids.
+   *
+   * Absent for a solo session with no routing override, so a one-agent
+   * session's prompt stays byte-identical to what Phase 2 sent.
+   */
+  promptAddition?: string;
 }
 
 /** One user (or agent-to-agent) message being handed to the backend. */

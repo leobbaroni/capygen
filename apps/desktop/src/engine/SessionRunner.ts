@@ -15,27 +15,55 @@
  *     starting a fresh conversation.
  */
 import {
+  createDelegateMcpServer,
+  createDelegateRunner,
   createHarnessForBackend,
+  createSubagentRouter,
+  delegateTaskTool,
   type BlockPatch,
   type EngineEvent,
   type Harness,
   type HarnessAgent,
   type HarnessSession,
+  type SubagentRoute,
+  type SubagentRouteRequest,
 } from "@capygen/engine";
 import {
   newId,
   type Agent,
+  type Backend,
   type Block,
   type Session,
   type SlashCommand,
+  type TurnStatus,
 } from "@capygen/shared";
 import { loadApiHistory } from "./history.js";
 import { emitBlock, errorBlock, finishTurn } from "./persist.js";
+import { createRoundTable, type RoundTable } from "./RoundTable.js";
+import { delegationTarget, promptAdditionFor, resolveSubagentRoute } from "./routing.js";
 import type { Engine, EngineDeps, EnginePermissionAnswer, EngineSendArgs } from "./types.js";
 
 /** Key under which an agent's backend session id is remembered for `resume`. */
 export function backendSessionKey(agentId: string): string {
   return `engine.backendSession.${agentId}`;
+}
+
+/**
+ * [B1] The per-agent wiring the *routing policy* adds on top of a harness's own
+ * deps (SPEC R12). Built in `harnessFor`, where the session and the agent row
+ * are both in hand; a test's `makeHarness` may simply ignore the second
+ * argument, which is why it is separate from `HarnessAgent`.
+ */
+export interface HarnessExtras {
+  /** Claude's `PreToolUse` model rewrite for a same-backend route. */
+  routeSubagent?: (req: SubagentRouteRequest) => SubagentRoute | null | undefined;
+  /** Claude's in-process `delegate_task` MCP server for a cross-backend one. */
+  mcpServers?: () =>
+    | Promise<Record<string, unknown> | null>
+    | Record<string, unknown>
+    | null;
+  /** The same tool, as an `api`-backend tool definition. */
+  extraTools?: readonly ReturnType<typeof delegateTaskTool>[];
 }
 
 export interface SessionRunnerDeps extends EngineDeps {
@@ -44,7 +72,7 @@ export interface SessionRunnerDeps extends EngineDeps {
    * harness that matches `agent.backend`, so the composer's backend choice is
    * what decides which backend actually runs (SPEC R7/R8/R9).
    */
-  makeHarness?: (agent: HarnessAgent) => Harness;
+  makeHarness?: (agent: HarnessAgent, extras: HarnessExtras) => Harness;
 }
 
 /** Where a harness block key landed the first time it was written. */
@@ -115,11 +143,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * no backend session to resume. Claude and Codex take only the logger — they
    * resume from their own session id, which `harnessFor` reads out of settings.
    */
-  const makeHarness =
+  const makeHarness: (agent: HarnessAgent, extras: HarnessExtras) => Harness =
     deps.makeHarness ??
-    ((agent: HarnessAgent): Harness =>
+    ((agent: HarnessAgent, extras: HarnessExtras): Harness =>
       createHarnessForBackend(agent.backend, {
-        claude: { log },
+        claude: {
+          log,
+          ...(extras.routeSubagent ? { routeSubagent: extras.routeSubagent } : {}),
+          ...(extras.mcpServers ? { mcpServers: extras.mcpServers } : {}),
+        },
         codex: { log },
         api: {
           log,
@@ -127,6 +159,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           ...(deps.pools
             ? { acquirePool: (servers) => deps.pools!.acquire(servers) }
             : {}),
+          ...(extras.extraTools ? { extraTools: extras.extraTools } : {}),
           loadHistory: (session, forAgent) => loadApiHistory(store, session, forAgent),
         },
       }));
@@ -144,6 +177,88 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   const awaiting = new Map<string, Harness>();
   /** Every `consume()` still running, so `dispose()` can wait for their writes. */
   const consuming = new Set<Promise<void>>();
+  /**
+   * [B1] `sessionId:agentId` → the last turn that existed when that agent's
+   * harness started. Only an `api` agent has one, and only because
+   * `history.ts` replayed the transcript up to that point at `start()`: the
+   * round table's context delta must begin *after* it or a relaunch would send
+   * the same turns a second time (`RoundTable.deltaStart`).
+   */
+  const historyWatermarks = new Map<string, string | null>();
+
+  /**
+   * [B1] Everything the routing policy adds to one agent's harness (SPEC R12).
+   *
+   * The two levers are chosen once, here, and never per turn — a tool list or
+   * an MCP server list that moved between turns is a cache miss on every turn
+   * (R24). What stays dynamic is the *target*: `delegate_task`'s runner asks
+   * `delegationTarget` again on every call, so a routing rule the user edits in
+   * Settings takes effect on the next spawn without restarting the backend.
+   */
+  function harnessExtras(
+    session: Session,
+    agent: Agent,
+    harnessAgent: HarnessAgent,
+  ): HarnessExtras {
+    const extras: HarnessExtras = {};
+
+    if (agent.backend === "claude") {
+      // Same-backend routes only: `createSubagentRouter` returns nothing for a
+      // cross-backend decision, because the hook's one lever is the model and
+      // a foreign model id would fail the spawn instead of redirecting it.
+      const router = createSubagentRouter({
+        route: (req) => resolveSubagentRoute(store, session.id, req.agentId || agent.id),
+        log,
+      });
+      extras.routeSubagent = (req): SubagentRoute | null => {
+        const routed = router(req);
+        return routed ? { model: routed.model, backend: routed.backend } : null;
+      };
+    }
+
+    const target = delegationTarget(store, session.id, agent.id);
+    if (!target) return extras;
+
+    const project = store.projects.get(session.projectId);
+    const run = createDelegateRunner({
+      session: { sessionId: session.id, projectPath: project?.path ?? process.cwd() },
+      parent: harnessAgent,
+      // Re-read per call, not captured: see the comment above.
+      target: () => delegationTarget(store, session.id, agent.id),
+      makeHarness: (routed: { backend: Backend; model: string }) =>
+        makeHarness(
+          {
+            agentId: `${agent.id}#delegate`,
+            name: `${agent.displayName} sub-agent`,
+            backend: routed.backend,
+            model: routed.model,
+            ...(harnessAgent.permissionMode
+              ? { permissionMode: harnessAgent.permissionMode }
+              : {}),
+            resumeSessionId: null,
+            config: agent.config,
+          },
+          // No delegation inside a delegated turn: one hop, not a tree.
+          {},
+        ),
+      // The sub-agent's blocks, cards and usage land in the *parent's* turn,
+      // which is the turn the user is looking at.
+      onEvent: (event, harness) => {
+        const parentTurn = active.get(agentKey(session.id, agent.id));
+        if (!parentTurn) return;
+        handleEvent(parentTurn, event, harness);
+      },
+      log,
+    });
+
+    if (agent.backend === "claude") extras.mcpServers = () => createDelegateMcpServer({ run, log });
+    if (agent.backend === "api") extras.extraTools = [delegateTaskTool(run)];
+    log.info(
+      `[engine] ${agent.mentionName} delegates sub-agents to ${target.backend}/` +
+        `${target.model || "(backend default)"}`,
+    );
+    return extras;
+  }
 
   function harnessFor(session: Session, agent: Agent): Harness {
     const key = agentKey(session.id, agent.id);
@@ -161,6 +276,10 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       sessionId: session.id,
       projectPath: project.path,
     };
+    // [B1] Session-stable, built once here and never again for this harness
+    // (SPEC R23/R24): the round-table roster and, when routing crosses
+    // backends, the `delegate_task` notice.
+    const promptAddition = promptAdditionFor(store, session.id, agent.id);
     const harnessAgent: HarnessAgent = {
       agentId: agent.id,
       name: agent.name,
@@ -169,8 +288,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       permissionMode: store.settings.all().permissionMode,
       resumeSessionId,
       config: agent.config,
+      ...(promptAddition ? { promptAddition } : {}),
     };
-    const harness = makeHarness(harnessAgent);
+    if (agent.backend === "api") {
+      const turns = store.turns.list(session.id);
+      historyWatermarks.set(key, turns[turns.length - 1]?.id ?? null);
+    }
+    const harness = makeHarness(harnessAgent, harnessExtras(session, agent, harnessAgent));
     harnesses.set(key, harness);
     void harness.start(harnessSession, harnessAgent).catch((err: unknown) => {
       log.error(`[engine] harness.start failed for ${key}`, err);
@@ -380,109 +504,136 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     writeBlock(turn, toolKey, { ...rest, hasWidget: true });
   }
 
-  async function consume(turn: ActiveTurn, events: AsyncIterable<EngineEvent>): Promise<void> {
-    for await (const event of events) {
-      switch (event.type) {
-        case "block": {
-          if (event.patch.kind === "widget") {
-            resolveHarnessWidget(turn, event.key, event.patch);
-            break;
-          }
-          writeBlock(turn, event.key, event.patch);
-          maybeOpenWidget(turn, event.key, event.patch);
+  /**
+   * One `EngineEvent` → rows and renderer events.
+   *
+   * `harness` is a parameter rather than `turn.harness` because a delegated
+   * sub-agent (SPEC R12) streams *its* events into the parent's turn: its
+   * permission and question requests must be answered on the harness that
+   * asked, not on the one that owns the turn.
+   */
+  function handleEvent(
+    turn: ActiveTurn,
+    event: EngineEvent,
+    harness: Harness = turn.harness,
+  ): void {
+    switch (event.type) {
+      case "block": {
+        if (event.patch.kind === "widget") {
+          resolveHarnessWidget(turn, event.key, event.patch);
           break;
         }
-        case "permission": {
-          awaiting.set(event.requestId, turn.harness);
-          const slot = turn.blocks.get(event.key);
-          if (slot) {
-            broadcast("permission.request", {
-              sessionId: turn.sessionId,
-              turnId: turn.turnId,
-              blockId: slot.id,
-              request: event.request,
-            });
-          }
-          break;
+        writeBlock(turn, event.key, event.patch);
+        maybeOpenWidget(turn, event.key, event.patch);
+        break;
+      }
+      case "permission": {
+        awaiting.set(event.requestId, harness);
+        const slot = turn.blocks.get(event.key);
+        if (slot) {
+          broadcast("permission.request", {
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            blockId: slot.id,
+            request: event.request,
+          });
         }
-        case "question": {
-          awaiting.set(event.requestId, turn.harness);
-          const slot = turn.blocks.get(event.key);
-          if (slot) {
-            broadcast("question.request", {
-              sessionId: turn.sessionId,
-              turnId: turn.turnId,
-              blockId: slot.id,
-              requestId: event.requestId,
-              questions: event.questions,
-            });
-          }
-          break;
+        break;
+      }
+      case "question": {
+        awaiting.set(event.requestId, harness);
+        const slot = turn.blocks.get(event.key);
+        if (slot) {
+          broadcast("question.request", {
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            blockId: slot.id,
+            requestId: event.requestId,
+            questions: event.questions,
+          });
         }
-        case "elicitation": {
-          awaiting.set(event.requestId, turn.harness);
-          const slot = turn.blocks.get(event.key);
-          if (slot) {
-            broadcast("elicitation.request", {
-              sessionId: turn.sessionId,
-              turnId: turn.turnId,
-              blockId: slot.id,
-              requestId: event.requestId,
-              ...(event.title !== undefined ? { title: event.title } : {}),
-              ...(event.description !== undefined ? { description: event.description } : {}),
-              schema: event.schema,
-            });
-          }
-          break;
+        break;
+      }
+      case "elicitation": {
+        awaiting.set(event.requestId, harness);
+        const slot = turn.blocks.get(event.key);
+        if (slot) {
+          broadcast("elicitation.request", {
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+            blockId: slot.id,
+            requestId: event.requestId,
+            ...(event.title !== undefined ? { title: event.title } : {}),
+            ...(event.description !== undefined ? { description: event.description } : {}),
+            schema: event.schema,
+          });
         }
-        case "usage": {
-          const agentId = store.turns.get(turn.turnId)?.agentId ?? null;
-          // `byModel` is the split the harness went to the trouble of
-          // computing (a Task sub-agent may run on a different model than the
-          // agent that spawned it). Recording only `event.usage` under
-          // `event.model` would file the sub-agent's tokens under the lead's
-          // model and break R23's per-model aggregation. The single-row path
-          // is the fallback for harnesses that report no split.
-          const perModel = Object.entries(event.byModel).filter(
-            ([, u]) => u.inputTokens + u.outputTokens + u.cacheReadTokens +
-              u.cacheCreationTokens + u.costUsd > 0,
-          );
-          const rows =
-            perModel.length > 0
-              ? perModel.map(([model, usage]) => ({ model, usage }))
-              : [{ model: event.model, usage: event.usage }];
-          for (const { model, usage } of rows) {
-            store.usage.record({
-              sessionId: turn.sessionId,
-              agentId,
-              turnId: turn.turnId,
-              backend: event.backend,
-              model,
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              cacheReadTokens: usage.cacheReadTokens,
-              cacheCreationTokens: usage.cacheCreationTokens,
-              costUsd: usage.costUsd,
-            });
-          }
-          break;
+        break;
+      }
+      case "usage": {
+        const agentId = store.turns.get(turn.turnId)?.agentId ?? null;
+        // `byModel` is the split the harness went to the trouble of
+        // computing (a Task sub-agent may run on a different model than the
+        // agent that spawned it). Recording only `event.usage` under
+        // `event.model` would file the sub-agent's tokens under the lead's
+        // model and break R23's per-model aggregation. The single-row path
+        // is the fallback for harnesses that report no split.
+        const perModel = Object.entries(event.byModel).filter(
+          ([, u]) => u.inputTokens + u.outputTokens + u.cacheReadTokens +
+            u.cacheCreationTokens + u.costUsd > 0,
+        );
+        const rows =
+          perModel.length > 0
+            ? perModel.map(([model, usage]) => ({ model, usage }))
+            : [{ model: event.model, usage: event.usage }];
+        for (const { model, usage } of rows) {
+          store.usage.record({
+            sessionId: turn.sessionId,
+            agentId,
+            turnId: turn.turnId,
+            backend: event.backend,
+            model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cacheReadTokens,
+            cacheCreationTokens: usage.cacheCreationTokens,
+            costUsd: usage.costUsd,
+          });
         }
-        case "session": {
-          const agentId = store.turns.get(turn.turnId)?.agentId;
-          if (agentId && event.backendSessionId) {
-            store.settings.setRaw(backendSessionKey(agentId), event.backendSessionId);
-          }
-          break;
+        break;
+      }
+      case "session": {
+        const agentId = store.turns.get(turn.turnId)?.agentId;
+        if (agentId && event.backendSessionId) {
+          store.settings.setRaw(backendSessionKey(agentId), event.backendSessionId);
         }
-        case "turn": {
-          finishTurn(deps, turn.sessionId, turn.turnId, event.status, event.error);
-          break;
-        }
+        break;
+      }
+      case "turn": {
+        finishTurn(deps, turn.sessionId, turn.turnId, event.status, event.error);
+        break;
       }
     }
   }
 
-  function send(args: EngineSendArgs): void {
+  async function consume(turn: ActiveTurn, events: AsyncIterable<EngineEvent>): Promise<void> {
+    for await (const event of events) handleEvent(turn, event);
+  }
+
+  /** How the row ended, read back once the stream is finished. */
+  function statusOf(turnId: string): TurnStatus {
+    return store.turns.get(turnId)?.status ?? "error";
+  }
+
+  /**
+   * Run one turn on its agent's harness and resolve when it has settled.
+   *
+   * The round-table dispatcher needs the completion, not just the start: a
+   * sequential round waits on it, and a chain hop only exists once the turn
+   * that mentioned it is done. `send` is the fire-and-forget wrapper the
+   * `Engine` contract keeps for callers that do not care.
+   */
+  function runTurn(args: EngineSendArgs): Promise<{ status: TurnStatus }> {
     const session = store.sessions.get(args.sessionId);
     if (!session) throw new Error(`unknown session: ${args.sessionId}`);
     const agentId = args.agentId ?? session.leadAgentId;
@@ -490,7 +641,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     if (!agent) {
       errorBlock(deps, session.id, args.turnId, "This session has no agent to answer with.");
       finishTurn(deps, session.id, args.turnId, "error", "no agent");
-      return;
+      return Promise.resolve({ status: "error" as TurnStatus });
     }
 
     // One turn per agent. Letting a second send through would hand the harness
@@ -502,7 +653,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       log.warn(`[engine] refused a second turn ${args.turnId} for ${key}`);
       errorBlock(deps, session.id, args.turnId, message);
       finishTurn(deps, session.id, args.turnId, "error", message);
-      return;
+      return Promise.resolve({ status: "error" as TurnStatus });
     }
 
     // Anything that goes wrong before the stream exists must still close the
@@ -530,7 +681,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       active.delete(key);
       errorBlock(deps, session.id, args.turnId, message);
       finishTurn(deps, session.id, args.turnId, "error", message);
-      return;
+      return Promise.resolve({ status: "error" as TurnStatus });
     }
 
     const running = consume(turn, events)
@@ -560,12 +711,36 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       });
     consuming.add(running);
     void running.finally(() => consuming.delete(running));
+    return running.then(() => ({ status: statusOf(args.turnId) }));
   }
+
+  function send(args: EngineSendArgs): void {
+    void runTurn(args);
+  }
+
+  /**
+   * [B1] The round table (ADR-0002). It owns turn rows, hop counting and the
+   * queue; the runner owns harnesses. The two meet at exactly two points:
+   * `runTurn` above, and the `api` history watermark below.
+   */
+  const roundTable: RoundTable = createRoundTable({
+    ...deps,
+    runTurn: (args) => runTurn(args),
+    historyWatermark: (sessionId, agentId) =>
+      historyWatermarks.get(agentKey(sessionId, agentId)) ?? null,
+  });
 
   return {
     send,
 
+    dispatch: (args) => roundTable.dispatch(args),
+
+    continueChain: (sessionId) => roundTable.continueChain(sessionId),
+
     async interrupt(sessionId) {
+      // [B1] Stop is a *session* verb: the queued hops go with the running
+      // turns, or the chain would carry on the moment this turn settled.
+      roundTable.cancel(sessionId);
       // Every agent of this session, not just one: in round-table mode more
       // than one can be mid-turn and the user asked the *session* to stop.
       const prefix = `${sessionId}:`;
@@ -636,10 +811,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // able to hang the app's shutdown (the same rule ClaudeHarness.dispose
       // follows when it refuses to await the SDK's own teardown).
       await withDeadline(Promise.allSettled([...consuming]), DISPOSE_DEADLINE_MS);
+      // The chain driver only writes through `runTurn`, which the two waits
+      // above have already drained; this is the bounded wait for its own loop
+      // to notice and stop rather than for anything it is still writing.
+      await withDeadline(roundTable.settled(), DISPOSE_DEADLINE_MS);
       harnesses.clear();
       active.clear();
       awaiting.clear();
       consuming.clear();
+      historyWatermarks.clear();
     },
   };
 }

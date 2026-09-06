@@ -140,6 +140,16 @@ export interface ApiHarnessDeps {
   /** Set false to run with the built-in tools only. */
   useMcp?: boolean;
   tools?: BuiltinToolDeps;
+  /**
+   * [B1] Tools capygen supplies on top of the built-ins and the MCP ones —
+   * today only `delegate_task` (SPEC R12), and only for an agent whose
+   * sub-agents are routed to another backend.
+   *
+   * Appended **after** the built-ins so the stable prefix of the tool array
+   * that a provider caches on does not move (R24), and resolved once inside
+   * `ensureTools()` like every other entry.
+   */
+  extraTools?: readonly ToolDefinition[];
   maxToolOutputChars?: number;
   maxTokens?: number;
   maxIterations?: number;
@@ -215,6 +225,10 @@ export class ApiHarness implements Harness {
       cwd: session.projectPath,
       platform: process.platform,
       agentName: agent.name,
+      // [B1] The round table's session-stable addition (ADR-0002). `start()`
+      // runs once per session, so this obeys R24 exactly as the rest of the
+      // prompt does — nothing per-turn reaches `buildSystemPrompt`.
+      ...(agent.promptAddition ? { extra: agent.promptAddition } : {}),
     });
     const history = await this.deps.loadHistory?.(session, agent);
     this.messages = Array.isArray(history) ? [...history] : [];
@@ -229,10 +243,11 @@ export class ApiHarness implements Harness {
       streamingDeltas: true,
       permissions: true,
       questions: true,
-      // Nothing spawns a sub-agent on this backend yet: capygen's own tool
-      // runtime has no Task tool. Phase 4 adds one; claiming it now would put
-      // an agent tree in the UI that never fills in.
-      subagents: false,
+      // [B1] Still no native Task tool — but an agent whose sub-agents are
+      // routed to another backend is handed `delegate_task` (SPEC R12), and
+      // that does fill the agent tree in. Claiming `true` without one would
+      // put a tree in the UI that never fills, so it keys on the actual list.
+      subagents: (this.deps.extraTools?.length ?? 0) > 0,
       // Not a backend resume: the transcript is replayed through `loadHistory`.
       resume: true,
       interrupt: true,
@@ -755,6 +770,7 @@ export class ApiHarness implements Harness {
   private async ensureTools(): Promise<ToolDefinition[]> {
     if (this.tools) return this.tools;
     const tools = builtinTools(this.deps.tools ?? {});
+    if (this.deps.extraTools?.length) tools.push(...this.deps.extraTools);
 
     if (this.deps.useMcp !== false) {
       try {

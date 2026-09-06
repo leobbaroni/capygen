@@ -64,8 +64,38 @@ export interface EnginePermissionAnswer {
   message?: string;
 }
 
+/** [B1] `chat.send`'s whole payload; the engine owns both turn rows. */
+export interface EngineDispatchArgs {
+  sessionId: string;
+  text: string;
+  /** The composer's explicit agent pick; mention parsing decides when absent. */
+  agentId?: string | null;
+}
+
+export interface EngineDispatchResult {
+  userTurnId: string;
+  /** The first agent turn opened — what `chat.send` returns to the renderer. */
+  agentTurnId: string;
+  /** Every agent turn this message opened, in target order (R11). */
+  agentTurnIds: string[];
+}
+
 export interface Engine {
   send(args: EngineSendArgs): void;
+  /**
+   * [B1] Deliver a user message through the round table (ADR-0002, SPEC R11):
+   * store the user's turn, work out the target agents from its @-mentions (or
+   * the lead), open a turn for each and start the chain. The engine owns the
+   * rows because it is the only thing that knows when a turn *finishes*, which
+   * is when the next hop is decided.
+   */
+  dispatch(args: EngineDispatchArgs): EngineDispatchResult;
+  /**
+   * [B1] Resume a chain the hop cap stopped — exactly one more hop (R11's
+   * "until the user speaks or presses Continue"). `agentTurnId` is null when
+   * there was nothing to continue.
+   */
+  continueChain(sessionId: string): { ok: boolean; agentTurnId: string | null };
   /** Cancel the in-flight turn for a session. Resolves true if one was running. */
   interrupt(sessionId: string): boolean | Promise<boolean>;
   /** Route a permission card's answer back to the waiting backend. */
