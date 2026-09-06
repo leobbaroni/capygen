@@ -351,6 +351,58 @@
   registered through the project's `.mcp.json`, the widget renders inside the transcript with the
   tool's arguments, and its button round-trips `echo` back through the host (`e2e-out/widget.png`).
 
+## 2026-09-06 — Phase 3 / B4: interaction cards, tool cards, slash menu, usage meter, providers page
+
+- PermissionCard: title/displayName/description from the block, an Allow once / Allow for session
+  (`allow_always`) / Deny action row with an optional deny reason, and Enter/Escape shortcuts
+  scoped to the pending card (skipped while a text field has focus, so the composer's own Enter
+  still sends). QuestionCard now honours `allowOther`. ElicitationCard is a real form generated
+  from the request schema (`elicitationForm.ts`: text/number/boolean/enum controls, required-field
+  gating, MCP's flat `ElicitResult.content` shape) instead of a read-only placeholder, wired
+  through a new `answerElicitation` store action; a schema with no properties reads as a bare
+  Accept/Decline consent prompt.
+- ToolCallCard renders per family (`toolFamily.ts`): bash (command summary, a detected exit/timeout
+  status line), read (path + line range), write/edit (a synthetic diff — `DiffCard`'s view factored
+  out into a reusable `DiffView`), glob/grep (a match list instead of raw text), web (URL summary),
+  mcp (`server · tool`, an MCP `CallToolResult` renderer for text/image/JSON content), task (a link
+  that scrolls to the spawned sub-agent's block, once it exists). A truncated output whose full
+  value moved to `tool_outputs` (`outputRef`, not inline `fullOutput`) is fetched on demand via
+  `blocks.getOutput`, the first time "Show full output" is clicked.
+- SlashMenu groups matches into Built-ins / Skills / Plugins / Backend-commands sections; Composer
+  now runs an argument-less command immediately on selection (click or Enter) and only inserts one
+  that takes an argument (`argumentHint` set) for editing — R14's actual behaviour, not just
+  insert-then-a-second-Enter. The harness/model picker is driven by `harness.list` instead of a
+  hardcoded "Claude Code": a new session (LandingPage) threads the chosen backend/model into
+  `sessions.create`'s lead-agent draft; an open session (ChatPage) only offers its own agent's
+  backend's other models and dispatches a change through the existing `/model` built-in — an
+  agent's backend is fixed for its lifetime (one harness instance per agent), so there is no
+  separate "switch backend" operation for the picker to call.
+- UsageLine grows a byModel breakdown tooltip once a turn billed more than one model (a sub-agent
+  call, a compaction summary on a different model); a new `SessionUsageMeter` sums the session's
+  `usage_events` into the chat header. Settings ▸ API keys (`ProvidersSection`) is a real page:
+  Anthropic/OpenAI/OpenRouter rows with Set/Replace/Remove backed by `secrets.has/set/delete` — a
+  key is never read back once set, only its presence. `apps/desktop/src/ipc/{secrets,harnessList}.ts`
+  (safeStorage-backed store; `claude --version`/`codex --version` CLI probe) were sound partial
+  work from an interrupted earlier attempt at this task, kept as-is and wired into `main.ts`.
+- A dev-only `/dev/cards` route renders a static fixture of every block kind and tool-call family
+  for visual QA (`e2e-out/cards.png`); confirmed tree-shaken out of the production bundle (`grep` on
+  the built JS finds no trace of it) rather than merely runtime-gated.
+- Downstream fixes for a green tree: `ipc.test.ts`'s two "(B4)" tests referenced a fixture
+  block/turn id with no real row behind it, violating the FK migration 0002 added
+  (`tool_outputs.block_id`, `usage_events.turn_id`) — fixed to create a real session/turn/block
+  first. `UsageLine`'s first draft selected a filtered `usage_events` slice directly from the
+  zustand store, handing `useSyncExternalStore` a new array every render ("Maximum update depth
+  exceeded") — fixed by selecting the store's stable array and filtering in a `useMemo`. The custom
+  `Tooltip`'s click handler initially toggled, which a real click (or `userEvent.click`) undid
+  immediately because a click fires its own `mouseenter` first — fixed to only ever open on click.
+- `apps/desktop/src/main.ts`, `apps/desktop/src/ipc/handlers.ts` and `packages/shared/src/ipc.{ts,
+  test.ts}` were sitting uncommitted with both this task's wiring and Task B3's MCP Apps widget-host
+  integration (`protocol.handle`, the `widgets` dependency) tangled together in the same hunks —
+  neither task's file list names these three files. Committed as one coherent, green snapshot
+  (typecheck/test/build all pass) rather than left permanently uncommitted.
+- `corepack pnpm typecheck` clean across all 5 packages; `corepack pnpm test` 441/441 (up from 358);
+  `corepack pnpm build` clean. Screenshots: `e2e-out/cards.png`, `e2e-out/providers.png`.
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.
