@@ -69,6 +69,41 @@ is a dependency **only** so its vendored binary ships with the app — its own
 Sign-in: ChatGPT OAuth (`account/read` → `{type:"chatgpt"}`). No API key is read or
 stored by the Codex harness. An `unauthorized` turn error renders "run `codex login`".
 
+## API models — `@anthropic-ai/sdk`, `openai`, MCP (`@modelcontextprotocol/sdk`)
+
+The `api` backend has no CLI: capygen runs the agent loop itself
+(`packages/engine/src/api/**`), with its own tool runtime (`src/tools/**`) and its own MCP client
+(`src/mcp/client/**`). Verified 2026-09-06 against the installed packages' `.d.ts` and, for the
+three endpoints, against a live 401 (an invalid key, no tokens spent) —
+`corepack pnpm --dir packages/engine live:api`.
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `@anthropic-ai/sdk` | `0.124.0` | `api/providers/anthropic.ts` | the adapter reads the stream through its own structural interface (`AnthropicClientLike`), so only `messages.create(body, {signal})` and the raw event names below are load-bearing |
+| `client.messages.create({…, stream:true})` → async iterable of raw events | verified live (401 reached the endpoint) | `AnthropicProvider.stream` | the one call the provider makes |
+| raw stream events read: `message_start`, `content_block_start/delta/stop`, `message_delta`, `error`; deltas `text_delta`, `thinking_delta`, `signature_delta`, `input_json_delta` | `resources/messages/messages.d.ts` `RawMessageStreamEvent` | `mapAnthropicStream` | an unknown event is ignored, not fatal; a *renamed* one silently drops that content — `test/apiProviders.test.ts` replays each shape |
+| `cache_control: {type:"ephemeral"}` on the **system** block and on the **last** tool | SPEC R24 | `buildAnthropicBody` | one breakpoint covers the whole prefix (system + tools); asserted on the real request body in `test/api.test.ts` |
+| `usage.input_tokens` **excludes** cached tokens; `cache_read_input_tokens` / `cache_creation_input_tokens` are separate | `messages.d.ts` `Usage` | `anthropicUsage` → the price table | if it became inclusive, input cost would be double-counted |
+| a replayed `thinking` block needs its `signature` | API contract | `anthropicMessages` drops unsigned ones | losing earlier visible reasoning beats losing the turn |
+| `openai` | `7.10.0` | `api/providers/openai.ts` (and OpenRouter) | as above: only `responses.create(body, {signal})` and the event names below matter |
+| **Responses** API, not Chat Completions; `store: false` | `resources/responses/responses.d.ts` | `buildOpenAiBody` | server-side prompt caching is automatic there and there is no `cache_control` to set; capygen keeps every request self-contained |
+| events read: `response.created/in_progress`, `response.output_text.delta/done`, `response.reasoning_text.*`, `response.reasoning_summary_text.*`, `response.output_item.done`, `response.completed/incomplete/failed` | same file | `mapOpenAiStream` | unknown events are ignored |
+| a tool call is keyed by **`call_id`**, and `function_call_output` must echo it | same file | `mapOpenAiStream`, `openaiInput` | using the item `id` instead makes every tool result orphaned |
+| `usage.input_tokens` **includes** `input_tokens_details.cached_tokens` | `ResponseUsage.InputTokensDetails` | `openaiUsage` subtracts them | the opposite convention to Anthropic's; both normalise to "uncached input" |
+| `reasoning: {effort}` only on o1/o3/o4/gpt-5 | model contract [assumed 2026-09-06] | `supportsReasoning` | a non-reasoning model rejects the field outright |
+| OpenRouter = the same SDK at `https://openrouter.ai/api/v1` with `HTTP-Referer` + `X-Title` | verified live 2026-09-06: a direct `curl` with a bad key returns the identical `401 Missing Authentication header`, i.e. the header is being sent | `clientOptions` | if OpenRouter drops `/responses`, fall back to its Chat Completions path |
+| model prices | **[assumed 2026-09-06]**, `api/pricing.ts` `PRICES_ASSUMED_ON` | the usage meter's dollar figure only | token counts come from the provider and are unaffected; an unpriced model reports `costUsd: 0` with `isEstimate: false` |
+| `@modelcontextprotocol/sdk` | `1.30.0` | `mcp/client/**` | dual ESM/CJS build; loaded with a runtime `import()` so a session with no MCP servers never loads it |
+| `Client`, `StdioClientTransport`, `StreamableHTTPClientTransport`; `listTools()`, `callTool()`, `readResource()` | `dist/esm/client/*.d.ts`; verified against a real stdio server in `test/mcpClient.test.ts` | `McpClientPool` | the only four SDK members capygen touches |
+| `sse` transport | **not implemented** | `McpClientPool.open` throws a sentence | streamable HTTP is what the current CLIs use; an SSE-only server needs a URL change |
+| `tools/call` result passed through whole (`content`, `structuredContent`, `_meta`) | MCP spec | `McpClientPool.callTool`, `tools/mcpTools.ts` | R31's widget host finds `ui://` in `_meta`; normalising the result would leave it nothing |
+| MCP Apps `_meta` key `ui/resourceUri` (also nested `_meta.ui.resourceUri`), mime `text/html;profile=mcp-app` | `@modelcontextprotocol/ext-apps` `1.7.5` — `RESOURCE_URI_META_KEY` / `RESOURCE_MIME_TYPE` in `dist/src/server/index.js` | `widgetResourceUri` → the `widget` block (R31) | a renamed key means widget cards stop appearing; the tool card still renders |
+| MCP server config sources, read-only | `<project>/.mcp.json`, `~/.claude/settings.json` `mcpServers`, `~/.codex/config.toml` `[mcp_servers.*]` | `mcp/client/config.ts` | precedence agent > project > Claude > Codex; capygen never writes these (Phase 6 owns editing) |
+
+Keys: `${ANTHROPIC_API_KEY}` / `${OPENAI_API_KEY}` / `${OPENROUTER_API_KEY}` as a fallback only.
+In the app they arrive through the injected `KeyProvider` (Electron `safeStorage`); the engine
+never reads a key from disk and never logs one (`maskKey` is the only form allowed in a log).
+
 ## Internal seams
 
 | Seam | Meaning |

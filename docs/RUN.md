@@ -132,6 +132,7 @@ Each spec launches into a fresh `mkdtemp` profile and a fresh temp project direc
 corepack pnpm spike                                  # Phase 1 capability proof (Claude + Codex)
 corepack pnpm --dir packages/engine live:claude      # one live Claude turn, no Electron, no UI
 corepack pnpm --dir packages/engine live:codex       # two live Codex turns, incl. an approval
+corepack pnpm --dir packages/engine live:api         # one live API-model turn — SKIPs without a key
 ```
 
 `live:claude` is the smallest thing that proves the harness against the real backend; run it
@@ -145,6 +146,13 @@ two turns in a throwaway `mkdtemp` thread: "pong", then a shell command under
 that line should say `(bundled)`, because the machine's installed CLI is a different protocol
 version. Codex sign-in is the ChatGPT OAuth in `~/.codex`; without it the turn fails with
 "Codex is not signed in".
+
+`live:api` is the same for the `api` backend. It takes `--provider anthropic|openai|openrouter`,
+`--model <id>` and `--tool` (which forces one `read_file` so the loop is proved, not just the
+stream). It reads the key from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` only —
+the engine never reads a key from disk (R21); in the app the desktop injects the `safeStorage` one.
+**This machine has none of the three**, so the script prints `SKIP` and exits 0. Only the ends of a
+key are ever printed.
 
 ---
 

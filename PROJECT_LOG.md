@@ -291,6 +291,40 @@
   variant — `CodexHarness.answerElicitation` is the seam, requests are declined meanwhile), and
   Codex sub-agent items (`collabAgentToolCall`, `subAgentActivity`) are unmapped (Phase 4).
 
+## 2026-09-06 — Phase 3 / B2: API-model harness, local tool runtime, MCP client
+
+- `packages/engine/src/api/*`: `ApiHarness` implements `Harness` with capygen's **own** agent loop
+  (there is no CLI to adapt). One system prompt per session, built in `start()` and never rebuilt
+  (R24); a stable tool array; tool loop to `end_turn` or a hard 24-round cap; `AbortController`
+  interrupt; per-response usage through an `[assumed 2026-09-06]` price table (`PRICES_ASSUMED_ON`).
+- Providers behind one neutral vocabulary (`api/providers/types.ts`): Anthropic Messages
+  (streaming, tools, `cache_control` on the system block **and the last tool** — one breakpoint
+  covers the whole prefix — plus `thinking`), OpenAI **Responses** (streaming, function tools,
+  `reasoning.effort`, `store:false`), OpenRouter = the same SDK at `openrouter.ai/api/v1` with
+  `HTTP-Referer`/`X-Title`. Both SDKs load with a runtime `import()`.
+- `packages/engine/src/tools/*`: nine tools with a declared permission class each —
+  read_file/list_dir/glob/grep (read), write_file/edit_file (write), bash (execute, PowerShell on
+  Windows), web_fetch (network, https-only + size cap), ask_user_question (interaction, never
+  gated). The gate is one pure table, `gateFor(mode, class)`; `plan` denies rather than asks.
+- `packages/engine/src/mcp/client/*`: lazy pool over the MCP SDK (stdio + streamable HTTP), servers
+  read **read-only** from the agent config, `<project>/.mcp.json`, `~/.claude/settings.json` and
+  `~/.codex/config.toml` (tiny hand-rolled TOML reader). `tools/list` once per session (R26);
+  `tools/call` results pass through whole so `_meta` survives for the widget host (R31).
+- 100 tests across `test/{tools,apiProviders,api,mcpClient}.test.ts`. The MCP test connects the
+  **real** `@modelcontextprotocol/sdk` client to a real child process
+  (`test/mcpClientFixtureServer.mjs`, hand-written JSON-RPC) and asserts laziness from the server's
+  own request log. The cache_control test asserts the real Anthropic request body.
+- Live: `corepack pnpm --dir packages/engine live:api` prints `SKIP` — this machine has no key for
+  any provider. Wiring proved with a deliberately invalid key: all three endpoints answered 401 and
+  the harness surfaced it as an error block + `turn: error` (SPEC §Edge Cases). OpenRouter's
+  `401 Missing Authentication header` is its own wording for a bad key — a direct `curl` with the
+  same header returns the identical body.
+- Not done / for the integrator: `createHarnessForBackend` in `packages/engine/src/index.ts` still
+  throws for `api` (that file is B1's). It needs `export * from "./api/index.js"` (the surface is
+  curated to be collision-free) and `case "api": return new ApiHarness(deps.api ?? {})`. The
+  desktop must also inject `keys` (safeStorage `KeyProvider`) and `loadHistory` (turns → messages);
+  without the latter an `api` session starts each app run with an empty transcript.
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.

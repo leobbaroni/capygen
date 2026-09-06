@@ -13,12 +13,17 @@
     "live:claude": "tsx scripts/live-claude.ts",
     "live:codex": "tsx scripts/live-codex.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "live:api": "tsx scripts/live-api.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.261",
+    "@anthropic-ai/sdk": "^0.124.0",
     "@capygen/shared": "workspace:*",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@openai/codex-sdk": "^0.153.4",
+    "openai": "^7.10.0",
     "zod": "^4.1.0"
   },
   "devDependencies": {
