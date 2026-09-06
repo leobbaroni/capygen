@@ -7,6 +7,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/shell/AppShell";
 import { LandingPage } from "@/pages/LandingPage";
 import { ChatPage } from "@/pages/ChatPage";
+import { DevAgentsPage } from "@/pages/DevAgentsPage";
 import { DevCardsPage } from "@/pages/DevCardsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { useAppStore } from "@/store/appStore";
@@ -29,6 +30,9 @@ export function App() {
           {/* Fixture page for every card kind (B4 evidence) — dev-only, never
               part of a production build. */}
           {import.meta.env.DEV ? <Route path="/dev/cards" element={<DevCardsPage />} /> : null}
+          {/* Fixture round-table session for the Agents pane (B2 evidence) —
+              dev-only, never part of a production build. */}
+          {import.meta.env.DEV ? <Route path="/dev/agents" element={<DevAgentsPage />} /> : null}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

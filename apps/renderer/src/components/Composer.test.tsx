@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import type { SlashCommand } from "@capygen/shared";
+import type { Agent, SlashCommand } from "@capygen/shared";
 import { Composer } from "./Composer";
 
 function renderComposer(props: Partial<ComponentProps<typeof Composer>> = {}) {
@@ -270,5 +270,149 @@ describe("the harness/model picker (SPEC item 5)", () => {
     // would not actually run on.
     renderComposer({ harnesses: HARNESSES, testId: "composer2" });
     expect(screen.getByTestId("composer2-agent-picker")).toHaveTextContent("Choose model");
+  });
+});
+
+function agent(overrides: Partial<Agent>): Agent {
+  return {
+    id: "a-codex",
+    sessionId: "s1",
+    name: "codex",
+    displayName: "Codex",
+    mentionName: "codex",
+    backend: "codex",
+    model: "gpt-5.5",
+    role: "member",
+    order: 0,
+    config: null,
+    createdAt: 0,
+    ...overrides,
+  };
+}
+
+const AGENTS: Agent[] = [
+  agent({ id: "a-codex", mentionName: "codex", displayName: "Codex", order: 0 }),
+  agent({
+    id: "a-capy",
+    mentionName: "capy",
+    displayName: "Capy",
+    backend: "claude",
+    model: "claude-opus-4-5",
+    order: 1,
+  }),
+];
+
+describe("@mention autocomplete (SPEC item B2.2)", () => {
+  it("opens on '@' and lists the session agents", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+
+    await user.type(screen.getByTestId("composer-input"), "@");
+
+    const items = screen.getAllByTestId("mention-menu-item");
+    expect(items).toHaveLength(2);
+  });
+
+  it("never opens when no agents are passed (solo composer)", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+
+    await user.type(screen.getByTestId("composer-input"), "hey @anyone");
+
+    expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
+  });
+
+  it("filters by mention name as the user types", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+
+    await user.type(screen.getByTestId("composer-input"), "@cap");
+
+    const items = screen.getAllByTestId("mention-menu-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("@capy");
+  });
+
+  it("inserts the mention plus a trailing space on Enter and closes the menu", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderComposer({ agents: AGENTS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "@cod{Enter}");
+
+    expect(input).toHaveValue("@codex ");
+    expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
+    // Enter selected the mention, not the message — nothing was sent yet.
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.type(input, "review this{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith("@codex review this");
+  });
+
+  it("inserts the mention on Tab as well as Enter", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "@cod");
+    await user.keyboard("{Tab}");
+
+    expect(input).toHaveValue("@codex ");
+  });
+
+  it("inserts the highlighted (arrow-key-moved) agent, not always the first", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "@");
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(input).toHaveValue("@capy ");
+  });
+
+  it("selecting a mention by click inserts it too", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "@ca");
+    await user.click(screen.getByText("@capy"));
+
+    expect(input).toHaveValue("@capy ");
+  });
+
+  it("does not interfere with the slash menu when the message starts with '/'", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS, commands: COMMANDS });
+
+    await user.type(screen.getByTestId("composer-input"), "/co");
+
+    expect(screen.getByTestId("slash-menu")).toBeInTheDocument();
+    expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
+  });
+
+  it("closes on Escape and reopens as the query changes, like the slash menu", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "@co");
+    expect(screen.getByTestId("mention-menu")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
+
+    await user.type(input, "d");
+    expect(screen.getByTestId("mention-menu")).toBeInTheDocument();
+  });
+
+  it("does not treat an email-shaped @ (no leading space) as a mention trigger", async () => {
+    const user = userEvent.setup();
+    renderComposer({ agents: AGENTS });
+
+    await user.type(screen.getByTestId("composer-input"), "ping bob@codex");
+
+    expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
   });
 });

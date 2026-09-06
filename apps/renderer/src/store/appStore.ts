@@ -23,14 +23,21 @@ import { create } from "zustand";
 import {
   DEFAULT_SETTINGS,
   type Agent,
+  type AgentDescribe,
   type AgentDraft,
+  type AgentPatch,
+  type AgentRole,
+  type Backend,
   type Block,
   type ElicitationBlock,
   type HarnessInfo,
   type PermissionBlock,
   type Project,
   type QuestionBlock,
+  type RoutingTarget,
   type Session,
+  type SessionMode,
+  type SessionSettingsPatch,
   type Settings,
   type SlashCommand,
   type TurnStatus,
@@ -38,6 +45,7 @@ import {
   type UsageEvent,
 } from "@capygen/shared";
 import { hasBridge, ipc } from "@/lib/ipc";
+import { parseMentions } from "@/lib/mentions";
 
 export interface AppState {
   ready: boolean;
@@ -81,21 +89,68 @@ export interface AppState {
    * card says so instead of pretending the decision reached an agent.
    */
   staleRequests: string[];
+  /**
+   * The open session's agent-to-agent chain the dispatcher stopped at the
+   * hop cap (or on an error), and has not yet been resumed (ADR-0002, SPEC
+   * R11) — `null` when nothing is stopped. `chat.chainStopped` sets it;
+   * `send()` and `continueChat()` both clear it (a new message or a
+   * Continue is exactly "until the user speaks or presses Continue").
+   */
+  chainStopped: { turnId: string; reason: "hop_cap" | "error" } | null;
 
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
   /** `leadAgent` seeds the session's lead agent's backend/model — the
    *  composer's harness picker (SPEC item 5) passes what the user chose on
    *  the New Session landing; omitted, `sessions.create` falls back to
-   *  Settings ▸ General's default backend/model. */
+   *  Settings ▸ General's default backend/model.
+   *
+   *  `mode`/`agents` are Task B2's round-table additions: `agents` (from the
+   *  landing's Add agent dialog roster) is preferred whole over `leadAgent`
+   *  when it is non-empty — `sessions.create`'s own `AgentDraftSchema`
+   *  already carries every field the dialog collects (description,
+   *  sub-agent routing, colour), so there is nothing left for `leadAgent` to
+   *  add in that case. */
   startSession(
     projectId: string,
     title?: string,
+    mode?: SessionMode,
+    agents?: AgentDraft[],
     leadAgent?: Pick<AgentDraft, "backend" | "model" | "name">,
   ): Promise<Session>;
   openSession(sessionId: string): Promise<void>;
   send(text: string): Promise<void>;
   interrupt(): Promise<void>;
+  /** Resume a round-table chain the dispatcher stopped at the hop cap
+   *  (`chat.continue`, ADR-0002/SPEC R11). */
+  continueChat(): Promise<void>;
+  /** Add a top-level agent to an open round-table session. Composes two IPC
+   *  calls: `agents.add` (backend/model/displayName/mentionName/role/config
+   *  — all that channel accepts) then, only if the draft carries them, an
+   *  `agents.update` for `description`/`subagentRouting`/`color` — the only
+   *  surface for those on an agent that already exists (`AgentPatchSchema`).
+   *  See `AddAgentDialog`'s doc comment. */
+  addAgent(
+    sessionId: string,
+    draft: {
+      backend: Backend;
+      model: string;
+      displayName: string;
+      mentionName?: string;
+      role?: AgentRole;
+      description?: string;
+      subagentRouting?: RoutingTarget;
+      color?: string;
+    },
+  ): Promise<Agent>;
+  updateAgent(agentId: string, patch: AgentPatch): Promise<Agent>;
+  removeAgent(agentId: string): Promise<boolean>;
+  setLead(sessionId: string, agentId: string): Promise<Session>;
+  setMode(sessionId: string, mode: SessionMode): Promise<Session>;
+  updateSessionSettings(sessionId: string, patch: SessionSettingsPatch): Promise<Session>;
+  /** One agent's usage description (SPEC R13) — not cached in the store;
+   *  the drawer fetches it itself each time it opens. */
+  describeAgent(agentId: string): Promise<AgentDescribe>;
   setSettings(patch: Partial<Settings>): Promise<void>;
   answerPermission(
     requestId: string,
@@ -245,6 +300,21 @@ export const useAppStore = create<AppState>()((set, get) => {
       }));
     });
 
+    // The whole roster, replaced rather than merged — an add/update/remove/
+    // setLead all broadcast this the same way (handlers.ts's `emitAgents`).
+    client.on("agents.updated", ({ sessionId, agents }) => {
+      if (sessionId !== get().activeSessionId) return;
+      set({ agents });
+    });
+
+    // ADR-0002/SPEC R11: the dispatcher stopped an agent-to-agent chain at
+    // the hop cap (or on an error) — `ChainStoppedBar` shows until the user
+    // sends a new message or presses Continue, both of which clear this.
+    client.on("chat.chainStopped", ({ sessionId, turnId, reason }) => {
+      if (sessionId !== get().activeSessionId) return;
+      set({ chainStopped: { turnId, reason } });
+    });
+
     client.on("app.status", ({ level, message }) => {
       if (level === "error") set({ error: message });
     });
@@ -289,9 +359,25 @@ export const useAppStore = create<AppState>()((set, get) => {
     return live;
   }
 
-  /** Actually call `chat.send` — the part `send()` defers while busy. */
+  /**
+   * Actually call `chat.send` — the part `send()` defers while busy.
+   *
+   * Round-table routing (ADR-0002/SPEC R11): `chat.send`'s IPC contract
+   * accepts one `agentId` per call, so full multi-mention fan-out ("the
+   * @-mentioned agents [plural], in mention order") is the round-table
+   * dispatcher's job, not this store's — see `lib/mentions.ts`'s doc
+   * comment. What this does within that contract: in a round-table session,
+   * route to the *first* agent the text `@mentions`; none mentioned (or a
+   * solo session, where there is only ever the one lead) falls through to
+   * `agentId: null`, which `chat.send` resolves to the lead — exactly
+   * ADR-0002's "none mentioned → the lead".
+   */
   async function dispatchNow(sessionId: string, text: string): Promise<void> {
-    await ipc().invoke("chat.send", { sessionId, text, agentId: null });
+    const session = get().sessions.find((s) => s.id === sessionId);
+    const agentId =
+      session?.mode === "round-table" ? (parseMentions(text, get().agents)[0]?.id ?? null) : null;
+    set({ chainStopped: null });
+    await ipc().invoke("chat.send", { sessionId, text, agentId });
     await refreshTurns(sessionId);
   }
 
@@ -348,6 +434,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     lastDoneAt: null,
     showArchived: false,
     staleRequests: [],
+    chainStopped: null,
 
     async init() {
       if (!hasBridge()) {
@@ -391,19 +478,22 @@ export const useAppStore = create<AppState>()((set, get) => {
       return project;
     },
 
-    async startSession(projectId, title = "", leadAgent) {
-      const { session, agents } = await ipc().invoke("sessions.create", {
+    async startSession(projectId, title = "", mode = "solo", agents = [], leadAgent) {
+      const { session, agents: created } = await ipc().invoke("sessions.create", {
         projectId,
-        mode: "solo",
+        mode,
         title,
-        agents: leadAgent
-          ? [{ name: leadAgent.name, backend: leadAgent.backend, model: leadAgent.model, role: "lead" }]
-          : [],
+        agents:
+          agents.length > 0
+            ? agents
+            : leadAgent
+              ? [{ name: leadAgent.name, backend: leadAgent.backend, model: leadAgent.model, role: "lead" }]
+              : [],
       });
       set((s) => ({
         sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
         activeSessionId: session.id,
-        agents,
+        agents: created,
         turns: [],
         blocks: {},
         turnStatus: {},
@@ -411,6 +501,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         queuedMessages: [],
         lastDoneAt: null,
         staleRequests: [],
+        chainStopped: null,
       }));
       return session;
     },
@@ -426,6 +517,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         queuedMessages: [],
         lastDoneAt: null,
         staleRequests: [],
+        chainStopped: null,
       });
       const [loaded, commands] = await Promise.all([
         ipc().invoke("sessions.get", { sessionId }),
@@ -462,6 +554,84 @@ export const useAppStore = create<AppState>()((set, get) => {
       const sessionId = get().activeSessionId;
       if (!sessionId) return;
       await ipc().invoke("chat.interrupt", { sessionId });
+    },
+
+    async continueChat() {
+      const sessionId = get().activeSessionId;
+      if (!sessionId) return;
+      touchActivity();
+      set({ chainStopped: null });
+      const { ok } = await ipc().invoke("chat.continue", { sessionId });
+      if (ok) await refreshTurns(sessionId);
+    },
+
+    async addAgent(sessionId, draft) {
+      const agent = await ipc().invoke("agents.add", {
+        sessionId,
+        backend: draft.backend,
+        model: draft.model,
+        displayName: draft.displayName,
+        ...(draft.mentionName ? { mentionName: draft.mentionName } : {}),
+        ...(draft.role ? { role: draft.role } : {}),
+      });
+      // `agents.add`'s own channel has no room for these three — a follow-up
+      // merge-patch through `agents.update` is the only surface for them on
+      // an agent that already exists (`AgentPatchSchema`; see this method's
+      // doc comment on `AppState`).
+      const patch: AgentPatch = {};
+      if (draft.description !== undefined) patch.description = draft.description;
+      if (draft.subagentRouting !== undefined) patch.subagentRouting = draft.subagentRouting;
+      if (draft.color !== undefined) patch.color = draft.color;
+      const finalAgent =
+        Object.keys(patch).length > 0
+          ? await ipc().invoke("agents.update", { agentId: agent.id, patch })
+          : agent;
+      // Optimistic: `agents.updated` also arrives from the broadcast, but
+      // updating here too means the caller (the dialog) can close the moment
+      // its own await resolves without racing that event.
+      set((s) => ({
+        agents:
+          s.activeSessionId === sessionId
+            ? [...s.agents.filter((a) => a.id !== finalAgent.id), finalAgent].sort(
+                (a, b) => a.order - b.order,
+              )
+            : s.agents,
+      }));
+      return finalAgent;
+    },
+
+    async updateAgent(agentId, patch) {
+      const agent = await ipc().invoke("agents.update", { agentId, patch });
+      set((s) => ({ agents: s.agents.map((a) => (a.id === agent.id ? agent : a)) }));
+      return agent;
+    },
+
+    async removeAgent(agentId) {
+      const { ok } = await ipc().invoke("agents.remove", { agentId });
+      if (ok) set((s) => ({ agents: s.agents.filter((a) => a.id !== agentId) }));
+      return ok;
+    },
+
+    async setLead(sessionId, agentId) {
+      const session = await ipc().invoke("agents.setLead", { sessionId, agentId });
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === session.id ? session : x)) }));
+      return session;
+    },
+
+    async setMode(sessionId, mode) {
+      const session = await ipc().invoke("sessions.setMode", { sessionId, mode });
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === session.id ? session : x)) }));
+      return session;
+    },
+
+    async updateSessionSettings(sessionId, patch) {
+      const session = await ipc().invoke("sessions.updateSettings", { sessionId, patch });
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === session.id ? session : x)) }));
+      return session;
+    },
+
+    async describeAgent(agentId) {
+      return ipc().invoke("agents.describe", { agentId });
     },
 
     async setSettings(patch) {

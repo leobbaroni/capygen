@@ -46,8 +46,27 @@
  * mic toggles the store's `listening` flag, which is real: it drives the
  * mascot's `listening` state (`hooks/useMascotState.ts`) even though actual
  * speech-to-text is Phase 10 (R18/P18).
+ *
+ * `@mention` autocomplete (SPEC item B2.2, ADR-0002): typing `@` anywhere —
+ * not only at the start of a line, unlike the slash menu — filters `agents`
+ * by mention name/display name (`MentionMenu`); Up/Down move the highlight,
+ * Enter or Tab insert the highlighted agent's `@mentionName` plus one
+ * separating space, Escape dismisses. `agents` defaults to `[]`, which keeps
+ * the popup from ever appearing (a solo session, or a caller that has not
+ * loaded the roster yet) without a separate on/off prop. Detection is
+ * caret-based (`activeMentionQuery`/`onSelect`), not "starts with", so a
+ * mention mid-sentence works the same as one at the front.
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react";
 import {
   ArrowUpIcon,
   ChevronDownIcon,
@@ -56,10 +75,13 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react";
-import type { Backend, HarnessInfo, SlashCommand } from "@capygen/shared";
+import type { Agent, Backend, HarnessInfo, SlashCommand } from "@capygen/shared";
+import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { activeMentionQuery, insertMention, type MentionQuery } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
 
@@ -67,12 +89,6 @@ export interface AgentChoice {
   backend: Backend;
   model: string;
 }
-
-const BACKEND_LABEL: Record<Backend, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  api: "API model",
-};
 
 export interface ComposerProps {
   onSubmit: (text: string) => void | Promise<void>;
@@ -105,6 +121,10 @@ export interface ComposerProps {
   /** A different backend/model was chosen — see the file header for what
    *  "picking" means with vs. without `agent`. */
   onPickAgent?: (choice: AgentChoice) => void;
+  /** Session agents the `@mention` menu can suggest (SPEC item B2.2). Empty
+   *  (the default) keeps the menu from ever opening — a solo session's one
+   *  agent has nothing worth mentioning. */
+  agents?: Agent[];
   testId?: string;
 }
 
@@ -121,6 +141,7 @@ export function Composer({
   agent = null,
   lockBackend = false,
   onPickAgent,
+  agents = [],
   testId = "composer",
 }: ComposerProps) {
   const [value, setValue] = useState("");
@@ -129,6 +150,11 @@ export function Composer({
   const [highlighted, setHighlighted] = useState(0);
   /** The exact draft Escape closed the menu for; editing it reopens the menu. */
   const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
+  /** The exact `@query` Escape closed the mention menu for — same pattern as
+   *  `slashDismissedFor`, compared by the surrounding draft since the query
+   *  itself carries no stable identity across renders. */
+  const [mentionDismissedFor, setMentionDismissedFor] = useState<string | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -166,6 +192,21 @@ export function Composer({
   }, [slashActive, value, commands]);
   const slashMenuOpen = slashActive && commands.length > 0;
 
+  // `@mention` autocomplete (SPEC item B2.2) — same "open whenever there is
+  // anything to offer, filter separately" shape as the slash menu just
+  // above, so `onKeyDown` only ever intercepts keys when a highlighted row
+  // genuinely exists.
+  const mentionActive =
+    mentionQuery !== null && !slashActive && !disabled && value !== mentionDismissedFor;
+  const filteredAgents = useMemo(() => {
+    if (!mentionActive || !mentionQuery) return [];
+    const query = mentionQuery.query.toLowerCase();
+    return agents.filter(
+      (a) => a.mentionName.toLowerCase().includes(query) || a.displayName.toLowerCase().includes(query),
+    );
+  }, [mentionActive, mentionQuery, agents]);
+  const mentionMenuOpen = mentionActive && agents.length > 0;
+
   useEffect(() => {
     setHighlighted(0);
   }, [value]);
@@ -186,6 +227,12 @@ export function Composer({
     setValue("");
     setFiles([]);
     setSendError(null);
+    // A stale in-progress "@query" would otherwise survive the programmatic
+    // clear above (setValue doesn't fire the textarea's own onChange/onSelect)
+    // and could reopen the mention menu against indices that no longer match
+    // the now-empty draft.
+    setMentionQuery(null);
+    setMentionDismissedFor(null);
     try {
       await onSubmit(trimmed);
     } catch (err) {
@@ -217,6 +264,26 @@ export function Composer({
     ref.current?.focus();
   }
 
+  /**
+   * Inserts the picked agent's `@mentionName` in place of the in-progress
+   * query (SPEC item B2.2). No explicit caret placement, deliberately —
+   * same as `selectCommand` just above: setting a controlled textarea's
+   * `.value` resets its selection to the end of the new text as a normal
+   * DOM side effect, which is exactly where the caret belongs for the
+   * common case (a mention typed at the point the user is currently
+   * writing). An explicit `setSelectionRange` inside a `requestAnimationFrame`
+   * was tried and dropped — it fired *after* `user.type`'s next keystrokes
+   * in fast/scripted typing, yanking the caret back mid-word.
+   */
+  function selectMention(picked: Agent): void {
+    if (!mentionQuery) return;
+    const result = insertMention(value, mentionQuery, picked.mentionName);
+    setMentionDismissedFor(null);
+    setMentionQuery(null);
+    setValue(result.text);
+    ref.current?.focus();
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (slashMenuOpen && filteredCommands.length > 0) {
       if (event.key === "Escape") {
@@ -238,6 +305,33 @@ export function Composer({
         event.preventDefault();
         const command = filteredCommands[highlighted] ?? filteredCommands[0];
         if (command) selectCommand(command);
+        return;
+      }
+    }
+    if (mentionMenuOpen && filteredAgents.length > 0) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionDismissedFor(value);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setHighlighted((h) => (h + 1) % filteredAgents.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setHighlighted((h) => (h - 1 + filteredAgents.length) % filteredAgents.length);
+        return;
+      }
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        const picked = filteredAgents[highlighted] ?? filteredAgents[0];
+        if (picked) selectMention(picked);
         return;
       }
     }
@@ -292,14 +386,29 @@ export function Composer({
           onHover={setHighlighted}
           onSelect={selectCommand}
         />
+      ) : mentionMenuOpen ? (
+        <MentionMenu
+          agents={filteredAgents}
+          highlightedIndex={highlighted}
+          onHover={setHighlighted}
+          onSelect={selectMention}
+        />
       ) : null}
 
       <div className="relative overflow-hidden px-4 pt-3">
         <Textarea
           ref={ref}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
+            const next = e.target.value;
+            setValue(next);
+            setMentionQuery(activeMentionQuery(next, e.target.selectionStart ?? next.length));
+          }}
           onKeyDown={onKeyDown}
+          onSelect={(e: SyntheticEvent<HTMLTextAreaElement>) => {
+            const el = e.currentTarget;
+            setMentionQuery(activeMentionQuery(el.value, el.selectionStart ?? el.value.length));
+          }}
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
