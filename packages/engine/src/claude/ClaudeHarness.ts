@@ -434,6 +434,11 @@ export class ClaudeHarness implements Harness {
     if (config.strictMcpConfig !== undefined) options.strictMcpConfig = config.strictMcpConfig;
     if (config.allowedTools) options.allowedTools = config.allowedTools;
     if (config.skills) options.skills = config.skills;
+    // Session-scoped like the rest of this object: effort is part of what the
+    // backend session is started with, so it is set here rather than per turn
+    // (SPEC R23/R24). Left unset when unconfigured, so the CLI's own default
+    // applies rather than us pinning one.
+    if (config.effort) options.effort = config.effort;
     return options;
   }
 
@@ -1541,11 +1546,29 @@ function readResultUsage(message: SdkMessageLike): UsageTotals {
 
 interface ClaudeAgentConfig {
   permissionMode?: ClaudeOptions["permissionMode"];
+  effort?: ClaudeOptions["effort"];
   settingSources?: ("user" | "project" | "local")[];
   strictMcpConfig?: boolean;
   allowedTools?: string[];
   skills?: string[];
 }
+
+/**
+ * The effort levels the *installed* SDK accepts (`Options.effort`, sdk.d.ts
+ * `EffortLevel`). Enumerated here because the shared `ClaudeAgentConfig`
+ * schema types `effort` as a free-form string — "no fixed vocabulary yet" —
+ * so an unknown value is reachable from a stored config and must be dropped
+ * rather than sent. `satisfies` ties the list to the SDK union: if a level is
+ * renamed or removed upstream, this stops compiling instead of silently
+ * sending a value the CLI rejects.
+ */
+const EFFORT_LEVELS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly NonNullable<ClaudeOptions["effort"]>[];
 
 /** Reads the optional `agent.config.claude` block, ignoring anything unknown. */
 export function readClaudeConfig(config: unknown): ClaudeAgentConfig {
@@ -1566,6 +1589,13 @@ export function readClaudeConfig(config: unknown): ClaudeAgentConfig {
         s === "user" || s === "project" || s === "local",
     );
     out.settingSources = sources;
+  }
+  // Exact match only: `"LOW"` and `" low "` are dropped, the same way an
+  // unknown `permissionMode` is, so a typo degrades to the model's own default
+  // instead of failing the session.
+  const effort = str(root.effort);
+  if (effort !== undefined && (EFFORT_LEVELS as readonly string[]).includes(effort)) {
+    out.effort = effort as NonNullable<ClaudeOptions["effort"]>;
   }
   if (typeof root.strictMcpConfig === "boolean") out.strictMcpConfig = root.strictMcpConfig;
   if (Array.isArray(root.allowedTools)) {

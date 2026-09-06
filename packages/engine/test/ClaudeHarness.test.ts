@@ -233,6 +233,61 @@ describe("ClaudeHarness — efficiency (SPEC R24)", () => {
     await harness.dispose();
   });
 
+  /**
+   * [P2-effort] `config.claude.effort` is the agent's configured reasoning
+   * effort. `Options.effort` exists on the installed SDK
+   * (`sdk.d.ts:1758`, inside the `Options` type at 1396-2279, typed
+   * `EffortLevel = 'low'|'medium'|'high'|'xhigh'|'max'`), so it belongs on the
+   * options object this backend session is built from.
+   */
+  /** Start the one backend session and settle its first turn, so the captured
+   *  options are the ones the SDK was really called with. */
+  async function optionsFor(overrides: Partial<HarnessAgent>): Promise<ClaudeOptions> {
+    const fake = makeFakeSdk();
+    const harness = await start(fake, overrides);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "go" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    const options = fake.options();
+    fake.out.push(resultMessage("ok"));
+    await turn.done;
+    await harness.dispose();
+    return options;
+  }
+
+  it("[P2-effort] sends a configured effort level on the query options", async () => {
+    expect((await optionsFor({ config: { claude: { effort: "low" } } })).effort).toBe("low");
+  });
+
+  it("[P2-effort] sends effort on a resumed session too", async () => {
+    const options = await optionsFor({
+      resumeSessionId: "prev-session-id",
+      config: { claude: { effort: "low" } },
+    });
+    expect(options.resume).toBe("prev-session-id");
+    expect(options.effort).toBe("low");
+  });
+
+  it("[P2-effort] accepts every level the installed SDK declares", async () => {
+    for (const level of ["low", "medium", "high", "xhigh", "max"] as const) {
+      expect((await optionsFor({ config: { claude: { effort: level } } })).effort).toBe(level);
+    }
+  });
+
+  it("[P2-effort] leaves effort unset when the agent configures none", async () => {
+    expect((await optionsFor({})).effort).toBeUndefined();
+  });
+
+  it("[P2-effort] drops an unknown effort instead of sending it or failing", async () => {
+    // The shared schema types `effort` as a free-form string, so an unknown
+    // value is reachable. It must not reach the SDK, and must not cost the
+    // session: same convention as an unknown `permissionMode`.
+    for (const bogus of ["turbo", "LOW", "", " low ", 7, null, {}]) {
+      const options = await optionsFor({ config: { claude: { effort: bogus } } });
+      expect(options.effort).toBeUndefined();
+      expect(options.model).toBe("claude-sonnet-5");
+    }
+  });
+
   it("resumes the stored backend session id on a fresh process", async () => {
     const fake = makeFakeSdk();
     const harness = await start(fake, { resumeSessionId: "prev-session-id" });
@@ -862,6 +917,18 @@ describe("pure mappers", () => {
       allowedTools: ["Read"],
     });
     expect(readClaudeConfig(undefined)).toEqual({});
+  });
+
+  it("[P2-effort] reads a valid effort level and drops anything else", () => {
+    expect(readClaudeConfig({ claude: { effort: "low" } })).toEqual({ effort: "low" });
+    expect(readClaudeConfig({ claude: { effort: "max" } })).toEqual({ effort: "max" });
+    for (const bogus of ["turbo", "LOW", "", 7, null, {}, []]) {
+      expect(readClaudeConfig({ claude: { effort: bogus } })).toEqual({});
+    }
+    // An unknown effort must not take a valid sibling down with it.
+    expect(readClaudeConfig({ claude: { effort: "turbo", permissionMode: "plan" } })).toEqual({
+      permissionMode: "plan",
+    });
   });
 
   it("strips the nested-session markers and forces UTF-8", () => {

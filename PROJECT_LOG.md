@@ -1219,3 +1219,19 @@ Duration 1.45s
 An earlier final-check attempt hit an in-progress P0 shared-schema edit (ProjectScoped not
 yet declared); rerun after declaration passed. This task is accepted after two review rounds;
 Phase7 overall remains open, with full integration gate due after its remaining work.
+
+### Test prerequisite — Claude effort reaches the SDK
+
+Opus wired valid `agent.config.claude.effort` into query options on fresh and resumed
+backend sessions; unset/invalid values retain the existing default behavior. Astra reviewed
+the diff and independently ran the request-capture suite. Global hub defaults still need P1.
+Red evidence reproduced by removing propagation; final Windows check:
+
+```text
+corepack pnpm exec vitest run --project engine packages/engine/test/claudeHarness.test.ts
+Test Files 1 passed (1)
+Tests 34 passed (34)
+Duration 4.62s
+```
+
+No model calls or personal login/config access.

@@ -373,3 +373,10 @@ case-normalized but duplicate normalized names retain insertion order, matching 
 fetch combined values. Each registry captures its cleaned base environment once. Source-file
 provenance does not split equivalent connections. `mcpPools.test.ts` proves isolation/sharing
 and absence of credentials or keys from returned leases and logs.
+
+## Claude query effort — 2026-09-07
+
+Installed Agent SDK 0.3.261 `Options.effort` accepts low/medium/high/xhigh/max.
+`ClaudeHarness.readClaudeConfig` now carries valid `agent.config.claude.effort` to query options
+on start and resume, verified by captured requests in `ClaudeHarness.test.ts`. Unknown values
+are ignored like other unrecognized harness config values. Global-default wiring is separate.
