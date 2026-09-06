@@ -681,3 +681,31 @@ Not fixed, on purpose
   channels wired in apps/desktop/src/ipc/workspace.ts; the notImplemented stubs are gone.
 - Gate: typecheck ok for shared/db/engine/desktop + tests/tsconfig (renderer red on another agents
   in-flight src/panes/**); desktop vitest project 279/279 green (20 files).
+
+- [Phase 5 · B2] Dockview workspace shell + Files/Editor/Diff/Agents panes: `workspace/registry.ts`
+  (a pane registers itself by calling `registerPane({kind, title, icon, component})` at module
+  load; `panes/index.ts` is the side-effect aggregator both this task and B3 import into), a
+  `WorkspaceHost` (dockview-react 8.2.0) with a toolbar of per-kind toggles, a "+" add-pane menu, a
+  pointer-driven resize handle, and a per-group maximize button (dockview's own tab context menu
+  needs the paid `dockview-enterprise` "ContextMenu" module, so `getTabContextMenuItems` was tried
+  and removed — float still works via drag-out, just not from a right-click menu). Layout
+  round-trips through `layout.get`/`layout.set` (debounced 400 ms on `onDidLayoutChange`), falling
+  back to a Files+Agents default (Agents active, matching the old header toggle's behaviour) when
+  nothing is saved or a saved layout throws on `fromJSON`. Files (lazy `fs.list` tree, `fs.search`,
+  copy-path context menu — no `shell.showItemInFolder` channel exists yet, so "reveal in Explorer"
+  is not offered), Editor (CodeMirror 6: one shared `EditorView` whose `EditorState` is swapped per
+  tab so undo history survives a tab switch; `@lezer/highlight` tags mapped onto capygen's own
+  tokens rather than importing `@codemirror/theme-one-dark`; Ctrl+S saves; binary/truncated files
+  get no editable state at all, just a notice), Diff (`git.status` list + the existing `DiffView`
+  block component reused for the unified patch + a `git.commit` box), and the pre-existing
+  `AgentsPane` wrapped unmodified as a dockview panel (`AgentsPane.test.tsx` stays green untouched).
+  ChatPage's "Agents" header button now opens `WorkspaceHost` instead of the bare pane.
+  A real double-click in a browser fires two ordinary `click`s before the `dblclick` — jsdom's
+  `fireEvent.doubleClick` does not — which had let a single click *also* open a file, racing three
+  `fs.read`s for the same path into two duplicate Editor tabs; caught by the screenshot script
+  driving a real Chromium, not by the (now also fixed and regression-tested) unit tests.
+- Gate: `pnpm typecheck` clean (6 projects), `pnpm test` 66 files / 947 passed (repo-wide, alongside
+  two other agents' in-flight files at the time), `pnpm build` clean. Screenshots via the new
+  `/dev/workspace` dev-only route (fakes its own IPC bridge — this pane's `fs`/`git` calls bypass
+  the store) at `e2e-out/workspace-files.png` / `workspace-editor.png`, captured with the throwaway
+  `scripts/dev-workspace-screenshots.mjs` against a plain `vite` dev server (not Electron).
