@@ -130,12 +130,21 @@ Each spec launches into a fresh `mkdtemp` profile and a fresh temp project direc
 
 ```sh
 corepack pnpm spike                                  # Phase 1 capability proof (Claude + Codex)
-corepack pnpm --dir packages/engine live:claude      # one live turn, no Electron, no UI
+corepack pnpm --dir packages/engine live:claude      # one live Claude turn, no Electron, no UI
+corepack pnpm --dir packages/engine live:codex       # two live Codex turns, incl. an approval
 ```
 
 `live:claude` is the smallest thing that proves the harness against the real backend; run it
 first when the live e2e fails, to tell "the harness broke" apart from "the UI broke". It takes
 `--model <id>` and prints the session id, the blocks, and the turn's usage and cost.
+
+`live:codex` is the same idea for the Codex harness (`--model <id>`, default `gpt-5.5`). It runs
+two turns in a throwaway `mkdtemp` thread: "pong", then a shell command under
+`approvalPolicy: "untrusted"` whose approval it accepts **programmatically** — the one unattended
+`allow` in the repo, and it is one `echo`. It prints which `codex.exe` it resolved and from where;
+that line should say `(bundled)`, because the machine's installed CLI is a different protocol
+version. Codex sign-in is the ChatGPT OAuth in `~/.codex`; without it the turn fails with
+"Codex is not signed in".
 
 ---
 
