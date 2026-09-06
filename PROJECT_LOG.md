@@ -825,3 +825,45 @@ Not fixed, on purpose
   wiring them to the new repos and to live CLI/file probes is Phase 6 Build's job.
 - Gate: `pnpm typecheck` clean (5 workspace projects + `tests/tsconfig.json`), `pnpm test` 66 files
   / 993 passed, no regressions in files this task did not touch.
+
+## 2026-09-06 — Phase 6 / B3: prerequisites detection + confirmed visible bootstrap
+- `apps/desktop/src/prereqs/detect.ts`: real detection (no Electron) for node/git/ripgrep/uv/
+  Windows Terminal (all optional or supporting) plus Claude Code and Codex — install and sign-in
+  as two separate steps each, the sign-in step `blockedBy` its own install step. Claude's install
+  check tries PATH, then the native installer's fixed `~/.local/bin/claude.exe`, then an npm-global
+  shim, matching how this machine's own install was found (SPEC "Current State"); Codex is
+  PATH-only, matching how this machine's own Codex was installed. Reuses `harnessList.ts`'s
+  `CliProbe`/`claudeSignInSignal`/`probeCodex` outright rather than re-implementing them, so the
+  setup panel and the New Session picker can never disagree about what is signed in.
+- `apps/desktop/src/prereqs/runGate.ts`: pure functions only — `confirmOptionsFor` (dialog text
+  quoting the exact command, CLAUDE.md), `consoleArgv` (visible `-NoExit` PowerShell, ported from
+  Omnigent-windows' `bootstrap.js`), `firstUnmetDependency` (refuses a step out of order).
+- `apps/desktop/src/prereqs/electronDefaults.ts`: the two Electron-shaped pieces
+  (`dialog.showMessageBox`, a detached visible console) — `electron` loaded with a runtime
+  `import()` inside the functions, never a top-level import, the same rule `ClaudeHarness` follows
+  for its ESM-only SDK (COMPAT.md) and why this file has no import-time Electron dependency under
+  vitest even though nothing in it is ever called from a test.
+- `apps/desktop/src/ipc/prereqs.ts`: wires the above into `prereqs.status`/`prereqs.run`, with a
+  Codex-probe cache (`cachedCodexProbe`, same shape as `harnessList.ts`'s own) so the panel's 3s
+  poll does not spawn a fresh `codex app-server` child every three seconds. `prereqs.run` refuses
+  an unknown step or an unmet dependency without ever showing the confirm dialog; a confirmed run
+  starts a bounded main-process background re-detect that broadcasts `prereqs.changed` until the
+  step is detected or ~2 minutes pass — which is what makes Settings ▸ Prerequisites'
+  (`PrereqsSection`, built in parallel by the Settings-hub task) own `prereqs.changed` listener
+  real, since nothing broadcast that event before. Wired into `apps/desktop/src/ipc/handlers.ts`
+  (registration lines only — replaces the two `prereqs.*` stub entries from the P0 pass above).
+- Renderer: `apps/renderer/src/components/prereqs/PrereqPanel.tsx` (step rows — detected/version
+  badge, description, exact command, Run — with the 3s poll while a run might still be finishing,
+  capped at ~40 polls) and `apps/renderer/src/components/SetupBanner.tsx` (reads the same
+  `appStore.harnesses` snapshot Settings ▸ Harnesses uses, so no second Codex probe; renders
+  nothing once a backend is available, a compact link-out banner once a CLI is installed but not
+  signed in, or the full `PrereqPanel` inline on a genuinely fresh machine — SPEC R3's "first-run"
+  case). `LandingPage.tsx` gained one `<SetupBanner />` line (minimal compat edit outside this
+  task's file list, needed for the banner to actually appear anywhere).
+- Found in flight, left alone: `apps/renderer/src/pages/settings/PrereqsSection.tsx` (the
+  Settings-hub task's own file) had already built its own inline step list before `PrereqPanel`
+  existed on disk, per its own header comment — the two are not de-duplicated; that is a follow-up
+  for whoever finishes the Settings-hub integration, not this task's file to touch.
+- Gate: `pnpm typecheck` clean (5 workspace projects + `tests/tsconfig.json`); `pnpm test` 93 files
+  / 1203 passed / 4 skipped (pre-existing, not this task's), including the new
+  `prereqsDetect`/`prereqsRunGate`/`prereqsIpc`/`PrereqPanel`/`SetupBanner` suites (50 new tests).
