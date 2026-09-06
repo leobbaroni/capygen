@@ -7,19 +7,27 @@
 import {
   AgentSchema,
   BlockSchema,
+  DEFAULT_GLOBAL_SETTINGS,
   DEFAULT_SETTINGS,
   DevServerSchema,
+  GlobalSettingsSchema,
+  McpServerEntrySchema,
+  PluginEntrySchema,
   ProjectSchema,
   SessionSchema,
   SessionSettingsSchema,
   SettingsSchema,
+  SkillEntrySchema,
   TaskSchema,
   ToolOutputSchema,
+  ToolPolicyEntrySchema,
   TurnSchema,
   UsageEventSchema,
   WorkspaceLayoutSchema,
   deriveMentionName,
+  mergeGlobalSettingsPatch,
   newId,
+  resetGlobalSettingsSection,
   type Agent,
   type AgentDraft,
   type AgentPatch,
@@ -29,6 +37,13 @@ import {
   type DevServer,
   type DevServerDraft,
   type DevServerPatch,
+  type GlobalSettings,
+  type GlobalSettingsPatch,
+  type GlobalSettingsSection,
+  type McpServerEntry,
+  type McpServerEntryPatch,
+  type McpServerScope,
+  type PluginEntry,
   type Project,
   type RoutingTarget,
   type Session,
@@ -37,10 +52,14 @@ import {
   type SessionSettingsPatch,
   type SessionStatus,
   type Settings,
+  type SkillEntry,
+  type SkillScope,
   type Task,
   type TaskPatch,
   type TaskStatus,
   type ToolOutput,
+  type ToolPolicyEntry,
+  type ToolPolicyScope,
   type Turn,
   type TurnRole,
   type TurnStatus,
@@ -1295,5 +1314,395 @@ export class TasksRepo {
 
   remove(id: string): boolean {
     return this.db.run("DELETE FROM tasks WHERE id = ?", id) > 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// global_settings (Phase 6, SPEC R19, R30) — one JSON blob in the existing
+// key/value `settings` table (0001). See migration 0005's header for why
+// `GlobalSettingsSchema`, unlike the four repos below it, needed no schema
+// change at all: it is one more row under a dedicated key, the same
+// `getRaw`/`setRaw`-shaped write `SettingsRepo` already uses for non-user
+// state (window geometry).
+// ---------------------------------------------------------------------------
+
+const GLOBAL_SETTINGS_KEY = "global_settings";
+
+export class GlobalSettingsRepo {
+  constructor(private readonly db: Database) {}
+
+  all(): GlobalSettings {
+    const row = this.db.get<Row>(
+      "SELECT value_json FROM settings WHERE key = ?",
+      GLOBAL_SETTINGS_KEY,
+    );
+    const raw = row ? fromJson<unknown>(row.value_json, undefined) : undefined;
+    const parsed = GlobalSettingsSchema.safeParse(raw ?? {});
+    // A row a future build wrote in a shape this build no longer understands
+    // (or none at all yet) falls back to the shipping defaults, the same
+    // "an unreadable row must not crash" posture `SettingsRepo.all` takes.
+    return parsed.success ? parsed.data : DEFAULT_GLOBAL_SETTINGS;
+  }
+
+  /** `settings.patch` — deep-merges into the existing object
+   *  (`mergeGlobalSettingsPatch`), never a flat overwrite; see that
+   *  function's doc comment in `@capygen/shared`. */
+  patch(patch: GlobalSettingsPatch): GlobalSettings {
+    const merged = mergeGlobalSettingsPatch(this.all(), patch);
+    this.write(merged);
+    return merged;
+  }
+
+  /** `settings.reset` — one section back to its shipping default, or the
+   *  whole object for `"all"`. */
+  reset(section: GlobalSettingsSection): GlobalSettings {
+    const next = resetGlobalSettingsSection(this.all(), section);
+    this.write(next);
+    return next;
+  }
+
+  private write(value: GlobalSettings): void {
+    this.db.run(
+      `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
+                                      updated_at = excluded.updated_at`,
+      GLOBAL_SETTINGS_KEY,
+      JSON.stringify(value),
+      now(),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Integrations caches: mcp_servers / plugins / skills / policies (Phase 6,
+// SPEC R28-R29). Migration 0001 created all four tables as placeholders;
+// migration 0005 adds the `backend` column the first and last were missing.
+// None of the four domain shapes carries an `id` (see their doc comments in
+// `@capygen/shared`) — every repo below keys its row by the entry's own
+// natural identity, so `.upsert` is idempotent: re-syncing the same backend
+// config updates the existing row instead of duplicating it, the same
+// pattern `DevServersRepo.upsert`/`TasksRepo.upsert` already use for a
+// detector's deterministic id.
+// ---------------------------------------------------------------------------
+
+const MCP_SERVER_ENVELOPE_KEYS = new Set(["backend", "scope", "name", "tools"]);
+
+function mcpServerRowId(backend: Backend, scope: McpServerScope, name: string): string {
+  return `${backend}:${scope}:${name}`;
+}
+
+function rowToMcpServerEntry(row: Row): McpServerEntry {
+  const payload = fromJson<Record<string, unknown>>(row.config_json, {});
+  return McpServerEntrySchema.parse({
+    ...payload,
+    backend: row.backend,
+    scope: row.scope,
+    name: row.name,
+    tools: fromJson<string[] | undefined>(row.tools_json, undefined),
+  });
+}
+
+/** One row per (`backend`, `scope`, `name`) — `integrations.mcp.*`. */
+export class McpServersRepo {
+  constructor(private readonly db: Database) {}
+
+  /** `integrations.mcp.add` and a config-file re-sync alike — insert or
+   *  replace by natural key. */
+  upsert(entry: McpServerEntry): McpServerEntry {
+    const parsed = McpServerEntrySchema.parse(entry);
+    const id = mcpServerRowId(parsed.backend, parsed.scope, parsed.name);
+    const payload: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!MCP_SERVER_ENVELOPE_KEYS.has(key)) payload[key] = value;
+    }
+    this.db.run(
+      `INSERT INTO mcp_servers (id, backend, scope, name, config_json, tools_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         backend      = excluded.backend,
+         scope        = excluded.scope,
+         name         = excluded.name,
+         config_json  = excluded.config_json,
+         tools_json   = excluded.tools_json,
+         updated_at   = excluded.updated_at`,
+      id,
+      parsed.backend,
+      parsed.scope,
+      parsed.name,
+      JSON.stringify(payload),
+      toJson(parsed.tools ?? null),
+      now(),
+    );
+    return parsed;
+  }
+
+  /** `integrations.mcp.update` — merge-patch by natural key. */
+  update(
+    backend: Backend,
+    scope: McpServerScope,
+    name: string,
+    patch: McpServerEntryPatch,
+  ): McpServerEntry {
+    const existing = this.get(backend, scope, name);
+    if (!existing) throw new Error(`unknown mcp server: ${backend}/${scope}/${name}`);
+    return this.upsert(McpServerEntrySchema.parse({ ...existing, ...patch }));
+  }
+
+  /** `integrations.mcp.remove`. */
+  remove(backend: Backend, scope: McpServerScope, name: string): boolean {
+    return this.db.run("DELETE FROM mcp_servers WHERE id = ?", mcpServerRowId(backend, scope, name)) > 0;
+  }
+
+  get(backend: Backend, scope: McpServerScope, name: string): McpServerEntry | null {
+    const row = this.db.get<Row>(
+      "SELECT * FROM mcp_servers WHERE id = ?",
+      mcpServerRowId(backend, scope, name),
+    );
+    return row ? rowToMcpServerEntry(row) : null;
+  }
+
+  /** `integrations.list {backend}`'s `mcpServers`. */
+  listByBackend(backend: Backend): McpServerEntry[] {
+    return this.db
+      .all<Row>("SELECT * FROM mcp_servers WHERE backend = ? ORDER BY scope, name", backend)
+      .map(rowToMcpServerEntry);
+  }
+}
+
+const PLUGIN_ENVELOPE_KEYS = new Set(["backend", "name", "version", "enabled"]);
+
+function pluginRowId(backend: Backend, name: string): string {
+  return `${backend}:${name}`;
+}
+
+function rowToPluginEntry(row: Row): PluginEntry {
+  const payload = fromJson<Record<string, unknown>>(row.manifest_json, {});
+  return PluginEntrySchema.parse({
+    ...payload,
+    backend: row.backend,
+    name: row.name,
+    version: (row.version as string | null) || undefined,
+    enabled: intToBool(row.enabled),
+  });
+}
+
+/** `PluginEntry` with its `.default()`-bearing fields made optional, so a
+ *  caller need not restate `enabled`/`installed`/`commands`/`skills` just to
+ *  let `PluginEntrySchema.parse` fill them in — `upsert`'s own parameter
+ *  type, not a zod schema (this package does not depend on zod directly). */
+type PluginEntryInput = Omit<PluginEntry, "enabled" | "installed" | "commands" | "skills"> & {
+  enabled?: boolean;
+  installed?: boolean;
+  commands?: string[];
+  skills?: string[];
+};
+
+/** One row per (`backend`, `name`) — `integrations.plugin.*`. `backend`,
+ *  `name`, `version`, `enabled` are the table's own hoisted columns (0001);
+ *  everything else (`marketplace`, `installed`, `path`, `commands`,
+ *  `skills`, `source`) lives in `manifest_json`. */
+export class PluginsRepo {
+  constructor(private readonly db: Database) {}
+
+  upsert(entry: PluginEntryInput): PluginEntry {
+    const parsed = PluginEntrySchema.parse(entry);
+    const id = pluginRowId(parsed.backend, parsed.name);
+    const payload: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!PLUGIN_ENVELOPE_KEYS.has(key)) payload[key] = value;
+    }
+    this.db.run(
+      `INSERT INTO plugins (id, backend, name, version, enabled, manifest_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         backend       = excluded.backend,
+         name          = excluded.name,
+         version       = excluded.version,
+         enabled       = excluded.enabled,
+         manifest_json = excluded.manifest_json,
+         updated_at    = excluded.updated_at`,
+      id,
+      parsed.backend,
+      parsed.name,
+      parsed.version ?? "",
+      boolToInt(parsed.enabled),
+      JSON.stringify(payload),
+      now(),
+    );
+    return parsed;
+  }
+
+  /** `integrations.plugin.setEnabled`. */
+  setEnabled(backend: Backend, name: string, enabled: boolean): PluginEntry {
+    const existing = this.get(backend, name);
+    if (!existing) throw new Error(`unknown plugin: ${backend}/${name}`);
+    return this.upsert({ ...existing, enabled });
+  }
+
+  /** `integrations.plugin.uninstall`. */
+  remove(backend: Backend, name: string): boolean {
+    return this.db.run("DELETE FROM plugins WHERE id = ?", pluginRowId(backend, name)) > 0;
+  }
+
+  get(backend: Backend, name: string): PluginEntry | null {
+    const row = this.db.get<Row>("SELECT * FROM plugins WHERE id = ?", pluginRowId(backend, name));
+    return row ? rowToPluginEntry(row) : null;
+  }
+
+  /** `integrations.list {backend}`'s `plugins`. */
+  listByBackend(backend: Backend): PluginEntry[] {
+    return this.db
+      .all<Row>("SELECT * FROM plugins WHERE backend = ? ORDER BY name", backend)
+      .map(rowToPluginEntry);
+  }
+}
+
+const SKILL_ENVELOPE_KEYS = new Set(["backend", "name", "scope", "description"]);
+
+function skillRowId(backend: Backend, scope: SkillScope, name: string): string {
+  return `${backend}:${scope}:${name}`;
+}
+
+function rowToSkillEntry(row: Row): SkillEntry {
+  const payload = fromJson<Record<string, unknown>>(row.metadata_json, {});
+  return SkillEntrySchema.parse({
+    ...payload,
+    backend: row.backend,
+    name: row.name,
+    // `skills.source` (0001, default 'user') is reused as-is for
+    // `SkillEntry.scope` — both are the same "user"/"project"/"plugin"
+    // vocabulary; migration 0005's header explains why the column keeps its
+    // original name rather than being renamed.
+    scope: row.source,
+    description: (row.description as string | null) || undefined,
+  });
+}
+
+/** `SkillEntry` with `enabled` made optional — same reasoning as
+ *  `PluginEntryInput` above. */
+type SkillEntryInput = Omit<SkillEntry, "enabled"> & { enabled?: boolean };
+
+/** One row per (`backend`, `scope`, `name`) — `integrations.skill.*`. */
+export class SkillsRepo {
+  constructor(private readonly db: Database) {}
+
+  upsert(entry: SkillEntryInput): SkillEntry {
+    const parsed = SkillEntrySchema.parse(entry);
+    const id = skillRowId(parsed.backend, parsed.scope, parsed.name);
+    const payload: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!SKILL_ENVELOPE_KEYS.has(key)) payload[key] = value;
+    }
+    this.db.run(
+      `INSERT INTO skills (id, backend, name, description, source, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         backend       = excluded.backend,
+         name          = excluded.name,
+         description   = excluded.description,
+         source        = excluded.source,
+         metadata_json = excluded.metadata_json,
+         updated_at    = excluded.updated_at`,
+      id,
+      parsed.backend,
+      parsed.name,
+      parsed.description ?? "",
+      parsed.scope,
+      JSON.stringify(payload),
+      now(),
+    );
+    return parsed;
+  }
+
+  /**
+   * `integrations.skill.setEnabled` — `scope` disambiguates a name that
+   * exists in more than one; omitted affects the first match for
+   * `backend`+`name` (`"integrations.skill.setEnabled"`'s doc comment in
+   * `@capygen/shared/ipc.js` explains why the IPC input allows that).
+   */
+  setEnabled(backend: Backend, name: string, enabled: boolean, scope?: SkillScope): SkillEntry {
+    const existing = scope ? this.get(backend, scope, name) : this.findByName(backend, name);
+    if (!existing) throw new Error(`unknown skill: ${backend}/${name}`);
+    return this.upsert({ ...existing, enabled });
+  }
+
+  get(backend: Backend, scope: SkillScope, name: string): SkillEntry | null {
+    const row = this.db.get<Row>("SELECT * FROM skills WHERE id = ?", skillRowId(backend, scope, name));
+    return row ? rowToSkillEntry(row) : null;
+  }
+
+  private findByName(backend: Backend, name: string): SkillEntry | null {
+    const row = this.db.get<Row>(
+      "SELECT * FROM skills WHERE backend = ? AND name = ? ORDER BY source LIMIT 1",
+      backend,
+      name,
+    );
+    return row ? rowToSkillEntry(row) : null;
+  }
+
+  /** `integrations.list {backend}`'s `skills`. */
+  listByBackend(backend: Backend): SkillEntry[] {
+    return this.db
+      .all<Row>("SELECT * FROM skills WHERE backend = ? ORDER BY source, name", backend)
+      .map(rowToSkillEntry);
+  }
+}
+
+function policyRowId(backend: Backend, scope: ToolPolicyScope, pattern: string): string {
+  return `${backend}:${scope}:${pattern}`;
+}
+
+function rowToToolPolicyEntry(row: Row): ToolPolicyEntry {
+  return ToolPolicyEntrySchema.parse({
+    backend: row.backend,
+    pattern: row.pattern,
+    decision: row.action,
+    scope: row.scope,
+  });
+}
+
+/**
+ * One row per (`backend`, `scope`, `pattern`) — `integrations.tools.*`.
+ * `policies.session_id` (0001) is left NULL by every write here: none of
+ * `ToolPolicyScopeSchema`'s three values names a particular session, only a
+ * *kind* of scope (see `ToolPolicyScope`'s doc comment) — Phase 9's fuller
+ * Policies page (P17) is the one that would start populating it.
+ */
+export class ToolPoliciesRepo {
+  constructor(private readonly db: Database) {}
+
+  /** `integrations.tools.setPolicy` — insert or replace by natural key
+   *  (migration 0005's unique index on `backend, scope, pattern`). */
+  upsert(entry: ToolPolicyEntry): ToolPolicyEntry {
+    const parsed = ToolPolicyEntrySchema.parse(entry);
+    const id = policyRowId(parsed.backend, parsed.scope, parsed.pattern);
+    const ts = now();
+    this.db.run(
+      `INSERT INTO policies (id, backend, scope, session_id, pattern, action, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         action     = excluded.action,
+         updated_at = excluded.updated_at`,
+      id,
+      parsed.backend,
+      parsed.scope,
+      parsed.pattern,
+      parsed.decision,
+      ts,
+      ts,
+    );
+    return parsed;
+  }
+
+  /** `integrations.tools.removePolicy`. */
+  remove(backend: Backend, scope: ToolPolicyScope, pattern: string): boolean {
+    return this.db.run("DELETE FROM policies WHERE id = ?", policyRowId(backend, scope, pattern)) > 0;
+  }
+
+  /** `integrations.list {backend}`'s `tools`. */
+  listByBackend(backend: Backend): ToolPolicyEntry[] {
+    return this.db
+      .all<Row>("SELECT * FROM policies WHERE backend = ? ORDER BY scope, pattern", backend)
+      .map(rowToToolPolicyEntry);
   }
 }

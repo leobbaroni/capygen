@@ -10,6 +10,7 @@ import {
   BlockSchema,
   DEFAULT_SESSION_SETTINGS,
   DEFAULT_SETTINGS,
+  DEFAULT_GLOBAL_SETTINGS,
   DevServerDraftSchema,
   DevServerRunSchema,
   DevServerSchema,
@@ -17,21 +18,29 @@ import {
   FileEntrySchema,
   GitDiffSchema,
   GitStatusSchema,
+  GlobalSettingsSchema,
   HarnessInfoSchema,
   INVOKE_CHANNEL_NAMES,
   IpcContractError,
+  McpServerEntrySchema,
   PANE_KINDS,
+  PluginEntrySchema,
+  PrereqStepSchema,
   SessionSchema,
   SessionSettingsSchema,
   SettingsSchema,
+  SkillEntrySchema,
   TaskPatchSchema,
   TaskSchema,
   TerminalInfoSchema,
+  ToolPolicyEntrySchema,
   WorkspaceLayoutSchema,
   defineIpc,
   deriveMentionName,
   isInvokeChannel,
+  mergeGlobalSettingsPatch,
   newId,
+  resetGlobalSettingsSection,
   type IpcTransport,
 } from "./index.js";
 
@@ -79,7 +88,29 @@ describe("IPC contract", () => {
       "widget.event",
       "settings.get",
       "settings.set",
+      "settings.getAll",
+      "settings.patch",
+      "settings.reset",
       "app.version",
+      "integrations.list",
+      "integrations.mcp.add",
+      "integrations.mcp.update",
+      "integrations.mcp.remove",
+      "integrations.mcp.test",
+      "integrations.plugin.install",
+      "integrations.plugin.uninstall",
+      "integrations.plugin.setEnabled",
+      "integrations.plugin.marketplaces",
+      "integrations.skill.setEnabled",
+      "integrations.skill.create",
+      "integrations.skill.open",
+      "integrations.tools.setPolicy",
+      "integrations.tools.removePolicy",
+      "integrations.refresh",
+      "prereqs.status",
+      "prereqs.run",
+      "diagnostics.get",
+      "diagnostics.copy",
       "layout.get",
       "layout.set",
       "fs.list",
@@ -103,6 +134,7 @@ describe("IPC contract", () => {
       "servers.logs",
       "servers.saveCustom",
       "servers.remove",
+      "tasks.create",
       "tasks.list",
       "tasks.update",
       "browser.attach",
@@ -128,6 +160,9 @@ describe("IPC contract", () => {
       "servers.log",
       "tasks.updated",
       "browser.state",
+      "settings.changed",
+      "integrations.changed",
+      "prereqs.changed",
     ]);
   });
 
@@ -588,5 +623,161 @@ describe("Phase 5: workspace panes, dev servers, tasks (contracts)", () => {
     expect(status.entries).toHaveLength(1);
     const diff = GitDiffSchema.parse({ path: "a.ts", unified: "@@ -1 +1 @@" });
     expect(diff.binary).toBeUndefined();
+  });
+});
+
+describe("Phase 6: settings hub, integrations, prerequisites (contracts)", () => {
+  it("fills the sectioned defaults for an empty GlobalSettings row", () => {
+    expect(GlobalSettingsSchema.parse({})).toEqual(DEFAULT_GLOBAL_SETTINGS);
+    expect(DEFAULT_GLOBAL_SETTINGS.general).toEqual({
+      defaultBackend: "claude",
+      defaultModel: "claude-opus-4-5",
+      submitWithCtrlEnter: false,
+      alwaysSteer: false,
+      autoTitleSessions: true,
+    });
+    expect(DEFAULT_GLOBAL_SETTINGS.efficiency).toEqual({
+      compactionThresholdPct: 70,
+      toolOutputCapKb: 64,
+      lazyMcpSchemas: true,
+    });
+    expect(DEFAULT_GLOBAL_SETTINGS.telemetry).toBe(false);
+    // The layering's middle rung: every per-backend default starts unset,
+    // not defaulted to some concrete permissionMode/approvalPolicy/provider.
+    expect(DEFAULT_GLOBAL_SETTINGS.backends).toEqual({ claude: {}, codex: {}, api: {} });
+  });
+
+  it("mergeGlobalSettingsPatch merges one section without clobbering its siblings or other sections (the jitless-defaults bug this shape avoids)", () => {
+    const first = mergeGlobalSettingsPatch(DEFAULT_GLOBAL_SETTINGS, {
+      general: { defaultModel: "claude-sonnet-4-5" },
+    });
+    expect(first.general).toEqual({
+      ...DEFAULT_GLOBAL_SETTINGS.general,
+      defaultModel: "claude-sonnet-4-5",
+    });
+    // A second, unrelated patch must not reset the first patch's field.
+    const second = mergeGlobalSettingsPatch(first, { appearance: { theme: "dark" } });
+    expect(second.general.defaultModel).toBe("claude-sonnet-4-5");
+    expect(second.appearance).toEqual({ ...DEFAULT_GLOBAL_SETTINGS.appearance, theme: "dark" });
+  });
+
+  it("mergeGlobalSettingsPatch merges nested backend defaults per-backend", () => {
+    const withClaude = mergeGlobalSettingsPatch(DEFAULT_GLOBAL_SETTINGS, {
+      backends: { claude: { permissionMode: "plan" } },
+    });
+    const withCodexToo = mergeGlobalSettingsPatch(withClaude, {
+      backends: { codex: { approvalPolicy: "untrusted" } },
+    });
+    expect(withCodexToo.backends).toEqual({
+      claude: { permissionMode: "plan" },
+      codex: { approvalPolicy: "untrusted" },
+      api: {},
+    });
+  });
+
+  it("mergeGlobalSettingsPatch replaces shortcuts.overrides wholesale, not key-by-key", () => {
+    const withA = mergeGlobalSettingsPatch(DEFAULT_GLOBAL_SETTINGS, {
+      shortcuts: { overrides: { "chat.send": "Ctrl+Enter" } },
+    });
+    const withB = mergeGlobalSettingsPatch(withA, {
+      shortcuts: { overrides: { "chat.clear": "Ctrl+K" } },
+    });
+    // "chat.send" is gone: a patch that names shortcuts always submits the
+    // whole table (GlobalShortcutsPatchSchema's doc comment).
+    expect(withB.shortcuts.overrides).toEqual({ "chat.clear": "Ctrl+K" });
+  });
+
+  it("resetGlobalSettingsSection resets only the named section, and 'all' resets everything", () => {
+    const edited = mergeGlobalSettingsPatch(DEFAULT_GLOBAL_SETTINGS, {
+      general: { defaultModel: "claude-sonnet-4-5" },
+      appearance: { theme: "dark" },
+    });
+    const generalReset = resetGlobalSettingsSection(edited, "general");
+    expect(generalReset.general).toEqual(DEFAULT_GLOBAL_SETTINGS.general);
+    expect(generalReset.appearance.theme).toBe("dark"); // untouched
+
+    expect(resetGlobalSettingsSection(edited, "all")).toEqual(DEFAULT_GLOBAL_SETTINGS);
+  });
+
+  it("round-trips an MCP server entry and rejects one with no id-worthy identity fields", () => {
+    const entry = McpServerEntrySchema.parse({
+      backend: "claude",
+      name: "higgsfield",
+      transport: "stdio",
+      command: "npx",
+      args: ["-y", "higgsfield-mcp"],
+      scope: "project",
+      source: "C:\\proj\\.mcp.json",
+    });
+    expect(entry.enabled).toBe(true); // default
+    expect(entry.status).toBeUndefined();
+
+    expect(() =>
+      McpServerEntrySchema.parse({ backend: "claude", transport: "stdio", scope: "user", source: "live" }),
+    ).toThrow(); // missing name
+  });
+
+  it("round-trips a plugin entry, a skill entry and a tool policy entry", () => {
+    const plugin = PluginEntrySchema.parse({
+      backend: "claude",
+      name: "cockpit",
+      source: "C:\\Users\\x\\.claude\\plugins\\installed_plugins.json",
+    });
+    expect(plugin).toMatchObject({ enabled: true, installed: true, commands: [], skills: [] });
+
+    const skill = SkillEntrySchema.parse({
+      backend: "claude",
+      name: "graphify",
+      scope: "user",
+      path: "C:\\Users\\x\\.claude\\skills\\graphify\\SKILL.md",
+    });
+    expect(skill.enabled).toBe(true);
+
+    const policy = ToolPolicyEntrySchema.parse({
+      backend: "codex",
+      pattern: "Bash(rm *)",
+      decision: "deny",
+      scope: "global",
+    });
+    expect(policy.decision).toBe("deny");
+  });
+
+  it("round-trips a prereq step, including a blockedBy chain", () => {
+    const step = PrereqStepSchema.parse({
+      id: "codex-cli",
+      title: "Install Codex CLI",
+      detected: false,
+      command: "npm install -g @openai/codex",
+      kind: "cli",
+      blockedBy: ["node"],
+    });
+    expect(step.description).toBe(""); // defaulted
+    expect(step.blockedBy).toEqual(["node"]);
+  });
+
+  it("sends only the given section for settings.patch, not the other sections (the same jitless-default fix as settings.set)", async () => {
+    const invoke = vi.fn(async () => DEFAULT_GLOBAL_SETTINGS);
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    await ipc.invoke("settings.patch", { patch: { general: { defaultModel: "claude-sonnet-4-5" } } });
+
+    expect(invoke).toHaveBeenCalledWith("settings.patch", {
+      patch: { general: { defaultModel: "claude-sonnet-4-5" } },
+    });
+  });
+
+  it("integrations.list answers one backend's whole snapshot, lastSync null until synced", async () => {
+    const invoke = vi.fn(async () => ({
+      mcpServers: [],
+      plugins: [],
+      skills: [],
+      tools: [],
+      lastSync: null,
+    }));
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    const result = await ipc.invoke("integrations.list", { backend: "codex" });
+    expect(result.lastSync).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("integrations.list", { backend: "codex" });
   });
 });

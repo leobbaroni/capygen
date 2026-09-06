@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { newId, type Block, type Task, type TextBlock } from "@capygen/shared";
+import { DEFAULT_GLOBAL_SETTINGS, newId, type Block, type Task, type TextBlock } from "@capygen/shared";
 import {
   openStore,
   openDatabase,
@@ -142,6 +142,7 @@ describe("migrations", () => {
       "0002_widgets_elicitations_tool_outputs",
       "0003_round_table_agents",
       "0004_workspace_panes",
+      "0005_integrations_backend_column",
     ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
@@ -190,6 +191,7 @@ describe("migrations", () => {
       "0002_widgets_elicitations_tool_outputs",
       "0003_round_table_agents",
       "0004_workspace_panes",
+      "0005_integrations_backend_column",
     ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),
@@ -905,5 +907,217 @@ describe("Phase 5: workspace_layouts, dev_servers, tasks (migration 0004)", () =
     const task = store.tasks.create({ title: "Throwaway" });
     expect(store.tasks.remove(task.id)).toBe(true);
     expect(store.tasks.get(task.id)).toBeNull();
+  });
+});
+
+describe("Phase 6: global settings, integrations caches (migration 0005)", () => {
+  it("globalSettings.all() returns the shipping defaults for an empty row", () => {
+    expect(store.globalSettings.all()).toEqual(DEFAULT_GLOBAL_SETTINGS);
+  });
+
+  it("globalSettings.patch() merges one section without clobbering its siblings, and survives a reopen", () => {
+    store.globalSettings.patch({ general: { defaultModel: "claude-sonnet-4-5" } });
+    const afterFirst = store.globalSettings.all();
+    expect(afterFirst.general).toEqual({
+      ...DEFAULT_GLOBAL_SETTINGS.general,
+      defaultModel: "claude-sonnet-4-5",
+    });
+
+    // A second, unrelated patch must not reset the first patch's field —
+    // the same jitless-defaults hazard `SettingsRepo.patch` already avoids
+    // for the flat `Settings`.
+    store.globalSettings.patch({ appearance: { theme: "dark" } });
+    const afterSecond = store.globalSettings.all();
+    expect(afterSecond.general.defaultModel).toBe("claude-sonnet-4-5");
+    expect(afterSecond.appearance.theme).toBe("dark");
+
+    store.close();
+    store = open();
+    expect(store.globalSettings.all().general.defaultModel).toBe("claude-sonnet-4-5");
+    expect(store.globalSettings.all().appearance.theme).toBe("dark");
+  });
+
+  it("globalSettings.reset() resets one section, and 'all' resets everything", () => {
+    store.globalSettings.patch({
+      general: { defaultModel: "claude-sonnet-4-5" },
+      appearance: { theme: "dark" },
+    });
+    const generalReset = store.globalSettings.reset("general");
+    expect(generalReset.general).toEqual(DEFAULT_GLOBAL_SETTINGS.general);
+    expect(generalReset.appearance.theme).toBe("dark"); // untouched
+
+    const allReset = store.globalSettings.reset("all");
+    expect(allReset).toEqual(DEFAULT_GLOBAL_SETTINGS);
+  });
+
+  it("mcpServers: upsert() mints a deterministic id from backend+scope+name and round-trips every field", () => {
+    const entry = store.mcpServers.upsert({
+      backend: "claude",
+      name: "higgsfield",
+      transport: "stdio",
+      command: "npx",
+      args: ["-y", "higgsfield-mcp"],
+      env: { HIGGSFIELD_API_KEY: "${HIGGSFIELD_API_KEY}" },
+      scope: "project",
+      source: "C:\\proj\\.mcp.json",
+      enabled: true,
+      tools: ["animate", "edit"],
+    });
+    expect(entry.tools).toEqual(["animate", "edit"]);
+    expect(store.mcpServers.get("claude", "project", "higgsfield")).toEqual(entry);
+  });
+
+  it("mcpServers: re-upserting the same natural key updates in place instead of duplicating", () => {
+    const draft = {
+      backend: "codex" as const,
+      name: "docs",
+      transport: "http" as const,
+      url: "https://docs.example/mcp",
+      scope: "user" as const,
+      source: "live",
+      enabled: true,
+    };
+    store.mcpServers.upsert(draft);
+    store.mcpServers.upsert({ ...draft, enabled: false, status: "failed" });
+    const rows = store.mcpServers.listByBackend("codex");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ enabled: false, status: "failed" });
+  });
+
+  it("mcpServers: listByBackend() only returns that backend's entries", () => {
+    store.mcpServers.upsert({
+      backend: "claude",
+      name: "a",
+      transport: "stdio",
+      scope: "user",
+      source: "live",
+      enabled: true,
+    });
+    store.mcpServers.upsert({
+      backend: "codex",
+      name: "b",
+      transport: "stdio",
+      scope: "user",
+      source: "live",
+      enabled: true,
+    });
+    expect(store.mcpServers.listByBackend("claude").map((e) => e.name)).toEqual(["a"]);
+    expect(store.mcpServers.listByBackend("api")).toEqual([]);
+  });
+
+  it("mcpServers: update() merge-patches by natural key and throws for an unknown one", () => {
+    store.mcpServers.upsert({
+      backend: "claude",
+      name: "a",
+      transport: "stdio",
+      command: "npx",
+      scope: "user",
+      source: "live",
+      enabled: true,
+    });
+    const updated = store.mcpServers.update("claude", "user", "a", { enabled: false });
+    expect(updated).toMatchObject({ enabled: false, command: "npx" }); // command untouched
+    expect(() => store.mcpServers.update("claude", "user", "nope", { enabled: true })).toThrow(
+      /unknown mcp server/,
+    );
+  });
+
+  it("mcpServers: remove() deletes by natural key", () => {
+    store.mcpServers.upsert({
+      backend: "claude",
+      name: "a",
+      transport: "stdio",
+      scope: "user",
+      source: "live",
+      enabled: true,
+    });
+    expect(store.mcpServers.remove("claude", "user", "a")).toBe(true);
+    expect(store.mcpServers.get("claude", "user", "a")).toBeNull();
+    expect(store.mcpServers.remove("claude", "user", "a")).toBe(false);
+  });
+
+  it("plugins: upsert() keys by backend+name, defaults commands/skills to [], and version round-trips through the empty-string column", () => {
+    const plugin = store.plugins.upsert({
+      backend: "claude",
+      name: "cockpit",
+      marketplace: "anthropic-experimental",
+      source: "C:\\Users\\x\\.claude\\plugins\\installed_plugins.json",
+    });
+    expect(plugin).toMatchObject({ enabled: true, installed: true, commands: [], skills: [] });
+    expect(plugin.version).toBeUndefined();
+    expect(store.plugins.get("claude", "cockpit")).toEqual(plugin);
+  });
+
+  it("plugins: setEnabled() flips the flag without touching manifest fields, and throws for an unknown plugin", () => {
+    store.plugins.upsert({
+      backend: "claude",
+      name: "cockpit",
+      commands: ["/pilot"],
+      skills: [],
+      source: "live",
+    });
+    const disabled = store.plugins.setEnabled("claude", "cockpit", false);
+    expect(disabled).toMatchObject({ enabled: false, commands: ["/pilot"] });
+    expect(() => store.plugins.setEnabled("claude", "nope", true)).toThrow(/unknown plugin/);
+  });
+
+  it("plugins: listByBackend() filters and remove() deletes", () => {
+    store.plugins.upsert({ backend: "claude", name: "a", source: "live" });
+    store.plugins.upsert({ backend: "codex", name: "b", source: "live" });
+    expect(store.plugins.listByBackend("claude").map((p) => p.name)).toEqual(["a"]);
+    expect(store.plugins.remove("claude", "a")).toBe(true);
+    expect(store.plugins.listByBackend("claude")).toEqual([]);
+  });
+
+  it("skills: upsert() keys by backend+scope+name, reusing the 0001 source column for scope", () => {
+    const skill = store.skills.upsert({
+      backend: "claude",
+      name: "graphify",
+      scope: "user",
+      path: "C:\\Users\\x\\.claude\\skills\\graphify\\SKILL.md",
+      description: "Build a knowledge graph",
+    });
+    expect(skill.enabled).toBe(true);
+    expect(store.skills.get("claude", "user", "graphify")).toEqual(skill);
+    // The row's own `source` column literally holds the scope value.
+    expect(store.db.get<{ source: string }>("SELECT source FROM skills WHERE id = ?", "claude:user:graphify")?.source).toBe(
+      "user",
+    );
+  });
+
+  it("skills: setEnabled() resolves by name alone when scope is omitted, and disambiguates when it is given", () => {
+    store.skills.upsert({ backend: "claude", name: "pilot", scope: "user", path: "u.md" });
+    store.skills.upsert({ backend: "claude", name: "pilot", scope: "project", path: "p.md" });
+
+    const byName = store.skills.setEnabled("claude", "pilot", false);
+    expect(byName.enabled).toBe(false);
+
+    const byScope = store.skills.setEnabled("claude", "pilot", false, "project");
+    expect(byScope.scope).toBe("project");
+    expect(() => store.skills.setEnabled("claude", "nope", true)).toThrow(/unknown skill/);
+  });
+
+  it("skills: listByBackend() filters by backend", () => {
+    store.skills.upsert({ backend: "claude", name: "a", scope: "user", path: "a.md" });
+    store.skills.upsert({ backend: "codex", name: "b", scope: "user", path: "b.md" });
+    expect(store.skills.listByBackend("claude").map((s) => s.name)).toEqual(["a"]);
+  });
+
+  it("toolPolicies: upsert() is idempotent by backend+scope+pattern (migration 0005's unique index)", () => {
+    store.toolPolicies.upsert({ backend: "codex", pattern: "Bash(rm *)", decision: "deny", scope: "global" });
+    store.toolPolicies.upsert({ backend: "codex", pattern: "Bash(rm *)", decision: "ask", scope: "global" });
+    const rows = store.toolPolicies.listByBackend("codex");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ decision: "ask" });
+  });
+
+  it("toolPolicies: listByBackend() filters by backend and remove() deletes by natural key", () => {
+    store.toolPolicies.upsert({ backend: "claude", pattern: "Bash(*)", decision: "ask", scope: "global" });
+    store.toolPolicies.upsert({ backend: "codex", pattern: "Bash(*)", decision: "allow", scope: "project" });
+    expect(store.toolPolicies.listByBackend("claude").map((p) => p.decision)).toEqual(["ask"]);
+    expect(store.toolPolicies.remove("claude", "global", "Bash(*)")).toBe(true);
+    expect(store.toolPolicies.listByBackend("claude")).toEqual([]);
+    // The other backend's row is untouched.
+    expect(store.toolPolicies.listByBackend("codex")).toHaveLength(1);
   });
 });

@@ -1259,3 +1259,570 @@ export const BoundsSchema = z.object({
   height: z.number().nonnegative(),
 });
 export type Bounds = z.infer<typeof BoundsSchema>;
+
+// ---------------------------------------------------------------------------
+// Phase 6: Settings hub, integrations, prerequisites (SPEC R3, R19-R21,
+// R28-R30). Three families:
+//
+//   * GlobalSettings — one versioned object, sectioned (general, appearance,
+//     git, shortcuts, notifications, updates, efficiency) plus a few
+//     top-level flags and per-backend *defaults*. It is additive alongside
+//     the flat `SettingsSchema` above (Phase 2's shipping settings surface —
+//     still what `SessionRunner`, `appStore` and `DevWorkspacePage` read via
+//     `settings.get`/`.set`; this pass does not migrate those call sites): a
+//     fresh `GlobalSettingsSchema.parse({})` and `DEFAULT_SETTINGS` overlap
+//     on a few concepts (theme, default backend/model, close-to-tray) by
+//     design, and `GlobalSettingsRepo` (`@capygen/db`) stores the whole
+//     object under one more `settings` key/value row rather than a new
+//     table — see migration 0005's header for why no schema change was
+//     needed for this part. Layering (R30, the same idea R12 already
+//     established for sub-agent routing): **global**
+//     (`GlobalSettings.backends.<backend>`) is the floor every agent on that
+//     backend starts from; a **per-agent** override (`Agent.config.<backend>`,
+//     shipped in Phase 3) wins field-by-field wherever both set the same key,
+//     and a harness that finds neither falls back to its own hardcoded
+//     default exactly as it does today. Neither layer is a full harness
+//     config — `ClaudeAgentConfigSchema`/`CodexAgentConfigSchema`/
+//     `ApiAgentConfigSchema` above stay the full per-agent shape;
+//     `GlobalBackendDefaultsSchema` below is deliberately a narrower subset
+//     (SPEC's own field list) since only fields a *global* default makes
+//     sense for belong there.
+//   * Integrations — `McpServerEntry`, `PluginEntry`, `SkillEntry`,
+//     `ToolPolicyEntry`: what Settings ▸ Integrations lists per backend
+//     (R28). The backend's own config file (or live listing) is the source
+//     of truth (R29) — these are capygen's read model of it, cached in
+//     `@capygen/db`'s existing `mcp_servers`/`plugins`/`skills`/`policies`
+//     tables (migration 0001; migration 0005 adds the `backend` column two
+//     of those four were missing).
+//   * Prerequisites/diagnostics — `PrereqStep` (the setup panel, R3) and
+//     `DiagnosticsInfoSchema` (Settings ▸ Diagnostics) are live-probed, not
+//     persisted; no repo owns either.
+// ---------------------------------------------------------------------------
+
+export const GlobalGeneralSchema = z
+  .object({
+    defaultBackend: BackendSchema.default("claude"),
+    defaultModel: z.string().default("claude-opus-4-5"),
+    submitWithCtrlEnter: z.boolean().default(false),
+    alwaysSteer: z.boolean().default(false),
+    autoTitleSessions: z.boolean().default(true),
+  })
+  .passthrough();
+export type GlobalGeneral = z.infer<typeof GlobalGeneralSchema>;
+
+/** Hand-written, no defaults — the same jitless-defaults hazard
+ *  `SettingsPatchSchema` documents: every field above carries a `.default()`,
+ *  so `GlobalGeneralSchema.partial()` would fill an omitted key with its
+ *  default instead of leaving it absent under this codebase's mandatory
+ *  `z.config({jitless:true})`. */
+export const GlobalGeneralPatchSchema = z
+  .object({
+    defaultBackend: BackendSchema.optional(),
+    defaultModel: z.string().optional(),
+    submitWithCtrlEnter: z.boolean().optional(),
+    alwaysSteer: z.boolean().optional(),
+    autoTitleSessions: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalGeneralPatch = z.infer<typeof GlobalGeneralPatchSchema>;
+
+export const GlobalAppearanceSchema = z
+  .object({
+    theme: ThemeSchema.default("system"),
+    /** Free-form palette id (Omnigent ships several named palettes); not
+     *  enumerated here so a new palette ships without a schema change. */
+    palette: z.string().min(1).default("default"),
+    /** Multiplier on the base UI font size — distinct from `SettingsSchema`
+     *  above's `uiFontSize`, which is an absolute pixel value. */
+    fontScale: z.number().min(0.75).max(1.5).default(1),
+    reducedMotion: z.boolean().default(false),
+  })
+  .passthrough();
+export type GlobalAppearance = z.infer<typeof GlobalAppearanceSchema>;
+
+export const GlobalAppearancePatchSchema = z
+  .object({
+    theme: ThemeSchema.optional(),
+    palette: z.string().min(1).optional(),
+    fontScale: z.number().min(0.75).max(1.5).optional(),
+    reducedMotion: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalAppearancePatch = z.infer<typeof GlobalAppearancePatchSchema>;
+
+export const GlobalGitSchema = z
+  .object({
+    /** Auto-generate a commit message from the diff when an agent commits.
+     *  Unset (not merely `false`) means "ask each time" rather than a fixed
+     *  policy — the only field in this file that stays genuinely optional in
+     *  its *full* shape, per SPEC's own `autoCommitMessages?`. */
+    autoCommitMessages: z.boolean().optional(),
+    /** Whether a new session defaults to running in its own worktree (P8). */
+    worktreeDefault: z.boolean().default(false),
+  })
+  .passthrough();
+export type GlobalGit = z.infer<typeof GlobalGitSchema>;
+
+export const GlobalGitPatchSchema = z
+  .object({
+    autoCommitMessages: z.boolean().optional(),
+    worktreeDefault: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalGitPatch = z.infer<typeof GlobalGitPatchSchema>;
+
+export const GlobalShortcutsSchema = z
+  .object({
+    /** Keybinding id → key combo string, overriding the shipped default. */
+    overrides: z.record(z.string(), z.string()).default({}),
+  })
+  .passthrough();
+export type GlobalShortcuts = z.infer<typeof GlobalShortcutsSchema>;
+
+/** Whole-map replace, not a per-key merge: the Shortcuts settings page always
+ *  submits its full table, and there is no way to express "delete this
+ *  override" inside a record that gets merged key-by-key. See
+ *  `mergeGlobalSettingsPatch`, the one place this distinction matters. */
+export const GlobalShortcutsPatchSchema = z
+  .object({
+    overrides: z.record(z.string(), z.string()).optional(),
+  })
+  .passthrough();
+export type GlobalShortcutsPatch = z.infer<typeof GlobalShortcutsPatchSchema>;
+
+export const GlobalNotificationsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    onFinish: z.boolean().default(true),
+    onNeedsInput: z.boolean().default(true),
+    onRunnerDisconnect: z.boolean().default(true),
+  })
+  .passthrough();
+export type GlobalNotifications = z.infer<typeof GlobalNotificationsSchema>;
+
+export const GlobalNotificationsPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    onFinish: z.boolean().optional(),
+    onNeedsInput: z.boolean().optional(),
+    onRunnerDisconnect: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalNotificationsPatch = z.infer<typeof GlobalNotificationsPatchSchema>;
+
+export const UpdateModeSchema = z.enum(["automatic", "at-launch", "manual", "never"]);
+export type UpdateMode = z.infer<typeof UpdateModeSchema>;
+
+export const GlobalUpdatesSchema = z
+  .object({
+    mode: UpdateModeSchema.default("at-launch"),
+    /** Install a downloaded update on quit rather than immediately (R4:
+     *  "never install without an explicit click" — quitting is that click
+     *  when this is on). */
+    installOnQuit: z.boolean().default(false),
+  })
+  .passthrough();
+export type GlobalUpdates = z.infer<typeof GlobalUpdatesSchema>;
+
+export const GlobalUpdatesPatchSchema = z
+  .object({
+    mode: UpdateModeSchema.optional(),
+    installOnQuit: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalUpdatesPatch = z.infer<typeof GlobalUpdatesPatchSchema>;
+
+export const GlobalEfficiencySchema = z
+  .object({
+    /** Percent (not the 0-1 fraction `SettingsSchema.compactionThreshold`
+     *  above uses) at which compaction is offered/auto-run (R25). */
+    compactionThresholdPct: z.number().int().min(10).max(95).default(70),
+    /** KB above which a tool output is stored whole but sent to the model
+     *  truncated with an expandable stub (R25, SPEC §Edge Cases). */
+    toolOutputCapKb: z.number().int().positive().default(64),
+    /** Load MCP tool schemas on first listing rather than eagerly (R26). */
+    lazyMcpSchemas: z.boolean().default(true),
+  })
+  .passthrough();
+export type GlobalEfficiency = z.infer<typeof GlobalEfficiencySchema>;
+
+export const GlobalEfficiencyPatchSchema = z
+  .object({
+    compactionThresholdPct: z.number().int().min(10).max(95).optional(),
+    toolOutputCapKb: z.number().int().positive().optional(),
+    lazyMcpSchemas: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalEfficiencyPatch = z.infer<typeof GlobalEfficiencyPatchSchema>;
+
+export const GlobalClaudeDefaultsSchema = z
+  .object({
+    permissionMode: PermissionModeSchema.optional(),
+    /** Free-form preset name for the `/effort` built-in, same vocabulary as
+     *  `ClaudeAgentConfig.effort`. */
+    effort: z.string().optional(),
+  })
+  .passthrough();
+export type GlobalClaudeDefaults = z.infer<typeof GlobalClaudeDefaultsSchema>;
+
+export const GlobalCodexDefaultsSchema = z
+  .object({
+    approvalPolicy: CodexApprovalPolicySchema.optional(),
+    sandbox: CodexSandboxModeSchema.optional(),
+    reasoningEffort: z.string().optional(),
+  })
+  .passthrough();
+export type GlobalCodexDefaults = z.infer<typeof GlobalCodexDefaultsSchema>;
+
+export const GlobalApiDefaultsSchema = z
+  .object({
+    provider: ApiProviderSchema.optional(),
+    model: z.string().optional(),
+  })
+  .passthrough();
+export type GlobalApiDefaults = z.infer<typeof GlobalApiDefaultsSchema>;
+
+/**
+ * Per-backend *global* defaults (R30) — the middle layer of "global →
+ * backend default → agent override". Every field is independently optional:
+ * an unset one means "no global opinion", the same way an absent
+ * `Agent.config.<backend>` field already falls back to the harness's own
+ * hardcoded default. None of the three inner schemas carries a `.default()`
+ * on any field, so — unlike every section above — wrapping them in
+ * `.optional()` for a patch (below) needs no hand-written twin; there is no
+ * default for `.optional()` to accidentally unmask.
+ */
+export const GlobalBackendDefaultsSchema = z
+  .object({
+    claude: GlobalClaudeDefaultsSchema.default(() => GlobalClaudeDefaultsSchema.parse({})),
+    codex: GlobalCodexDefaultsSchema.default(() => GlobalCodexDefaultsSchema.parse({})),
+    api: GlobalApiDefaultsSchema.default(() => GlobalApiDefaultsSchema.parse({})),
+  })
+  .passthrough();
+export type GlobalBackendDefaults = z.infer<typeof GlobalBackendDefaultsSchema>;
+
+export const GlobalBackendDefaultsPatchSchema = z
+  .object({
+    claude: GlobalClaudeDefaultsSchema.optional(),
+    codex: GlobalCodexDefaultsSchema.optional(),
+    api: GlobalApiDefaultsSchema.optional(),
+  })
+  .passthrough();
+export type GlobalBackendDefaultsPatch = z.infer<typeof GlobalBackendDefaultsPatchSchema>;
+
+export const GlobalSettingsSectionSchema = z.enum([
+  "general",
+  "appearance",
+  "git",
+  "shortcuts",
+  "notifications",
+  "updates",
+  "efficiency",
+  "backends",
+  "all",
+]);
+export type GlobalSettingsSection = z.infer<typeof GlobalSettingsSectionSchema>;
+
+export const GlobalSettingsSchema = z
+  .object({
+    /** Bumped whenever this shape changes incompatibly; lets
+     *  `GlobalSettingsRepo` tell a stale stored blob apart from a
+     *  merely-partial one without a new SQL migration — the whole object
+     *  lives in one `settings` key/value row (migration 0005's header). */
+    version: z.number().int().positive().default(1),
+    general: GlobalGeneralSchema.default(() => GlobalGeneralSchema.parse({})),
+    appearance: GlobalAppearanceSchema.default(() => GlobalAppearanceSchema.parse({})),
+    git: GlobalGitSchema.default(() => GlobalGitSchema.parse({})),
+    shortcuts: GlobalShortcutsSchema.default(() => GlobalShortcutsSchema.parse({})),
+    notifications: GlobalNotificationsSchema.default(() => GlobalNotificationsSchema.parse({})),
+    updates: GlobalUpdatesSchema.default(() => GlobalUpdatesSchema.parse({})),
+    efficiency: GlobalEfficiencySchema.default(() => GlobalEfficiencySchema.parse({})),
+    backends: GlobalBackendDefaultsSchema.default(() => GlobalBackendDefaultsSchema.parse({})),
+    closeToTray: z.boolean().default(true),
+    startWithWindows: z.boolean().default(false),
+    /** Always false — capygen sends no telemetry (local-only app, SPEC
+     *  scope). A fixed literal, not a plain boolean, so nothing can flip it
+     *  by accident; `GlobalSettingsPatchSchema` does not even accept this
+     *  key (see its doc comment) so there is no patch path that could try. */
+    telemetry: z.literal(false).default(false),
+  })
+  .passthrough();
+export type GlobalSettings = z.infer<typeof GlobalSettingsSchema>;
+
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = GlobalSettingsSchema.parse({});
+
+/**
+ * `settings.patch`'s input. Hand-written and section-shaped rather than a
+ * deep `.partial()`, for the same jitless-defaults reason `SettingsPatchSchema`
+ * documents, one level deeper: every leaf in every section above carries a
+ * `.default()`, so naively wrapping the whole tree in `.optional()` would
+ * make an omitted leaf come back filled with its default instead of staying
+ * absent — and `mergeGlobalSettingsPatch` below would then "merge" that
+ * default straight over whatever the user had actually set. `version` and
+ * `telemetry` are deliberately absent: the shape version is not something a
+ * settings page edits, and telemetry is fixed off.
+ */
+export const GlobalSettingsPatchSchema = z
+  .object({
+    general: GlobalGeneralPatchSchema.optional(),
+    appearance: GlobalAppearancePatchSchema.optional(),
+    git: GlobalGitPatchSchema.optional(),
+    shortcuts: GlobalShortcutsPatchSchema.optional(),
+    notifications: GlobalNotificationsPatchSchema.optional(),
+    updates: GlobalUpdatesPatchSchema.optional(),
+    efficiency: GlobalEfficiencyPatchSchema.optional(),
+    backends: GlobalBackendDefaultsPatchSchema.optional(),
+    closeToTray: z.boolean().optional(),
+    startWithWindows: z.boolean().optional(),
+  })
+  .passthrough();
+export type GlobalSettingsPatch = z.infer<typeof GlobalSettingsPatchSchema>;
+
+/**
+ * Deep-merge a patch into a full `GlobalSettings` (SPEC's `settings.patch`:
+ * "deep-merge, validated"). Each section is merged field-by-field against its
+ * existing values rather than replaced wholesale — `{ ...existing, ...patch }`
+ * alone would let a patch naming only `general.defaultModel` wipe out
+ * `general.defaultBackend` by re-running that section through
+ * `GlobalGeneralSchema`'s own defaults, the same hazard
+ * `SessionsRepo.updateSettings` already avoids for `SessionSettings`.
+ * `shortcuts.overrides` is the one deliberate exception — see
+ * `GlobalShortcutsPatchSchema`'s doc comment for why it replaces instead of
+ * merging key-by-key.
+ */
+export function mergeGlobalSettingsPatch(
+  existing: GlobalSettings,
+  patch: GlobalSettingsPatch,
+): GlobalSettings {
+  return GlobalSettingsSchema.parse({
+    ...existing,
+    ...patch,
+    general: { ...existing.general, ...patch.general },
+    appearance: { ...existing.appearance, ...patch.appearance },
+    git: { ...existing.git, ...patch.git },
+    shortcuts: patch.shortcuts
+      ? { overrides: patch.shortcuts.overrides ?? existing.shortcuts.overrides }
+      : existing.shortcuts,
+    notifications: { ...existing.notifications, ...patch.notifications },
+    updates: { ...existing.updates, ...patch.updates },
+    efficiency: { ...existing.efficiency, ...patch.efficiency },
+    backends: {
+      claude: { ...existing.backends.claude, ...patch.backends?.claude },
+      codex: { ...existing.backends.codex, ...patch.backends?.codex },
+      api: { ...existing.backends.api, ...patch.backends?.api },
+    },
+  });
+}
+
+/** `settings.reset`'s section → the shipping default for just that slice, or
+ *  the whole object for `"all"`. */
+export function resetGlobalSettingsSection(
+  existing: GlobalSettings,
+  section: GlobalSettingsSection,
+): GlobalSettings {
+  if (section === "all") return DEFAULT_GLOBAL_SETTINGS;
+  return GlobalSettingsSchema.parse({ ...existing, [section]: DEFAULT_GLOBAL_SETTINGS[section] });
+}
+
+// ---------------------------------------------------------------------------
+// Integrations (Phase 6, SPEC R28-R29) — MCP servers, plugins, skills, and
+// per-tool policies, for every backend.
+// ---------------------------------------------------------------------------
+
+export const McpTransportSchema = z.enum(["stdio", "http", "sse", "claudeai-proxy"]);
+export type McpTransport = z.infer<typeof McpTransportSchema>;
+
+export const McpServerScopeSchema = z.enum(["user", "project", "local", "plugin"]);
+export type McpServerScope = z.infer<typeof McpServerScopeSchema>;
+
+export const McpServerStatusSchema = z.enum(["connected", "failed", "needs-auth", "unknown"]);
+export type McpServerStatus = z.infer<typeof McpServerStatusSchema>;
+
+/**
+ * One MCP server as Settings ▸ Integrations lists it (R28). `source` is
+ * either the config file this entry was read from (`.mcp.json`,
+ * `~/.claude/settings.json`, `~/.codex/config.toml` — COMPAT.md's config
+ * sources table) or the literal `"live"` when the backend only reported it at
+ * runtime (`system/init.mcp_servers`, `mcpServerStatus/list`) with no file to
+ * point the user at. No `id` field: `backend`+`scope`+`name` is the natural
+ * key — `.update`/`.remove`/`.test` all address one entry by those fields
+ * rather than a synthetic id, and `McpServersRepo` mints its row id from
+ * exactly that triple.
+ */
+export const McpServerEntrySchema = z
+  .object({
+    backend: BackendSchema,
+    name: z.string().min(1),
+    transport: McpTransportSchema,
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    url: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    scope: McpServerScopeSchema,
+    source: z.string().min(1),
+    enabled: z.boolean().default(true),
+    status: McpServerStatusSchema.optional(),
+    tools: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
+
+/** `integrations.mcp.add`'s `entry` — `backend`/`scope` travel as the call's
+ *  own top-level fields (matching `.update`/`.remove`/`.test`, which all
+ *  address an entry the same way) rather than being duplicated inside it. */
+export const McpServerEntryDraftSchema = z
+  .object({
+    name: z.string().min(1),
+    transport: McpTransportSchema,
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    url: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    source: z.string().min(1),
+    enabled: z.boolean().optional(),
+    status: McpServerStatusSchema.optional(),
+    tools: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export type McpServerEntryDraft = z.infer<typeof McpServerEntryDraftSchema>;
+
+/** `integrations.mcp.update`'s patch. `name`/`transport`/`source` stay
+ *  patchable — nothing here is an identity field the way `backend`/`scope`
+ *  are for `McpServerEntry` (those two are the call's own top-level fields,
+ *  same as `.add`). */
+export const McpServerEntryPatchSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    transport: McpTransportSchema.optional(),
+    command: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    url: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    source: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+    status: McpServerStatusSchema.optional(),
+    tools: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export type McpServerEntryPatch = z.infer<typeof McpServerEntryPatchSchema>;
+
+export const PluginEntrySchema = z
+  .object({
+    backend: BackendSchema,
+    name: z.string().min(1),
+    version: z.string().optional(),
+    marketplace: z.string().optional(),
+    enabled: z.boolean().default(true),
+    installed: z.boolean().default(true),
+    path: z.string().optional(),
+    commands: z.array(z.string()).default([]),
+    skills: z.array(z.string()).default([]),
+    source: z.string().min(1),
+  })
+  .passthrough();
+export type PluginEntry = z.infer<typeof PluginEntrySchema>;
+
+/** One row of `integrations.plugin.marketplaces` — a registered marketplace
+ *  source (`claude plugin marketplace list`/`add` and Codex's equivalent). */
+export const PluginMarketplaceEntrySchema = z
+  .object({
+    name: z.string().min(1),
+    url: z.string().optional(),
+    source: z.string().min(1),
+  })
+  .passthrough();
+export type PluginMarketplaceEntry = z.infer<typeof PluginMarketplaceEntrySchema>;
+
+export const SkillScopeSchema = z.enum(["user", "project", "plugin"]);
+export type SkillScope = z.infer<typeof SkillScopeSchema>;
+
+export const SkillEntrySchema = z
+  .object({
+    backend: BackendSchema,
+    name: z.string().min(1),
+    scope: SkillScopeSchema,
+    path: z.string().min(1),
+    pluginName: z.string().optional(),
+    enabled: z.boolean().default(true),
+    description: z.string().optional(),
+  })
+  .passthrough();
+export type SkillEntry = z.infer<typeof SkillEntrySchema>;
+
+export const ToolPolicyDecisionSchema = z.enum(["allow", "deny", "ask"]);
+export type ToolPolicyDecision = z.infer<typeof ToolPolicyDecisionSchema>;
+
+/** Where a tool policy applies. Distinct from `McpServerScopeSchema`: a tool
+ *  permission is either the app-wide default for a backend, narrowed to one
+ *  project, or narrowed to one running session — it is not tied to a config
+ *  file's location the way an MCP server/skill scope is. Phase 9's fuller
+ *  Policies page (P17) may grow a `sessionId`/`projectId` alongside this
+ *  value; this pass only needs the enum SPEC's own field list names. */
+export const ToolPolicyScopeSchema = z.enum(["global", "project", "session"]);
+export type ToolPolicyScope = z.infer<typeof ToolPolicyScopeSchema>;
+
+export const ToolPolicyEntrySchema = z
+  .object({
+    backend: BackendSchema,
+    pattern: z.string().min(1),
+    decision: ToolPolicyDecisionSchema,
+    scope: ToolPolicyScopeSchema,
+  })
+  .passthrough();
+export type ToolPolicyEntry = z.infer<typeof ToolPolicyEntrySchema>;
+
+// ---------------------------------------------------------------------------
+// Prerequisites and diagnostics (Phase 6, SPEC R3) — both live-probed, never
+// persisted: a cached "detected" bit would be stale the moment the user
+// installs the thing capygen is telling them to install.
+// ---------------------------------------------------------------------------
+
+export const PrereqStepKindSchema = z.enum(["cli", "runtime", "tool"]);
+export type PrereqStepKind = z.infer<typeof PrereqStepKindSchema>;
+
+/**
+ * One row of the setup panel (R3): "one button per step that confirms the
+ * exact command and runs it in a visible console; nothing is ever installed
+ * silently" (CLAUDE.md). `prereqs.status` re-detects on every call, the same
+ * way `harness.list` re-probes the CLIs rather than trusting a stale row.
+ */
+export const PrereqStepSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    detected: z.boolean(),
+    version: z.string().optional(),
+    command: z.string().min(1),
+    description: z.string().default(""),
+    /** Ids of other steps that must be `detected` first (e.g. Codex before a
+     *  Codex-only step) — `prereqs.run` refuses a step whose `blockedBy` is
+     *  not yet all satisfied rather than running commands out of order. */
+    blockedBy: z.array(z.string()).optional(),
+    kind: PrereqStepKindSchema,
+  })
+  .passthrough();
+export type PrereqStep = z.infer<typeof PrereqStepSchema>;
+
+export const HarnessAvailabilitySchema = z
+  .object({
+    backend: BackendSchema,
+    available: z.boolean(),
+    reason: z.string().optional(),
+  })
+  .passthrough();
+export type HarnessAvailability = z.infer<typeof HarnessAvailabilitySchema>;
+
+/** Settings ▸ Diagnostics' whole page (R19). `versions`/`paths` are free-form
+ *  label→value maps (e.g. `{app, electron, node, claude, codex}` /
+ *  `{userData, logFile, dbFile, claudeHome, codexHome}`) rather than fixed
+ *  fields, so a new probe is an extra map entry, not a schema change. */
+export const DiagnosticsInfoSchema = z
+  .object({
+    versions: z.record(z.string(), z.string()),
+    paths: z.record(z.string(), z.string()),
+    harnessAvailability: z.array(HarnessAvailabilitySchema),
+    dbSizeBytes: z.number().int().nonnegative(),
+    logDir: z.string().min(1),
+  })
+  .passthrough();
+export type DiagnosticsInfo = z.infer<typeof DiagnosticsInfoSchema>;

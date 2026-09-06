@@ -27,15 +27,27 @@ import {
   DevServerRunSchema,
   DevServerSchema,
   DevServerWithRunSchema,
+  DiagnosticsInfoSchema,
   FileChangeSchema,
   FileEntrySchema,
   FileListResultSchema,
   FileReadResultSchema,
   GitDiffSchema,
   GitStatusSchema,
+  GlobalSettingsPatchSchema,
+  GlobalSettingsSchema,
+  GlobalSettingsSectionSchema,
   HarnessInfoSchema,
+  McpServerEntryDraftSchema,
+  McpServerEntryPatchSchema,
+  McpServerEntrySchema,
+  McpServerScopeSchema,
+  McpServerStatusSchema,
   MentionNameSchema,
   PermissionRequestSchema,
+  PluginEntrySchema,
+  PluginMarketplaceEntrySchema,
+  PrereqStepSchema,
   ProjectSchema,
   QuestionSchema,
   SessionModeSchema,
@@ -43,12 +55,19 @@ import {
   SessionSettingsPatchSchema,
   SettingsPatchSchema,
   SettingsSchema,
+  SkillEntrySchema,
+  SkillScopeSchema,
   SlashCommandSchema,
   TaskPatchSchema,
   TaskSchema,
+  TaskSourceSchema,
+  TaskStatusSchema,
   TerminalInfoSchema,
   TimestampSchema,
   ToolOutputSchema,
+  ToolPolicyDecisionSchema,
+  ToolPolicyEntrySchema,
+  ToolPolicyScopeSchema,
   TurnSchema,
   TurnStatusSchema,
   UsageEventSchema,
@@ -360,6 +379,29 @@ export const INVOKE_CHANNELS = {
    *  schema's doc comment for the jitless-defaults bug this avoids. */
   "settings.set": channel(SettingsPatchSchema, SettingsSchema),
 
+  /**
+   * Phase 6's sectioned Settings hub (SPEC R19, R30) — additive alongside
+   * `settings.get`/`.set` above (`GlobalSettingsSchema`'s own doc comment
+   * explains why the two coexist rather than one replacing the other in this
+   * pass). `settings.getAll` fires no event; `.patch`/`.reset` both broadcast
+   * `settings.changed` (main's job, not the contract's).
+   */
+  "settings.getAll": channel(Empty, GlobalSettingsSchema),
+  /** Deep-merged section-by-section (`mergeGlobalSettingsPatch`), not
+   *  `GlobalSettingsSchema.partial()` — see `GlobalSettingsPatchSchema`'s doc
+   *  comment for the jitless-defaults hazard this avoids, one level deeper
+   *  than `settings.set` already fixes for the flat `SettingsPatchSchema`. */
+  "settings.patch": channel(
+    z.object({ patch: GlobalSettingsPatchSchema }),
+    GlobalSettingsSchema,
+  ),
+  /** Reset one section back to its shipping default, or `"all"` for the
+   *  whole object (`resetGlobalSettingsSection`). */
+  "settings.reset": channel(
+    z.object({ section: GlobalSettingsSectionSchema }),
+    GlobalSettingsSchema,
+  ),
+
   "app.version": channel(
     Empty,
     z.object({
@@ -374,6 +416,146 @@ export const INVOKE_CHANNELS = {
       dbFile: z.string(),
     }),
   ),
+
+  // -------------------------------------------------------------------------
+  // Integrations, prerequisites, diagnostics (Phase 6, SPEC R3, R19-R21,
+  // R28-R30). The backend's own config (a file, or its live listing) is the
+  // source of truth (R29); these channels are capygen's read/write surface
+  // over it, cached in `@capygen/db`'s `mcp_servers`/`plugins`/`skills`/
+  // `policies` tables. See `@capygen/shared/domain.js` for the entity doc
+  // comments (`McpServerEntry`, `PluginEntry`, `SkillEntry`,
+  // `ToolPolicyEntry`, `PrereqStep`, `DiagnosticsInfoSchema`).
+  // -------------------------------------------------------------------------
+
+  /** One backend's whole integrations snapshot for the Settings ▸
+   *  Integrations page (R28). `lastSync` is `null` until `.refresh` (or an
+   *  app-start sync) has run at least once this session. */
+  "integrations.list": channel(
+    z.object({ backend: BackendSchema }),
+    z.object({
+      mcpServers: z.array(McpServerEntrySchema),
+      plugins: z.array(PluginEntrySchema),
+      skills: z.array(SkillEntrySchema),
+      tools: z.array(ToolPolicyEntrySchema),
+      lastSync: TimestampSchema.nullable(),
+    }),
+  ),
+
+  "integrations.mcp.add": channel(
+    z.object({
+      backend: BackendSchema,
+      scope: McpServerScopeSchema,
+      entry: McpServerEntryDraftSchema,
+    }),
+    McpServerEntrySchema,
+  ),
+  "integrations.mcp.update": channel(
+    z.object({
+      backend: BackendSchema,
+      scope: McpServerScopeSchema,
+      name: z.string().min(1),
+      patch: McpServerEntryPatchSchema,
+    }),
+    McpServerEntrySchema,
+  ),
+  "integrations.mcp.remove": channel(
+    z.object({ backend: BackendSchema, scope: McpServerScopeSchema, name: z.string().min(1) }),
+    OkSchema,
+  ),
+  /** Connect and list tools, with a timeout (R28) — a live check, never a
+   *  cache read; `scope` is optional only to disambiguate a name that exists
+   *  in more than one (SPEC's own field list for this call is
+   *  `{backend, name}`). */
+  "integrations.mcp.test": channel(
+    z.object({
+      backend: BackendSchema,
+      name: z.string().min(1),
+      scope: McpServerScopeSchema.optional(),
+    }),
+    z.object({
+      ok: z.boolean(),
+      status: McpServerStatusSchema,
+      tools: z.array(z.string()).optional(),
+      error: z.string().optional(),
+    }),
+  ),
+
+  "integrations.plugin.install": channel(
+    z.object({ backend: BackendSchema, marketplace: z.string().min(1), name: z.string().min(1) }),
+    PluginEntrySchema,
+  ),
+  "integrations.plugin.uninstall": channel(
+    z.object({ backend: BackendSchema, name: z.string().min(1) }),
+    OkSchema,
+  ),
+  "integrations.plugin.setEnabled": channel(
+    z.object({ backend: BackendSchema, name: z.string().min(1), enabled: z.boolean() }),
+    PluginEntrySchema,
+  ),
+  "integrations.plugin.marketplaces": channel(
+    z.object({ backend: BackendSchema }),
+    z.array(PluginMarketplaceEntrySchema),
+  ),
+
+  "integrations.skill.setEnabled": channel(
+    z.object({
+      backend: BackendSchema,
+      name: z.string().min(1),
+      enabled: z.boolean(),
+      /** Disambiguates a name that exists in more than one scope; omitted
+       *  affects the first match for `backend`+`name` (SPEC's own field list
+       *  for this call is `{backend, name, enabled}`). */
+      scope: SkillScopeSchema.optional(),
+    }),
+    SkillEntrySchema,
+  ),
+  "integrations.skill.create": channel(
+    z.object({
+      backend: BackendSchema,
+      scope: SkillScopeSchema,
+      name: z.string().min(1),
+      markdown: z.string().min(1),
+    }),
+    SkillEntrySchema,
+  ),
+  /** Reveal the skill's file in the Editor pane or the OS shell — which one
+   *  is main's call; nothing in the contract says which it picked. */
+  "integrations.skill.open": channel(z.object({ path: z.string().min(1) }), OkSchema),
+
+  "integrations.tools.setPolicy": channel(
+    z.object({
+      backend: BackendSchema,
+      scope: ToolPolicyScopeSchema,
+      pattern: z.string().min(1),
+      decision: ToolPolicyDecisionSchema,
+    }),
+    ToolPolicyEntrySchema,
+  ),
+  "integrations.tools.removePolicy": channel(
+    z.object({ backend: BackendSchema, scope: ToolPolicyScopeSchema, pattern: z.string().min(1) }),
+    OkSchema,
+  ),
+
+  /** Re-read the backend's own files/live lists and refresh the cache
+   *  (R29); fires `integrations.changed` for whatever kinds actually moved. */
+  "integrations.refresh": channel(z.object({ backend: BackendSchema }), OkSchema),
+
+  /** The setup panel's steps (R3), freshly probed every call. */
+  "prereqs.status": channel(
+    Empty,
+    z.object({ steps: z.array(PrereqStepSchema), recommendation: z.string() }),
+  ),
+  /** `started`, not `ok` alone: the confirm dialog + visible console (R3,
+   *  CLAUDE.md) means the step's own command may still be running when this
+   *  resolves — `ok` is only whether main was able to *launch* it. */
+  "prereqs.run": channel(
+    z.object({ stepId: z.string().min(1) }),
+    z.object({ ok: z.boolean(), started: z.boolean() }),
+  ),
+
+  "diagnostics.get": channel(Empty, DiagnosticsInfoSchema),
+  /** Copies the rendered diagnostics text to the OS clipboard. */
+  "diagnostics.copy": channel(Empty, OkSchema),
 
   // -------------------------------------------------------------------------
   // Workspace panes (Phase 5, SPEC R16-R18) — layout, files, git, terminal,
@@ -497,6 +679,26 @@ export const INVOKE_CHANNELS = {
   ),
   "servers.remove": channel(z.object({ serverId: z.string().min(1) }), OkSchema),
 
+  /**
+   * A manually-typed task (the Tasks pane's "add" row). Mirrors
+   * `TasksRepo.create`'s input shape — everything but `title` is optional and
+   * defaulted by the repo — because `tasks.update` is a merge-patch that
+   * throws `unknown task: <id>` for a row that does not exist yet, so there is
+   * no upsert to lean on. `sessionId` is required here even though the column
+   * is nullable: every caller is a pane scoped to one session, and a row with
+   * no session would never reach the `tasks.updated` broadcast.
+   */
+  "tasks.create": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      agentId: z.string().min(1).nullable().optional(),
+      title: z.string().min(1),
+      status: TaskStatusSchema.optional(),
+      source: TaskSourceSchema.optional(),
+      order: z.number().int().nonnegative().optional(),
+    }),
+    TaskSchema,
+  ),
   "tasks.list": channel(
     z.object({
       sessionId: z.string().min(1).optional(),
@@ -630,6 +832,19 @@ export const EVENT_CHANNELS = {
     canGoForward: z.boolean(),
     loading: z.boolean(),
   }),
+
+  /** Fired after `settings.patch`/`.reset` (Phase 6, SPEC R30) so every
+   *  window's Settings hub stays in sync without polling. */
+  "settings.changed": z.object({ settings: GlobalSettingsSchema }),
+  /** One backend's integrations changed — either `integrations.refresh` ran,
+   *  an app edit (`.mcp.*`/`.plugin.*`/`.skill.*`/`.tools.*`) landed, or a
+   *  file watcher on the backend's own config noticed an outside edit (R29:
+   *  two-way sync). `kinds` names which of `mcpServers`/`plugins`/`skills`/
+   *  `tools` actually moved, so a listener need not re-fetch all four. */
+  "integrations.changed": z.object({ backend: BackendSchema, kinds: z.array(z.string()) }),
+  /** The setup panel's steps changed (a step finished, or a fresh probe
+   *  found something newly detected). */
+  "prereqs.changed": z.object({ steps: z.array(PrereqStepSchema) }),
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventChannels = typeof EVENT_CHANNELS;

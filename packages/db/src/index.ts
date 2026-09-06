@@ -10,11 +10,16 @@ import type { Database } from "./driver.js";
 import {
   BlocksRepo,
   DevServersRepo,
+  GlobalSettingsRepo,
+  McpServersRepo,
+  PluginsRepo,
   ProjectsRepo,
   SessionsRepo,
   SettingsRepo,
+  SkillsRepo,
   TasksRepo,
   ToolOutputsRepo,
+  ToolPoliciesRepo,
   TurnsRepo,
   UsageRepo,
   WorkspaceLayoutsRepo,
@@ -41,6 +46,16 @@ export interface CapygenStore {
   devServers: DevServersRepo;
   /** Agent-derived and manual tasks (migration 0004, SPEC R16/P10). */
   tasks: TasksRepo;
+  /** The sectioned Settings hub object (Phase 6, SPEC R19/R30) — one more
+   *  row in `settings`, distinct from the flat `settings` repo above. */
+  globalSettings: GlobalSettingsRepo;
+  /** Integrations caches (Phase 6, SPEC R28-R29): MCP servers, plugins,
+   *  skills, per-tool policies — migration 0001's tables, migration 0005's
+   *  `backend` column. */
+  mcpServers: McpServersRepo;
+  plugins: PluginsRepo;
+  skills: SkillsRepo;
+  toolPolicies: ToolPoliciesRepo;
   /** Migrations applied by this open, and the backup taken beforehand. */
   migration: { applied: string[]; backupFile: string | null };
   /** Turns/sessions this open had to close because the last run did not. */
@@ -81,6 +96,11 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     workspaceLayouts: new WorkspaceLayoutsRepo(db),
     devServers: new DevServersRepo(db),
     tasks: new TasksRepo(db),
+    globalSettings: new GlobalSettingsRepo(db),
+    mcpServers: new McpServersRepo(db),
+    plugins: new PluginsRepo(db),
+    skills: new SkillsRepo(db),
+    toolPolicies: new ToolPoliciesRepo(db),
     migration: result,
     close: () => db.close(),
   };

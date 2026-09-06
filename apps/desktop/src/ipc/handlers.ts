@@ -596,6 +596,40 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     // -------------------------------------------------------------------
+    // Settings hub, integrations, prerequisites, diagnostics (Phase 6, SPEC
+    // R3, R19-R21, R28-R30). Contracts only in this pass: every channel's
+    // shape is real (`@capygen/shared`) and its `@capygen/db` backing repo
+    // (`store.globalSettings`/`.mcpServers`/`.plugins`/`.skills`/
+    // `.toolPolicies`) is implemented and unit-tested, but wiring a handler
+    // to a repo, a live CLI probe, or Electron (clipboard, app versions, a
+    // visible console for `prereqs.run`) is Phase 6 Build's job. Every
+    // channel below fails loudly rather than returning a fake success
+    // (SPEC §Edge Cases: "never swallow") until Build lands.
+    // -------------------------------------------------------------------
+    "settings.getAll": () => notImplemented("settings.getAll"),
+    "settings.patch": (args) => notImplemented("settings.patch", args),
+    "settings.reset": (args) => notImplemented("settings.reset", args),
+    "integrations.list": (args) => notImplemented("integrations.list", args),
+    "integrations.mcp.add": (args) => notImplemented("integrations.mcp.add", args),
+    "integrations.mcp.update": (args) => notImplemented("integrations.mcp.update", args),
+    "integrations.mcp.remove": (args) => notImplemented("integrations.mcp.remove", args),
+    "integrations.mcp.test": (args) => notImplemented("integrations.mcp.test", args),
+    "integrations.plugin.install": (args) => notImplemented("integrations.plugin.install", args),
+    "integrations.plugin.uninstall": (args) => notImplemented("integrations.plugin.uninstall", args),
+    "integrations.plugin.setEnabled": (args) => notImplemented("integrations.plugin.setEnabled", args),
+    "integrations.plugin.marketplaces": (args) => notImplemented("integrations.plugin.marketplaces", args),
+    "integrations.skill.setEnabled": (args) => notImplemented("integrations.skill.setEnabled", args),
+    "integrations.skill.create": (args) => notImplemented("integrations.skill.create", args),
+    "integrations.skill.open": (args) => notImplemented("integrations.skill.open", args),
+    "integrations.tools.setPolicy": (args) => notImplemented("integrations.tools.setPolicy", args),
+    "integrations.tools.removePolicy": (args) => notImplemented("integrations.tools.removePolicy", args),
+    "integrations.refresh": (args) => notImplemented("integrations.refresh", args),
+    "prereqs.status": () => notImplemented("prereqs.status"),
+    "prereqs.run": (args) => notImplemented("prereqs.run", args),
+    "diagnostics.get": () => notImplemented("diagnostics.get"),
+    "diagnostics.copy": () => notImplemented("diagnostics.copy"),
+
+    // -------------------------------------------------------------------
     // Workspace panes (SPEC R16-R18) — layout, files, git, terminals, dev
     // servers, tasks and the Browser pane's native `WebContentsView`. All
     // thirty channels live in `./workspace.ts`, which owns the five services
@@ -636,6 +670,20 @@ function backendOf(
   const wanted = agentId ?? session.leadAgentId;
   if (!wanted) return null;
   return store.sessions.agent(wanted)?.backend ?? null;
+}
+
+/**
+ * Phase 6's settings-hub/integrations/prerequisites channels (SPEC R3,
+ * R19-R21, R28-R30) are contract-complete but not yet wired to a live
+ * backend from here — see the block comment above their entries in
+ * `handlers`. Typed `never` so it satisfies every one of those channels'
+ * differing `InvokeResult` regardless of call site.
+ */
+function notImplemented(channel: string, args?: unknown): never {
+  throw new Error(
+    `${channel}: not implemented yet — Phase 6 Build wires this` +
+      (args !== undefined ? ` (args: ${JSON.stringify(args)})` : ""),
+  );
 }
 
 /**
