@@ -136,6 +136,12 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     if (session) broadcast("session.updated", session);
   }
 
+  /** Broadcast the whole roster after an agents.add/update/remove/setLead —
+   *  the agent tree (R13) replaces its list rather than merging one row. */
+  function emitAgents(sessionId: string): void {
+    broadcast("agents.updated", { sessionId, agents: store.sessions.agents(sessionId) });
+  }
+
   const engine = (deps.makeEngine ?? createSessionRunner)(engineDeps);
 
   const handlers: IpcHandlers = {
@@ -160,7 +166,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
                 name: "capy",
                 backend: "claude" as const,
                 model: store.settings.all().defaultModel,
-                role: "lead",
+                role: "lead" as const,
                 config: null,
               },
             ];
@@ -198,6 +204,88 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       if (!session) throw new Error(`unknown session: ${args.sessionId}`);
       broadcast("session.updated", session);
       return session;
+    },
+
+    /** ADR-0002: "can be switched later without losing history" — agents and
+     *  the transcript are untouched. */
+    "sessions.setMode": (args) => {
+      const session = store.sessions.setMode(args.sessionId, args.mode);
+      broadcast("session.updated", session);
+      return session;
+    },
+
+    "sessions.updateSettings": (args) => {
+      const session = store.sessions.updateSettings(args.sessionId, args.patch);
+      broadcast("session.updated", session);
+      return session;
+    },
+
+    "agents.list": (args) => store.sessions.agents(args.sessionId),
+
+    "agents.add": (args) => {
+      const agent = store.sessions.addAgent(args.sessionId, {
+        backend: args.backend,
+        model: args.model,
+        ...(args.displayName !== undefined ? { displayName: args.displayName } : {}),
+        ...(args.mentionName !== undefined ? { mentionName: args.mentionName } : {}),
+        ...(args.role !== undefined ? { role: args.role } : {}),
+        ...(args.config !== undefined ? { config: args.config } : {}),
+      });
+      emitAgents(args.sessionId);
+      // A `role: "lead"` add also moves `leadAgentId` (SessionsRepo.addAgent).
+      emitSession(args.sessionId);
+      return agent;
+    },
+
+    "agents.update": (args) => {
+      const agent = store.sessions.updateAgent(args.agentId, args.patch);
+      emitAgents(agent.sessionId);
+      return agent;
+    },
+
+    "agents.remove": (args) => {
+      const agent = store.sessions.agent(args.agentId);
+      if (!agent) return { ok: false };
+      const removed = store.sessions.removeAgent(args.agentId);
+      if (removed) {
+        emitAgents(agent.sessionId);
+        emitSession(agent.sessionId); // leadAgentId may have been cleared
+      }
+      return { ok: removed };
+    },
+
+    "agents.setLead": (args) => {
+      const session = store.sessions.setLead(args.sessionId, args.agentId);
+      emitAgents(args.sessionId);
+      broadcast("session.updated", session);
+      return session;
+    },
+
+    /**
+     * A Claude-Code-info-card-style usage description (R13). `capabilities`
+     * and `tools` are best-effort here: they name what a *running* harness
+     * reports, and this handler has no live harness to ask (that seam is
+     * `Engine`, an `apps/desktop`-only concept `@capygen/db` cannot see) — an
+     * agent with no turns run yet, or whose harness has not reported its
+     * tool list, honestly returns both empty rather than a guess.
+     */
+    "agents.describe": (args) => {
+      const agent = store.sessions.agent(args.agentId);
+      if (!agent) throw new Error(`unknown agent: ${args.agentId}`);
+      const usage = store.usage.totalsByAgent(agent.id);
+      const others = store.sessions
+        .agents(agent.sessionId)
+        .filter((a) => a.id !== agent.id)
+        .map((a) => ({ agentId: a.id, mentionName: a.mentionName, backend: a.backend, model: a.model }));
+      return {
+        description: agent.description ?? "",
+        capabilities: [],
+        tools: [],
+        model: agent.model,
+        backend: agent.backend,
+        usage,
+        others,
+      };
     },
 
     "turns.list": (args) => ({
@@ -312,6 +400,47 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         commands.push(command);
       }
       return commands;
+    },
+
+    /**
+     * Resume a round-table chain the dispatcher stopped at the hop cap
+     * (ADR-0002, SPEC R11). The dispatcher itself (mention parsing, hop-cap
+     * enforcement in `chat.send`, the queue) is a later Phase 4 task; what
+     * this handler provides is the baseline mechanics it builds on — a plain
+     * continuation turn, addressed to whoever spoke last, chained onto that
+     * turn via both `parentTurnId` (transcript order) and `triggeredByTurnId`
+     * (the mention that started the chain this resumes). `agentTurnId` is
+     * `null` when there is nothing to continue: a turn is already streaming,
+     * or the session has no turns yet.
+     */
+    "chat.continue": (args) => {
+      const session = store.sessions.get(args.sessionId);
+      if (!session) throw new Error(`unknown session: ${args.sessionId}`);
+      if (store.turns.hasStreaming(session.id)) return { ok: false, agentTurnId: null };
+
+      const turns = store.turns.list(session.id);
+      const last = turns[turns.length - 1];
+      const agentId = last?.agentId ?? session.leadAgentId;
+      if (!last || !agentId) return { ok: false, agentTurnId: null };
+
+      const agentTurn = store.turns.create({
+        sessionId: session.id,
+        agentId,
+        role: "agent",
+        status: "streaming",
+        parentTurnId: last.id,
+        hopIndex: last.hopIndex + 1,
+        triggeredByTurnId: last.triggeredByTurnId ?? last.id,
+      });
+      store.sessions.setStatus(session.id, "running");
+      broadcast("chat.turnStatus", {
+        sessionId: session.id,
+        turnId: agentTurn.id,
+        status: "streaming",
+      });
+      emitSession(session.id);
+      engine.send({ sessionId: session.id, turnId: agentTurn.id, agentId, text: "Continue." });
+      return { ok: true, agentTurnId: agentTurn.id };
     },
 
     /**

@@ -2,15 +2,23 @@ import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentConfigSchema,
+  AgentDescribeSchema,
+  AgentDraftSchema,
+  AgentPatchSchema,
+  AgentSchema,
   BLOCK_KINDS,
   BlockSchema,
+  DEFAULT_SESSION_SETTINGS,
   DEFAULT_SETTINGS,
   EVENT_CHANNEL_NAMES,
   HarnessInfoSchema,
   INVOKE_CHANNEL_NAMES,
   IpcContractError,
+  SessionSchema,
+  SessionSettingsSchema,
   SettingsSchema,
   defineIpc,
+  deriveMentionName,
   isInvokeChannel,
   newId,
   type IpcTransport,
@@ -33,12 +41,21 @@ describe("IPC contract", () => {
       "sessions.list",
       "sessions.get",
       "sessions.archive",
+      "sessions.setMode",
+      "sessions.updateSettings",
+      "agents.list",
+      "agents.add",
+      "agents.update",
+      "agents.remove",
+      "agents.setLead",
+      "agents.describe",
       "turns.list",
       "blocks.getOutput",
       "turns.usage",
       "chat.send",
       "chat.interrupt",
       "chat.listCommands",
+      "chat.continue",
       "permission.answer",
       "question.answer",
       "elicitation.answer",
@@ -57,6 +74,8 @@ describe("IPC contract", () => {
       "chat.block",
       "chat.turnStatus",
       "session.updated",
+      "agents.updated",
+      "chat.chainStopped",
       "permission.request",
       "question.request",
       "elicitation.request",
@@ -135,6 +154,23 @@ describe("defineIpc", () => {
       decision: "allow_always",
       scope: "once",
     });
+  });
+
+  it("sends only the fields settings.set was given, not every shipping default (bug fix)", async () => {
+    // Regression for a real bug: `settings.set` used to validate its input
+    // against `SettingsSchema.partial()`. Under this codebase's mandatory
+    // `z.config({jitless:true})` (zodRuntime.ts), wrapping a `.default(...)`
+    // field in `.optional()` does not suppress the default for an omitted
+    // key, so a caller sending only `{theme:"dark"}` actually had all nine
+    // settings fields sent to main — and `SettingsRepo.patch`'s
+    // `{...this.all(), ...patch}` then reset every other setting (hopCap,
+    // defaultModel, ...) back to its shipping default on every edit.
+    const invoke = vi.fn(async (_c, payload) => ({ ...DEFAULT_SETTINGS, ...(payload as object) }));
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    await ipc.invoke("settings.set", { theme: "dark" });
+
+    expect(invoke).toHaveBeenCalledWith("settings.set", { theme: "dark" });
   });
 
   it("never round-trips a secret value back through secrets.has", async () => {
@@ -293,5 +329,120 @@ describe("domain schemas", () => {
   it("mints prefixed ids per entity kind", () => {
     expect(newId("session")).toMatch(/^ses_[0-9a-f]{32}$/);
     expect(newId("block")).toMatch(/^blk_[0-9a-f]{32}$/);
+  });
+});
+
+describe("Phase 4: session modes, agents, dispatcher, routing", () => {
+  it("defaults an agent's role to member and requires a mentionName", () => {
+    const agent = AgentSchema.parse({
+      id: newId("agent"),
+      sessionId: newId("session"),
+      name: "capy",
+      displayName: "Capy",
+      mentionName: "capy",
+      backend: "claude",
+      model: "claude-opus-4-5",
+      createdAt: 1,
+    });
+    expect(agent.role).toBe("member");
+    expect(agent.order).toBe(0);
+
+    expect(() =>
+      AgentSchema.parse({
+        id: newId("agent"),
+        sessionId: newId("session"),
+        name: "capy",
+        displayName: "Capy",
+        mentionName: "Capy With Spaces",
+        backend: "claude",
+        model: "claude-opus-4-5",
+        createdAt: 1,
+      }),
+    ).toThrow();
+  });
+
+  it("lets a draft omit displayName/mentionName (SessionsRepo fills them in)", () => {
+    const draft = AgentDraftSchema.parse({ name: "codey", backend: "codex", model: "gpt-5.5" });
+    expect(draft.role).toBe("member");
+    expect(draft.displayName).toBeUndefined();
+    expect(draft.mentionName).toBeUndefined();
+  });
+
+  it("derives a lowercase, no-space mention name, falling back when nothing survives", () => {
+    expect(deriveMentionName("Claude Lead")).toBe("claude-lead");
+    expect(deriveMentionName("codey_2")).toBe("codey_2".replace(/_/g, "-"));
+    expect(deriveMentionName("🦫🦫")).toBe("agent");
+  });
+
+  it("lets an agent patch include role (the single-lead invariant is a repo-level rule, not a schema one)", () => {
+    // AgentPatchSchema accepts `role: "lead"`; SessionsRepo.updateAgent is what
+    // refuses it (packages/db/test/store.test.ts), because only `setLead`
+    // demotes the previous holder in the same write.
+    expect(AgentPatchSchema.parse({ role: "lead" })).toEqual({ role: "lead" });
+  });
+
+  it("fills session settings defaults (hopCap 3, parallelAgents false)", () => {
+    expect(SessionSettingsSchema.parse({})).toEqual(DEFAULT_SESSION_SETTINGS);
+    expect(DEFAULT_SESSION_SETTINGS.hopCap).toBe(3);
+    expect(DEFAULT_SESSION_SETTINGS.parallelAgents).toBe(false);
+
+    const session = SessionSchema.parse({
+      id: newId("session"),
+      projectId: newId("project"),
+      mode: "round-table",
+      leadAgentId: null,
+      title: "",
+      status: "idle",
+      createdAt: 1,
+      updatedAt: 1,
+      archived: false,
+    });
+    expect(session.settings).toEqual(DEFAULT_SESSION_SETTINGS);
+  });
+
+  it("accepts a session-wide sub-agent routing override under settings.routing", () => {
+    const settings = SessionSettingsSchema.parse({
+      routing: { subagents: { backend: "codex", model: "gpt-5.5" } },
+    });
+    expect(settings.routing?.subagents).toEqual({ backend: "codex", model: "gpt-5.5" });
+  });
+
+  it("sends only the given field for sessions.updateSettings too (same jitless-default fix)", async () => {
+    const invoke = vi.fn(async () => SessionSchema.parse({
+      id: newId("session"),
+      projectId: newId("project"),
+      mode: "round-table",
+      leadAgentId: null,
+      title: "",
+      status: "idle",
+      createdAt: 1,
+      updatedAt: 1,
+      archived: false,
+    }));
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    await ipc.invoke("sessions.updateSettings", {
+      sessionId: "ses_1",
+      patch: { hopCap: 5 },
+    });
+
+    expect(invoke).toHaveBeenCalledWith("sessions.updateSettings", {
+      sessionId: "ses_1",
+      patch: { hopCap: 5 },
+    });
+  });
+
+  it("round-trips an agents.describe payload with its own compact usage shape", () => {
+    const info = AgentDescribeSchema.parse({
+      description: "Reviews code",
+      capabilities: ["permissions", "questions"],
+      tools: ["Bash", "Read"],
+      model: "claude-opus-4-5",
+      backend: "claude",
+      usage: { input: 100, output: 20, cached: 900, costUsd: 0.01 },
+      others: [{ agentId: newId("agent"), mentionName: "codex", backend: "codex", model: "gpt-5.5" }],
+    });
+    expect(info.usage.cached).toBe(900);
+    expect(info.others).toHaveLength(1);
   });
 });

@@ -53,6 +53,65 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 /** Which API an `api`-backend agent talks to directly (CONTEXT.md §Backend). */
 export const ApiProviderSchema = z.enum(["anthropic", "openai", "openrouter"]);
 export type ApiProvider = z.infer<typeof ApiProviderSchema>;
+
+/**
+ * An agent's place in a round-table session (ADR-0002, SPEC R10-R13): the
+ * **lead** receives an unaddressed message and is the sole top-level agent in
+ * solo mode; every other top-level agent is a **member**. Exactly one agent
+ * per session holds `lead` — `SessionsRepo.setLead` is the only sanctioned way
+ * to move it (it demotes the previous holder in the same write), which is why
+ * `agents.update` (`AgentPatchSchema`) refuses to set this field to `"lead"`.
+ */
+export const AgentRoleSchema = z.enum(["lead", "member"]);
+export type AgentRole = z.infer<typeof AgentRoleSchema>;
+
+/**
+ * The `@name` an agent answers to in round-table dispatch (ADR-0002, SPEC
+ * R11): lowercase, no spaces, so `"@codex reviews"` parses unambiguously.
+ * Uniqueness is per-session, not global — enforced by `SessionsRepo`
+ * (`uniqueMentionName`) and the partial unique index on
+ * `agents(session_id, mention_name)` (migration 0003), not by this schema
+ * alone, since a single agent's shape carries no notion of its siblings.
+ */
+export const MentionNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, "mentionName must be lowercase with no spaces (a-z0-9_-)");
+export type MentionName = z.infer<typeof MentionNameSchema>;
+
+/**
+ * Lowercase, no-space slug derived from a free-form label — the fallback used
+ * whenever an agent is created or renamed without an explicit `mentionName`
+ * (`SessionsRepo.create`/`addAgent`/`updateAgent`, and `rowToAgent` for a
+ * pre-migration-0003 row whose `mention_name` column is still NULL). Never
+ * empty: an input with no latin/digit characters at all (e.g. all emoji)
+ * falls back to `"agent"` rather than producing a string `MentionNameSchema`
+ * would reject.
+ */
+export function deriveMentionName(raw: string): string {
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length > 0 ? slug : "agent";
+}
+
+/**
+ * Where a spawned sub-agent should run: a backend/model override (SPEC R12).
+ * Both fields are optional independently — a route naming only a `model`
+ * keeps the parent's backend, and a route that resolves to nothing at all is
+ * exactly "fail open, inherit the parent's model" (ADR-0002 "advisory and
+ * fails open"). Reused as both `Agent.subagentRouting` (per-agent override)
+ * and `SessionSettings.routing.subagents` (session-wide default).
+ */
+export const RoutingTargetSchema = z
+  .object({
+    backend: BackendSchema.optional(),
+    model: z.string().optional(),
+  })
+  .passthrough();
+export type RoutingTarget = z.infer<typeof RoutingTargetSchema>;
 /** Iteration order for anything that must visit every provider (Settings ▸ API
  *  keys, the `harness.list` key probe). Derived from the enum, so a fourth
  *  provider cannot be added without appearing here. */
@@ -158,25 +217,92 @@ export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 // Agent
 // ---------------------------------------------------------------------------
 
-/** One named participant: backend + model + role + its own config blob. */
+/**
+ * One named participant: backend + model + role + its own config blob.
+ *
+ * `name` is the original free-form label (kept for the many call sites that
+ * already read it — the harness's own display, sub-agent block headers);
+ * `displayName` is Phase 4's explicit human-facing label and defaults to
+ * `name` when a caller supplies only one of the two. `mentionName` is the
+ * new, stricter slug @-mention dispatch actually parses against — never
+ * free-form, always unique within the session (see `MentionNameSchema`).
+ */
 export const AgentSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
   name: z.string().min(1),
+  displayName: z.string().min(1),
+  mentionName: MentionNameSchema,
   backend: BackendSchema,
   model: z.string().min(1),
-  role: z.string().default("agent"),
+  role: AgentRoleSchema.default("member"),
+  /** Shown in the agent info card and the round-table agent tree (R13). */
+  description: z.string().optional(),
+  /** Per-agent override of the session's default sub-agent routing (R12). */
+  subagentRouting: RoutingTargetSchema.optional(),
+  /** Swatch for the agent tree / round-table speaker headers; free-form. */
+  color: z.string().optional(),
+  /** Display/tab order among the session's top-level agents. */
+  order: z.number().int().nonnegative().default(0),
   config: AgentConfigSchema.nullable().default(null),
   createdAt: TimestampSchema,
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
-/** Shape accepted when creating a session's agents (ids are assigned by main). */
+/**
+ * Fields `agents.update` may change. Deliberately excludes `id`, `sessionId`,
+ * `backend` and `name` (identity, fixed after creation) and — deliberately —
+ * accepts `role`, but `SessionsRepo.updateAgent` refuses a patch that sets it
+ * to `"lead"` directly: promoting an agent must go through `setLead`, the
+ * only path that also demotes the session's previous lead in the same write,
+ * so the single-lead invariant cannot be broken by two independent patches.
+ *
+ * Hand-written rather than `AgentSchema.pick({...}).partial()`: three of the
+ * picked fields (`role`, `order`, `config`) carry a `.default()` on
+ * `AgentSchema`, and under this codebase's mandatory `z.config({jitless:
+ * true})` (`zodRuntime.ts` — the CSP that also blocks the renderer forbids
+ * zod's compiled fast path), `.optional()` wrapped around a `.default()`
+ * field does **not** suppress the default the way it does when jitless is
+ * off: an omitted key still comes back filled with the default instead of
+ * staying absent (verified live against this package's own zod). A repo
+ * method that does `{ ...existing, ...patch }` would then silently reset
+ * `role`/`order`/`config` to their defaults on every patch that does not
+ * mention them — the same latent bug `SettingsPatchSchema`'s doc comment
+ * describes for `settings.set`. Every field below is spelled out
+ * default-free instead.
+ */
+export const AgentPatchSchema = z.object({
+  displayName: z.string().min(1).optional(),
+  mentionName: MentionNameSchema.optional(),
+  model: z.string().min(1).optional(),
+  role: AgentRoleSchema.optional(),
+  description: z.string().optional(),
+  subagentRouting: RoutingTargetSchema.optional(),
+  color: z.string().optional(),
+  order: z.number().int().nonnegative().optional(),
+  config: AgentConfigSchema.nullable().optional(),
+});
+export type AgentPatch = z.infer<typeof AgentPatchSchema>;
+
+/**
+ * Shape accepted when creating a session's agents (ids are assigned by main).
+ * `displayName`/`mentionName` are optional here — `SessionsRepo.create`
+ * defaults `displayName` to `name` and mints a unique `mentionName` from
+ * whichever label is available (`deriveMentionName`) when the caller omits
+ * them, exactly as a pre-migration-0003 row does when read back.
+ */
 export const AgentDraftSchema = z.object({
   name: z.string().min(1),
+  displayName: z.string().min(1).optional(),
+  mentionName: MentionNameSchema.optional(),
   backend: BackendSchema,
   model: z.string().min(1),
-  role: z.string().default("agent"),
+  role: AgentRoleSchema.default("member"),
+  description: z.string().optional(),
+  subagentRouting: RoutingTargetSchema.optional(),
+  color: z.string().optional(),
+  /** Defaults to append-at-the-end when omitted (`SessionsRepo` assigns it). */
+  order: z.number().int().nonnegative().optional(),
   config: AgentConfigSchema.nullable().default(null),
 });
 export type AgentDraft = z.infer<typeof AgentDraftSchema>;
@@ -184,6 +310,53 @@ export type AgentDraft = z.infer<typeof AgentDraftSchema>;
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
+
+/** `SessionSettings.routing` — session-wide defaults layered under a
+ *  per-agent `Agent.subagentRouting` override (R12). */
+export const SessionRoutingSchema = z
+  .object({
+    subagents: RoutingTargetSchema.optional(),
+  })
+  .passthrough();
+export type SessionRouting = z.infer<typeof SessionRoutingSchema>;
+
+/**
+ * Per-session round-table settings (ADR-0002, SPEC R10-R13).
+ * `SessionSettingsSchema.parse({})` yields the shipping defaults, the same
+ * pattern `SettingsSchema`/`DEFAULT_SETTINGS` use — a session created before
+ * this field existed reads back with `settings_json` still NULL and gets
+ * exactly these defaults (`SessionsRepo`'s `fromJson(..., {})` fallback).
+ */
+export const SessionSettingsSchema = z
+  .object({
+    /** Agent-to-agent chain cap before the dispatcher stops and waits for the
+     *  user or a `chat.continue` (R11). */
+    hopCap: z.number().int().min(1).max(20).default(3),
+    routing: SessionRoutingSchema.optional(),
+    /** Whether @-mentioned agents may all respond concurrently instead of in
+     *  mention order (R11's "delivered ... in mention order" is the default). */
+    parallelAgents: z.boolean().default(false),
+  })
+  .passthrough();
+export type SessionSettings = z.infer<typeof SessionSettingsSchema>;
+export const DEFAULT_SESSION_SETTINGS: SessionSettings = SessionSettingsSchema.parse({});
+
+/**
+ * `sessions.updateSettings`'s `patch` input. Hand-written, not
+ * `SessionSettingsSchema.partial()` — see `SettingsPatchSchema`'s doc comment
+ * for why a `.partial()` over a `.default()`-bearing field leaks that default
+ * into every patch under this codebase's mandatory jitless zod config, which
+ * would silently reset `hopCap`/`parallelAgents` on every settings edit that
+ * does not mention them.
+ */
+export const SessionSettingsPatchSchema = z
+  .object({
+    hopCap: z.number().int().min(1).max(20).optional(),
+    routing: SessionRoutingSchema.optional(),
+    parallelAgents: z.boolean().optional(),
+  })
+  .passthrough();
+export type SessionSettingsPatch = z.infer<typeof SessionSettingsPatchSchema>;
 
 export const SessionSchema = z.object({
   id: z.string().min(1),
@@ -193,6 +366,16 @@ export const SessionSchema = z.object({
   leadAgentId: z.string().min(1).nullable(),
   title: z.string(),
   status: SessionStatusSchema,
+  /**
+   * `.default(() => ...)`, not `.default({})`: zod's `ZodDefault` substitutes
+   * a *value* default without re-running it through the inner schema, so a
+   * bare `{}` would skip `SessionSettingsSchema`'s own `hopCap`/
+   * `parallelAgents` defaults entirely (`session.settings` would read back as
+   * literally `{}` — verified live). The factory both fills those nested
+   * defaults and hands out a fresh object per parse rather than one shared,
+   * mutable reference across every settings-less session.
+   */
+  settings: SessionSettingsSchema.default(() => SessionSettingsSchema.parse({})),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
   archived: z.boolean(),
@@ -207,6 +390,21 @@ export type Session = z.infer<typeof SessionSchema>;
  * One message. `agentId` is null for user and system turns. `parentTurnId` +
  * `hopIndex` carry the round-table chain so the dispatcher's hop cap (R11) can
  * be enforced and displayed.
+ *
+ * Three fields added for round-table dispatch (ADR-0002, SPEC R11):
+ *   - `mentions` — agent ids this turn's text @-addresses, in mention order;
+ *     empty for a plain (no-mention) message, which the dispatcher routes to
+ *     the lead instead.
+ *   - `triggeredByTurnId` — the turn whose @-mention caused this one to be
+ *     created. Distinct from `parentTurnId` (the immediate reply-to used for
+ *     transcript/hop-chain ordering): in the common single-mention case the
+ *     two agree, but `chat.continue` resuming a hop-capped chain sets
+ *     `parentTurnId` to the chain's *last* turn while `triggeredByTurnId`
+ *     keeps pointing at the mention that actually started it.
+ *   - `speakerLabel` — the rendered round-table header (e.g. `"@codex"`),
+ *     fixed at creation so a later agent rename never rewrites history; also
+ *     what a stateful backend's replayed context prepends per SPEC R23
+ *     (`"[@codex]: ..."`, see ADR-0002).
  */
 export const TurnSchema = z.object({
   id: z.string().min(1),
@@ -217,6 +415,9 @@ export const TurnSchema = z.object({
   createdAt: TimestampSchema,
   parentTurnId: z.string().min(1).nullable().optional(),
   hopIndex: z.number().int().nonnegative().default(0),
+  mentions: z.array(z.string().min(1)).default([]),
+  triggeredByTurnId: z.string().min(1).nullable().optional(),
+  speakerLabel: z.string().optional(),
 });
 export type Turn = z.infer<typeof TurnSchema>;
 
@@ -492,11 +693,22 @@ export const SubagentBlockSchema = z.object({
   ...blockBase,
   kind: z.literal("subagent"),
   agentId: z.string().nullable().default(null),
+  /** The top-level agent that spawned this sub-agent — the parent link the
+   *  agent tree (R13) draws, distinct from `agentId` (which, when a routed
+   *  sub-agent is itself promoted to a tracked `Agent` row, names *that*
+   *  row rather than its spawner). */
+  parentAgentId: z.string().nullable().optional(),
   name: z.string(),
   backend: BackendSchema.nullable().default(null),
   model: z.string().nullable().default(null),
   description: z.string().default(""),
   status: z.enum(["spawned", "running", "done", "error"]).default("spawned"),
+  /** This sub-agent's own model-call cost, when the harness reports one. */
+  costUsd: z.number().nonnegative().optional(),
+  /** True when the routing policy (R12) re-homed this spawn onto a different
+   *  backend/model via capygen's own delegation, rather than the parent
+   *  backend running it natively on its own model. */
+  delegated: z.boolean().optional(),
 });
 
 export const ErrorBlockSchema = z.object({
@@ -629,6 +841,37 @@ export type Settings = z.infer<typeof SettingsSchema>;
 
 export const DEFAULT_SETTINGS: Settings = SettingsSchema.parse({});
 
+/**
+ * `settings.set`'s input. **Not** `SettingsSchema.partial()` (a bug fixed
+ * alongside the Phase 4 additions in this file): every field above carries a
+ * `.default(...)`, and this codebase runs zod with `z.config({jitless:
+ * true})` (`zodRuntime.ts`, required by the renderer's CSP — no `new
+ * Function`). Under jitless, wrapping a `.default()` field in `.optional()`
+ * — exactly what `.partial()` does — does **not** suppress the default for
+ * an omitted key the way it does with zod's normal (JIT) parser: the key
+ * comes back filled with the default anyway (verified live against this
+ * package's own zod: `SettingsSchema.partial().parse({theme:"dark"})`
+ * returned all nine fields, not one). `SettingsRepo.patch` does
+ * `{ ...this.all(), ...patch }`, so every call to `settings.set` — including
+ * one that only meant to flip `theme` — was silently resetting
+ * `defaultModel`, `hopCap` and every other field back to the shipping
+ * default. Every field is spelled out default-free here instead, the same
+ * fix `AgentPatchSchema`/`SessionSettingsPatchSchema` apply for their own
+ * defaulted fields.
+ */
+export const SettingsPatchSchema = z.object({
+  theme: ThemeSchema.optional(),
+  permissionMode: PermissionModeSchema.optional(),
+  defaultBackend: BackendSchema.optional(),
+  defaultModel: z.string().optional(),
+  compactionThreshold: z.number().min(0.1).max(0.95).optional(),
+  hopCap: z.number().int().min(1).max(20).optional(),
+  closeToTray: z.boolean().optional(),
+  showThinking: z.boolean().optional(),
+  uiFontSize: z.number().int().min(10).max(22).optional(),
+});
+export type SettingsPatch = z.infer<typeof SettingsPatchSchema>;
+
 /** Persisted window geometry (main process only; not part of user Settings). */
 export const WindowStateSchema = z.object({
   x: z.number().int().optional(),
@@ -672,3 +915,53 @@ export const HarnessInfoSchema = z.object({
   defaultModel: z.string(),
 });
 export type HarnessInfo = z.infer<typeof HarnessInfoSchema>;
+
+// ---------------------------------------------------------------------------
+// Agent info (`agents.describe` IPC) — the Claude-Code-style usage
+// description an agent's info card shows (SPEC R13).
+// ---------------------------------------------------------------------------
+
+/**
+ * Token/cost summary for one agent's info card. Deliberately its own shape,
+ * not `UsageTotalsSchema`: this is a compact display summary (SPEC R13's
+ * "cost so far"), not the accounting row `usage_events` stores, and `cached`
+ * collapses `UsageTotals`' separate `cacheReadTokens`/`cacheCreationTokens`
+ * into the one number a card actually shows.
+ */
+export const AgentUsageSummarySchema = z.object({
+  input: z.number().int().nonnegative().default(0),
+  output: z.number().int().nonnegative().default(0),
+  cached: z.number().int().nonnegative().default(0),
+  costUsd: z.number().nonnegative().default(0),
+});
+export type AgentUsageSummary = z.infer<typeof AgentUsageSummarySchema>;
+
+/** One row of `AgentDescribe.others` — the session's other agents, for the
+ *  "who else is here" listing next to an agent's own info (SPEC R13). */
+export const AgentDescribeOtherSchema = z.object({
+  agentId: z.string().min(1),
+  mentionName: MentionNameSchema,
+  backend: BackendSchema,
+  model: z.string().min(1),
+});
+export type AgentDescribeOther = z.infer<typeof AgentDescribeOtherSchema>;
+
+/**
+ * `agents.describe` IPC output — an agent's orchestrator role, capabilities,
+ * tools, model, cost so far, and a listing of the session's other agents
+ * (SPEC R13). `capabilities`/`tools` are names only (e.g. a `HarnessCapabilities`
+ * flag that is true, or a live MCP tool listing); the harness that actually
+ * knows them is an `@capygen/engine` concept this package does not depend on,
+ * so a caller with no live harness (or one that has not reported yet) returns
+ * both empty rather than guessing.
+ */
+export const AgentDescribeSchema = z.object({
+  description: z.string().default(""),
+  capabilities: z.array(z.string()).default([]),
+  tools: z.array(z.string()).default([]),
+  model: z.string(),
+  backend: BackendSchema,
+  usage: AgentUsageSummarySchema,
+  others: z.array(AgentDescribeOtherSchema).default([]),
+});
+export type AgentDescribe = z.infer<typeof AgentDescribeSchema>;

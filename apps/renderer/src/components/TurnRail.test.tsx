@@ -19,6 +19,7 @@ const turn = (id: string, over: Partial<Turn> = {}): Turn => ({
   status: "done",
   parentTurnId: null,
   hopIndex: 0,
+  mentions: [],
   createdAt: 1,
   ...over,
 });

@@ -10,17 +10,25 @@ import {
   DEFAULT_SETTINGS,
   ProjectSchema,
   SessionSchema,
+  SessionSettingsSchema,
   SettingsSchema,
   ToolOutputSchema,
   TurnSchema,
   UsageEventSchema,
+  deriveMentionName,
   newId,
   type Agent,
   type AgentDraft,
+  type AgentPatch,
+  type AgentRole,
+  type Backend,
   type Block,
   type Project,
+  type RoutingTarget,
   type Session,
   type SessionMode,
+  type SessionSettings,
+  type SessionSettingsPatch,
   type SessionStatus,
   type Settings,
   type ToolOutput,
@@ -116,6 +124,26 @@ export class ProjectsRepo {
   }
 }
 
+/** First-not-taken `base`, `base-2`, `base-3`, … — used both for a brand-new
+ *  session's agents (against each other) and for `agents.add`/`updateAgent`
+ *  (against a session's existing rows). */
+function uniqueMentionName(used: ReadonlySet<string>, base: string): string {
+  if (!used.has(base)) return base;
+  let n = 2;
+  let candidate = `${base}-${n}`;
+  while (used.has(candidate)) {
+    n += 1;
+    candidate = `${base}-${n}`;
+  }
+  return candidate;
+}
+
+/** `agents.add`'s fallback label when the caller names neither a
+ *  `displayName` nor a `mentionName` — just the backend, capitalised. */
+function defaultAgentDisplayName(backend: Backend): string {
+  return `${backend.charAt(0).toUpperCase()}${backend.slice(1)} agent`;
+}
+
 /** Last path segment, tolerating both separators and a trailing one. */
 function basename(p: string): string {
   const trimmed = p.replace(/[\\/]+$/, "");
@@ -135,20 +163,38 @@ function rowToSession(row: Row): Session {
     leadAgentId: row.lead_agent_id ?? null,
     title: row.title ?? "",
     status: row.status,
+    // `undefined` (not `{}`) so a NULL/absent column takes SessionSchema's
+    // own factory default (SessionSettingsSchema's fully-resolved defaults),
+    // not a bare `{}` that would skip them — see SessionSchema's doc comment.
+    settings: fromJson<unknown>(row.settings_json, undefined),
     archived: intToBool(row.archived),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   });
 }
 
+/**
+ * A pre-migration-0003 row has every new column NULL. `displayName` falls
+ * back to `name`, `mentionName` to `deriveMentionName(name)` and `role` to
+ * `"member"` unless the legacy free-text column already says `"lead"` — the
+ * same values `SessionsRepo.create`/`addAgent` would have written had the
+ * agent been created after 0003.
+ */
 function rowToAgent(row: Row): Agent {
+  const name = String(row.name);
   return AgentSchema.parse({
     id: row.id,
     sessionId: row.session_id,
-    name: row.name,
+    name,
+    displayName: (row.display_name as string | null) ?? name,
+    mentionName: (row.mention_name as string | null) ?? deriveMentionName(name),
     backend: row.backend,
     model: row.model,
-    role: row.role,
+    role: row.role === "lead" ? "lead" : "member",
+    description: (row.description as string | null) ?? undefined,
+    subagentRouting: fromJson<RoutingTarget | undefined>(row.subagent_routing_json, undefined),
+    color: (row.color as string | null) ?? undefined,
+    order: Number(row.order_index ?? 0),
     config: fromJson<unknown>(row.config_json, null),
     createdAt: Number(row.created_at),
   });
@@ -160,6 +206,12 @@ export class SessionsRepo {
   /**
    * Create a session with its agents in one transaction. The first agent is the
    * lead unless another is flagged `role: "lead"`.
+   *
+   * `displayName` defaults to `name`, and `mentionName` is minted from
+   * whichever label is available (`deriveMentionName`) and de-duplicated
+   * against its new siblings — the same fallback `rowToAgent` applies to a
+   * pre-migration-0003 row, so a brand-new agent and a legacy one that has
+   * never been renamed read back identically.
    */
   create(input: {
     projectId: string;
@@ -170,16 +222,33 @@ export class SessionsRepo {
     return this.db.transaction(() => {
       const ts = now();
       const sessionId = newId("session");
-      const agents: Agent[] = input.agents.map((draft) => ({
-        id: newId("agent"),
-        sessionId,
-        name: draft.name,
-        backend: draft.backend,
-        model: draft.model,
-        role: draft.role,
-        config: draft.config ?? null,
-        createdAt: ts,
-      }));
+      const mentionNames = new Set<string>();
+      const agents: Agent[] = input.agents.map((draft, i) => {
+        const displayName = draft.displayName ?? draft.name;
+        const mentionName = uniqueMentionName(
+          mentionNames,
+          draft.mentionName ?? deriveMentionName(displayName),
+        );
+        mentionNames.add(mentionName);
+        return {
+          id: newId("agent"),
+          sessionId,
+          name: draft.name,
+          displayName,
+          mentionName,
+          backend: draft.backend,
+          model: draft.model,
+          role: draft.role,
+          ...(draft.description !== undefined ? { description: draft.description } : {}),
+          ...(draft.subagentRouting !== undefined
+            ? { subagentRouting: draft.subagentRouting }
+            : {}),
+          ...(draft.color !== undefined ? { color: draft.color } : {}),
+          order: draft.order ?? i,
+          config: draft.config ?? null,
+          createdAt: ts,
+        };
+      });
       const lead = agents.find((a) => a.role === "lead") ?? agents[0] ?? null;
 
       this.db.run(
@@ -194,25 +263,215 @@ export class SessionsRepo {
         ts,
         ts,
       );
-      for (const agent of agents) {
-        this.db.run(
-          `INSERT INTO agents (id, session_id, name, backend, model, role, config_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          agent.id,
-          agent.sessionId,
-          agent.name,
-          agent.backend,
-          agent.model,
-          agent.role,
-          toJson(agent.config),
-          agent.createdAt,
-        );
-      }
+      for (const agent of agents) this.insertAgent(agent);
 
       const session = this.get(sessionId);
       if (!session) throw new Error("session vanished immediately after insert");
       return { session, agents };
     });
+  }
+
+  private insertAgent(agent: Agent): void {
+    this.db.run(
+      `INSERT INTO agents
+         (id, session_id, name, display_name, mention_name, backend, model, role,
+          description, subagent_routing_json, color, order_index, config_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      agent.id,
+      agent.sessionId,
+      agent.name,
+      agent.displayName,
+      agent.mentionName,
+      agent.backend,
+      agent.model,
+      agent.role,
+      agent.description ?? null,
+      toJson(agent.subagentRouting ?? null),
+      agent.color ?? null,
+      agent.order,
+      toJson(agent.config),
+      agent.createdAt,
+    );
+  }
+
+  /**
+   * Add a top-level agent to an existing session (`agents.add`). Mirrors
+   * `create`'s defaulting exactly, deduplicated against the session's
+   * *existing* agents (read from the row, so it also sees a legacy agent
+   * whose `mention_name` column is still NULL).
+   */
+  addAgent(
+    sessionId: string,
+    input: {
+      backend: Backend;
+      model: string;
+      displayName?: string;
+      mentionName?: string;
+      role?: AgentRole;
+      config?: Agent["config"];
+    },
+  ): Agent {
+    const session = this.get(sessionId);
+    if (!session) throw new Error(`unknown session: ${sessionId}`);
+    const ts = now();
+    const displayName = input.displayName ?? input.mentionName ?? defaultAgentDisplayName(input.backend);
+    const mentionName = this.uniqueMentionNameInSession(
+      sessionId,
+      input.mentionName ?? deriveMentionName(displayName),
+    );
+    const order = this.nextAgentOrder(sessionId);
+    const agent: Agent = {
+      id: newId("agent"),
+      sessionId,
+      name: displayName,
+      displayName,
+      mentionName,
+      backend: input.backend,
+      model: input.model,
+      role: input.role === "lead" ? "lead" : "member",
+      order,
+      config: input.config ?? null,
+      createdAt: ts,
+    };
+    this.insertAgent(agent);
+    if (agent.role === "lead") this.setLead(sessionId, agent.id);
+    return this.agent(agent.id) ?? agent;
+  }
+
+  /**
+   * Merge-patch one agent (`agents.update`). Refuses `patch.role === "lead"`
+   * directly — see `AgentPatchSchema`'s doc comment — because only `setLead`
+   * also demotes the session's previous lead in the same write; two
+   * independent `updateAgent` calls could otherwise leave a session with two
+   * (or zero) leads.
+   */
+  updateAgent(agentId: string, patch: AgentPatch): Agent {
+    const existing = this.agent(agentId);
+    if (!existing) throw new Error(`unknown agent: ${agentId}`);
+    if (patch.role === "lead") {
+      throw new Error("agents.update cannot grant the lead role directly; use agents.setLead");
+    }
+    const mentionName =
+      patch.mentionName && patch.mentionName !== existing.mentionName
+        ? this.uniqueMentionNameInSession(existing.sessionId, patch.mentionName, agentId)
+        : existing.mentionName;
+    const merged = AgentSchema.parse({ ...existing, ...patch, mentionName });
+    this.db.run(
+      `UPDATE agents SET
+         display_name = ?, mention_name = ?, model = ?, role = ?, description = ?,
+         subagent_routing_json = ?, color = ?, order_index = ?, config_json = ?
+       WHERE id = ?`,
+      merged.displayName,
+      merged.mentionName,
+      merged.model,
+      merged.role,
+      merged.description ?? null,
+      toJson(merged.subagentRouting ?? null),
+      merged.color ?? null,
+      merged.order,
+      toJson(merged.config),
+      agentId,
+    );
+    return this.agent(agentId) ?? merged;
+  }
+
+  /**
+   * Remove a top-level agent. When it was the session's lead, `lead_agent_id`
+   * is cleared rather than silently re-assigned — an empty round-table lead
+   * is a state the UI/dispatcher must notice and ask about, not one this
+   * repo should guess its way out of.
+   */
+  removeAgent(agentId: string): boolean {
+    const existing = this.agent(agentId);
+    if (!existing) return false;
+    this.db.run("DELETE FROM agents WHERE id = ?", agentId);
+    this.db.run(
+      "UPDATE sessions SET lead_agent_id = NULL, updated_at = ? WHERE id = ? AND lead_agent_id = ?",
+      now(),
+      existing.sessionId,
+      agentId,
+    );
+    return true;
+  }
+
+  /** The only sanctioned way to change `leadAgentId`: promotes `agentId` and
+   *  demotes the session's previous lead in the same write (ADR-0002). */
+  setLead(sessionId: string, agentId: string): Session {
+    return this.db.transaction(() => {
+      const target = this.agent(agentId);
+      if (!target || target.sessionId !== sessionId) {
+        throw new Error(`agent ${agentId} is not in session ${sessionId}`);
+      }
+      this.db.run(
+        "UPDATE agents SET role = 'member' WHERE session_id = ? AND role = 'lead' AND id <> ?",
+        sessionId,
+        agentId,
+      );
+      this.db.run("UPDATE agents SET role = 'lead' WHERE id = ?", agentId);
+      const ts = now();
+      this.db.run(
+        "UPDATE sessions SET lead_agent_id = ?, updated_at = ? WHERE id = ?",
+        agentId,
+        ts,
+        sessionId,
+      );
+      const session = this.get(sessionId);
+      if (!session) throw new Error(`unknown session: ${sessionId}`);
+      return session;
+    });
+  }
+
+  /** Switch `mode` (ADR-0002: "can be switched later without losing
+   *  history") — agents and the transcript are untouched. */
+  setMode(sessionId: string, mode: SessionMode): Session {
+    this.db.run("UPDATE sessions SET mode = ?, updated_at = ? WHERE id = ?", mode, now(), sessionId);
+    const session = this.get(sessionId);
+    if (!session) throw new Error(`unknown session: ${sessionId}`);
+    return session;
+  }
+
+  /** Merge-patch a session's round-table settings (`sessions.updateSettings`). */
+  updateSettings(sessionId: string, patch: SessionSettingsPatch): Session {
+    const existing = this.get(sessionId);
+    if (!existing) throw new Error(`unknown session: ${sessionId}`);
+    const merged: SessionSettings = SessionSettingsSchema.parse({ ...existing.settings, ...patch });
+    this.db.run(
+      "UPDATE sessions SET settings_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(merged),
+      now(),
+      sessionId,
+    );
+    const session = this.get(sessionId);
+    if (!session) throw new Error(`unknown session: ${sessionId}`);
+    return session;
+  }
+
+  /** Effective mention name for every agent currently in `sessionId` — a
+   *  legacy row with a NULL `mention_name` column counts as
+   *  `deriveMentionName(name)`, exactly what `rowToAgent` reads it as. */
+  private uniqueMentionNameInSession(
+    sessionId: string,
+    base: string,
+    excludeAgentId?: string,
+  ): string {
+    const rows = this.db.all<{ id: string; name: string; mention_name: string | null }>(
+      "SELECT id, name, mention_name FROM agents WHERE session_id = ?",
+      sessionId,
+    );
+    const used = new Set(
+      rows
+        .filter((r) => r.id !== excludeAgentId)
+        .map((r) => r.mention_name ?? deriveMentionName(r.name)),
+    );
+    return uniqueMentionName(used, base);
+  }
+
+  private nextAgentOrder(sessionId: string): number {
+    const row = this.db.get<{ n: number | null }>(
+      "SELECT MAX(order_index) AS n FROM agents WHERE session_id = ?",
+      sessionId,
+    );
+    return row?.n === null || row?.n === undefined ? 0 : Number(row.n) + 1;
   }
 
   get(id: string): Session | null {
@@ -288,6 +547,9 @@ function rowToTurn(row: Row): Turn {
     status: row.status,
     parentTurnId: row.parent_turn_id ?? null,
     hopIndex: Number(row.hop_index ?? 0),
+    mentions: fromJson<string[]>(row.mentions_json, []),
+    triggeredByTurnId: row.triggered_by_turn_id ?? null,
+    speakerLabel: (row.speaker_label as string | null) ?? undefined,
     createdAt: Number(row.created_at),
   });
 }
@@ -302,6 +564,13 @@ export class TurnsRepo {
     status?: TurnStatus;
     parentTurnId?: string | null;
     hopIndex?: number;
+    /** Agent ids this turn's text @-addresses (R11 dispatch). */
+    mentions?: string[];
+    /** The turn whose @-mention caused this one — see `TurnSchema`'s doc
+     *  comment for how this differs from `parentTurnId`. */
+    triggeredByTurnId?: string | null;
+    /** Rendered round-table header, e.g. `"@codex"`. */
+    speakerLabel?: string;
   }): Turn {
     const turn: Turn = {
       id: newId("turn"),
@@ -311,11 +580,16 @@ export class TurnsRepo {
       status: input.status ?? "done",
       parentTurnId: input.parentTurnId ?? null,
       hopIndex: input.hopIndex ?? 0,
+      mentions: input.mentions ?? [],
+      triggeredByTurnId: input.triggeredByTurnId ?? null,
+      ...(input.speakerLabel !== undefined ? { speakerLabel: input.speakerLabel } : {}),
       createdAt: now(),
     };
     this.db.run(
-      `INSERT INTO turns (id, session_id, agent_id, role, status, parent_turn_id, hop_index, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO turns
+         (id, session_id, agent_id, role, status, parent_turn_id, hop_index,
+          mentions_json, triggered_by_turn_id, speaker_label, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       turn.id,
       turn.sessionId,
       turn.agentId,
@@ -323,6 +597,9 @@ export class TurnsRepo {
       turn.status,
       turn.parentTurnId ?? null,
       turn.hopIndex,
+      toJson(turn.mentions.length > 0 ? turn.mentions : null),
+      turn.triggeredByTurnId ?? null,
+      turn.speakerLabel ?? null,
       turn.createdAt,
     );
     return turn;
@@ -559,6 +836,26 @@ export class UsageRepo {
     return this.db
       .all<Row>("SELECT * FROM usage_events WHERE session_id = ? ORDER BY ts", sessionId)
       .map(rowToUsageEvent);
+  }
+
+  /** Totals for one agent across every session — `agents.describe`'s "cost so
+   *  far" (R13). `cached` collapses `cache_read`/`cache_creation` into the one
+   *  number the info card shows (see `AgentUsageSummarySchema`). */
+  totalsByAgent(agentId: string): { input: number; output: number; cached: number; costUsd: number } {
+    const row = this.db.get<Record<string, number | null>>(
+      `SELECT COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_read_tokens) + SUM(cache_creation_tokens), 0) AS cached_tokens,
+              COALESCE(SUM(cost_usd), 0)      AS cost_usd
+         FROM usage_events WHERE agent_id = ?`,
+      agentId,
+    );
+    return {
+      input: Number(row?.input_tokens ?? 0),
+      output: Number(row?.output_tokens ?? 0),
+      cached: Number(row?.cached_tokens ?? 0),
+      costUsd: Number(row?.cost_usd ?? 0),
+    };
   }
 
   /** Totals for the live meter (R23). */

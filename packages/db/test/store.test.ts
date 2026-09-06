@@ -138,6 +138,7 @@ describe("migrations", () => {
     expect(store.migration.applied).toEqual([
       "0001_init",
       "0002_widgets_elicitations_tool_outputs",
+      "0003_round_table_agents",
     ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
@@ -184,6 +185,7 @@ describe("migrations", () => {
     expect(pendingMigrations(fresh, migrations).map((m) => m.id)).toEqual([
       "0001_init",
       "0002_widgets_elicitations_tool_outputs",
+      "0003_round_table_agents",
     ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),
@@ -226,7 +228,7 @@ describe("sessions and agents", () => {
       mode: "round-table",
       title: "",
       agents: [
-        { name: "codey", backend: "codex", model: "gpt-5", role: "agent", config: null },
+        { name: "codey", backend: "codex", model: "gpt-5", role: "member", config: null },
         { name: "capy", backend: "claude", model: "claude-opus-4-5", role: "lead", config: null },
       ],
     });
@@ -254,6 +256,198 @@ describe("sessions and agents", () => {
     ).toThrow();
     expect(store.sessions.list({ includeArchived: true })).toHaveLength(before);
     expect(store.db.all("SELECT id FROM agents")).toHaveLength(0);
+  });
+});
+
+describe("Phase 4: session modes, agents, dispatcher, routing (contracts)", () => {
+  it("defaults displayName to name and mints a unique mentionName per session", () => {
+    const project = store.projects.upsertByPath({ path: path.join(dir, "mentions") });
+    const { agents } = store.sessions.create({
+      projectId: project.id,
+      mode: "round-table",
+      title: "",
+      agents: [
+        { name: "Capy Lead", backend: "claude", model: "claude-opus-4-5", role: "lead", config: null },
+        // Same label as another agent: the second one must not collide.
+        { name: "Capy Lead", backend: "codex", model: "gpt-5.5", role: "member", config: null },
+      ],
+    });
+    expect(agents[0]).toMatchObject({ displayName: "Capy Lead", mentionName: "capy-lead", order: 0 });
+    expect(agents[1]).toMatchObject({ displayName: "Capy Lead", mentionName: "capy-lead-2", order: 1 });
+  });
+
+  it("reads a pre-migration-0003 agent row back with a synthesized displayName/mentionName/role", () => {
+    const { session } = seedSession();
+    const legacyId = newId("agent");
+    // Simulate a row written before 0003: only the columns 0001 defined.
+    store.db.run(
+      `INSERT INTO agents (id, session_id, name, backend, model, role, config_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+      legacyId,
+      session.id,
+      "Legacy Bot",
+      "api",
+      "gpt-5",
+      "agent", // the pre-Phase-4 free-text default, never "lead"/"member"
+      Date.now(),
+    );
+    const legacy = store.sessions.agent(legacyId);
+    expect(legacy).toMatchObject({
+      name: "Legacy Bot",
+      displayName: "Legacy Bot",
+      mentionName: "legacy-bot",
+      role: "member",
+      order: 0,
+    });
+  });
+
+  it("agents.add derives a label from the backend when the caller names neither displayName nor mentionName", () => {
+    const { session } = seedSession();
+    const added = store.sessions.addAgent(session.id, { backend: "codex", model: "gpt-5.5" });
+    expect(added).toMatchObject({
+      displayName: "Codex agent",
+      mentionName: "codex-agent",
+      role: "member",
+      backend: "codex",
+    });
+    expect(store.sessions.agents(session.id).map((a) => a.id)).toContain(added.id);
+  });
+
+  it("agents.add promotes to lead and demotes the previous lead when role:'lead' is given", () => {
+    const { session, agents } = seedSession();
+    const added = store.sessions.addAgent(session.id, {
+      backend: "codex",
+      model: "gpt-5.5",
+      displayName: "Codey",
+      role: "lead",
+    });
+    expect(store.sessions.get(session.id)?.leadAgentId).toBe(added.id);
+    expect(store.sessions.agent(agents[0]!.id)?.role).toBe("member");
+  });
+
+  it("updateAgent merge-patches only the given fields, mints a unique mentionName on rename, and refuses role:'lead'", () => {
+    const { session, agents } = seedSession();
+    const other = store.sessions.addAgent(session.id, { backend: "codex", model: "gpt-5.5", mentionName: "codex" });
+
+    const patched = store.sessions.updateAgent(other.id, { description: "reviews diffs" });
+    expect(patched).toMatchObject({ description: "reviews diffs", mentionName: "codex", model: "gpt-5.5" });
+
+    const renamed = store.sessions.updateAgent(other.id, { mentionName: "capy" }); // collides with the lead
+    expect(renamed.mentionName).toBe("capy-2");
+
+    expect(() => store.sessions.updateAgent(other.id, { role: "lead" })).toThrow(/setLead/);
+    expect(store.sessions.agent(agents[0]!.id)?.role).toBe("lead"); // unchanged
+  });
+
+  it("removeAgent clears leadAgentId when the removed agent was the lead", () => {
+    const { session, agents } = seedSession();
+    expect(store.sessions.removeAgent(agents[0]!.id)).toBe(true);
+    expect(store.sessions.get(session.id)?.leadAgentId).toBeNull();
+    expect(store.sessions.agents(session.id)).toHaveLength(0);
+    expect(store.sessions.removeAgent("agt_nope")).toBe(false);
+  });
+
+  it("setLead promotes one agent and demotes the previous lead in the same write", () => {
+    const { session, agents } = seedSession();
+    const other = store.sessions.addAgent(session.id, { backend: "codex", model: "gpt-5.5" });
+
+    const updated = store.sessions.setLead(session.id, other.id);
+    expect(updated.leadAgentId).toBe(other.id);
+    expect(store.sessions.agent(other.id)?.role).toBe("lead");
+    expect(store.sessions.agent(agents[0]!.id)?.role).toBe("member");
+
+    expect(() => store.sessions.setLead(session.id, "agt_nope")).toThrow();
+  });
+
+  it("setMode switches mode without touching agents or the transcript", () => {
+    const { session } = seedSession();
+    const updated = store.sessions.setMode(session.id, "round-table");
+    expect(updated.mode).toBe("round-table");
+    expect(store.sessions.agents(session.id)).toHaveLength(1);
+  });
+
+  it("a session with no settings_json reads back the shipping defaults", () => {
+    const { session } = seedSession();
+    expect(session.settings).toEqual({ hopCap: 3, parallelAgents: false });
+  });
+
+  it("updateSettings merges into existing settings instead of resetting the rest (the jitless-defaults bug this schema avoids)", () => {
+    const { session } = seedSession();
+    store.sessions.updateSettings(session.id, { hopCap: 5 });
+    const afterFirst = store.sessions.get(session.id)!;
+    expect(afterFirst.settings).toMatchObject({ hopCap: 5, parallelAgents: false });
+
+    // A second, unrelated patch must not clobber the hopCap the first patch set.
+    store.sessions.updateSettings(session.id, { parallelAgents: true });
+    const afterSecond = store.sessions.get(session.id)!;
+    expect(afterSecond.settings).toEqual({ hopCap: 5, parallelAgents: true });
+  });
+
+  it("accepts a sub-agent routing override under settings.routing and survives a reopen", () => {
+    const { session } = seedSession();
+    store.sessions.updateSettings(session.id, {
+      routing: { subagents: { backend: "codex", model: "gpt-5.5" } },
+    });
+    store.close();
+    store = open();
+    expect(store.sessions.get(session.id)?.settings.routing).toEqual({
+      subagents: { backend: "codex", model: "gpt-5.5" },
+    });
+  });
+
+  it("records a turn's mentions, triggeredByTurnId and speakerLabel, and round-trips them after a reopen", () => {
+    const { session, agents } = seedSession();
+    const userTurn = store.turns.create({ sessionId: session.id, role: "user", mentions: [agents[0]!.id] });
+    const agentTurn = store.turns.create({
+      sessionId: session.id,
+      agentId: agents[0]!.id,
+      role: "agent",
+      parentTurnId: userTurn.id,
+      hopIndex: 1,
+      triggeredByTurnId: userTurn.id,
+      speakerLabel: "@capy",
+    });
+
+    expect(userTurn.mentions).toEqual([agents[0]!.id]);
+    expect(agentTurn.triggeredByTurnId).toBe(userTurn.id);
+    expect(agentTurn.speakerLabel).toBe("@capy");
+
+    store.close();
+    store = open();
+    const turns = store.turns.list(session.id);
+    expect(turns[0]!.mentions).toEqual([agents[0]!.id]);
+    expect(turns[1]!.triggeredByTurnId).toBe(userTurn.id);
+    expect(turns[1]!.speakerLabel).toBe("@capy");
+  });
+
+  it("a turn with no mentions reads back an empty array, not null", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "user" });
+    expect(turn.mentions).toEqual([]);
+    expect(store.turns.get(turn.id)?.mentions).toEqual([]);
+  });
+
+  it("totals one agent's usage across sessions for agents.describe's usage summary", () => {
+    const { session, agents } = seedSession();
+    store.usage.record({
+      sessionId: session.id,
+      agentId: agents[0]!.id,
+      turnId: null,
+      backend: "claude",
+      model: "claude-opus-4-5",
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 900,
+      cacheCreationTokens: 10,
+      costUsd: 0.0125,
+    });
+    expect(store.usage.totalsByAgent(agents[0]!.id)).toEqual({
+      input: 100,
+      output: 20,
+      cached: 910,
+      costUsd: 0.0125,
+    });
+    expect(store.usage.totalsByAgent("agt_nope")).toEqual({ input: 0, output: 0, cached: 0, costUsd: 0 });
   });
 });
 

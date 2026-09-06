@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Project, Session } from "@capygen/shared";
+import { DEFAULT_SESSION_SETTINGS, type Project, type Session } from "@capygen/shared";
 import { useAppStore } from "@/store/appStore";
 import { Sidebar } from "./Sidebar";
 
@@ -27,6 +27,7 @@ function session(overrides: Partial<Session>): Session {
     leadAgentId: "a1",
     title: "Untitled session",
     status: "idle",
+    settings: DEFAULT_SESSION_SETTINGS,
     createdAt: 0,
     updatedAt: 0,
     archived: false,

@@ -13,16 +13,24 @@
  */
 import { z } from "zod";
 import {
+  AgentConfigSchema,
+  AgentDescribeSchema,
   AgentDraftSchema,
+  AgentPatchSchema,
+  AgentRoleSchema,
   AgentSchema,
   ApiProviderSchema,
+  BackendSchema,
   BlockSchema,
   HarnessInfoSchema,
+  MentionNameSchema,
   PermissionRequestSchema,
   ProjectSchema,
   QuestionSchema,
   SessionModeSchema,
   SessionSchema,
+  SessionSettingsPatchSchema,
+  SettingsPatchSchema,
   SettingsSchema,
   SlashCommandSchema,
   TimestampSchema,
@@ -98,6 +106,53 @@ export const INVOKE_CHANNELS = {
     SessionSchema,
   ),
 
+  /** Switch a session's mode (ADR-0002: "can be switched later without
+   *  losing history"); the agents and transcript are untouched. */
+  "sessions.setMode": channel(
+    z.object({ sessionId: z.string().min(1), mode: SessionModeSchema }),
+    SessionSchema,
+  ),
+  /** Merge-patch a session's round-table settings (`SessionSettings` — hop
+   *  cap, sub-agent routing default, parallel dispatch); same merge-and-return
+   *  shape as `settings.set`, scoped to one session. */
+  "sessions.updateSettings": channel(
+    z.object({ sessionId: z.string().min(1), patch: SessionSettingsPatchSchema }),
+    SessionSchema,
+  ),
+
+  /** A session's top-level agents, in `order` (R13's agent tree/hover cards). */
+  "agents.list": channel(z.object({ sessionId: z.string().min(1) }), z.array(AgentSchema)),
+  /** Add a top-level agent to an existing round-table session. `displayName`/
+   *  `mentionName` default from each other, then from the backend, exactly as
+   *  `SessionsRepo.create`'s agents do — see `AgentDraftSchema`. */
+  "agents.add": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      backend: BackendSchema,
+      model: z.string().min(1),
+      displayName: z.string().min(1).optional(),
+      mentionName: MentionNameSchema.optional(),
+      role: AgentRoleSchema.optional(),
+      config: AgentConfigSchema.nullable().optional(),
+    }),
+    AgentSchema,
+  ),
+  /** Merge-patch one agent (`AgentPatchSchema`); refused if `patch.role` is
+   *  `"lead"` — see `AgentPatchSchema`'s doc comment. */
+  "agents.update": channel(
+    z.object({ agentId: z.string().min(1), patch: AgentPatchSchema }),
+    AgentSchema,
+  ),
+  "agents.remove": channel(z.object({ agentId: z.string().min(1) }), OkSchema),
+  /** Promote `agentId` to lead, demoting the session's previous lead in the
+   *  same write (the only sanctioned way to change `Session.leadAgentId`). */
+  "agents.setLead": channel(
+    z.object({ sessionId: z.string().min(1), agentId: z.string().min(1) }),
+    SessionSchema,
+  ),
+  /** One agent's usage description, Claude-Code-info-card style (R13). */
+  "agents.describe": channel(z.object({ agentId: z.string().min(1) }), AgentDescribeSchema),
+
   "turns.list": channel(
     z.object({ sessionId: z.string().min(1) }),
     z.object({ turns: z.array(TurnSchema), blocks: z.array(BlockSchema) }),
@@ -151,6 +206,17 @@ export const INVOKE_CHANNELS = {
       agentId: z.string().min(1).optional(),
     }),
     z.array(SlashCommandSchema),
+  ),
+
+  /**
+   * Resume a round-table chain the dispatcher stopped at the session's hop
+   * cap (ADR-0002: "until the user speaks or presses Continue", SPEC R11).
+   * `agentTurnId` is the new turn this started, or `null` when there was
+   * nothing to continue (no stopped chain, or a turn is already streaming).
+   */
+  "chat.continue": channel(
+    z.object({ sessionId: z.string().min(1) }),
+    z.object({ ok: z.boolean(), agentTurnId: z.string().nullable() }),
   ),
 
   /**
@@ -261,7 +327,9 @@ export const INVOKE_CHANNELS = {
   ),
 
   "settings.get": channel(Empty, SettingsSchema),
-  "settings.set": channel(SettingsSchema.partial(), SettingsSchema),
+  /** `SettingsPatchSchema`, not `SettingsSchema.partial()` — see that
+   *  schema's doc comment for the jitless-defaults bug this avoids. */
+  "settings.set": channel(SettingsPatchSchema, SettingsSchema),
 
   "app.version": channel(
     Empty,
@@ -303,6 +371,16 @@ export const EVENT_CHANNELS = {
     error: z.string().optional(),
   }),
   "session.updated": SessionSchema,
+  /** A session's agent roster changed (add/update/remove/setLead) — the
+   *  whole roster, in `order`, so the agent tree replaces rather than merges. */
+  "agents.updated": z.object({ sessionId: z.string(), agents: z.array(AgentSchema) }),
+  /** The dispatcher stopped an agent-to-agent chain at the hop cap, or on an
+   *  error mid-chain (ADR-0002, SPEC R11); `chat.continue` resumes it. */
+  "chat.chainStopped": z.object({
+    sessionId: z.string(),
+    turnId: z.string(),
+    reason: z.enum(["hop_cap", "error"]),
+  }),
   "permission.request": z.object({
     sessionId: z.string(),
     turnId: z.string(),
