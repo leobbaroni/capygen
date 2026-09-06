@@ -64,6 +64,11 @@ beforeEach(() => {
   ipcInvoke.mockImplementation((channel: string, args: Record<string, unknown>) => {
     if (channel === "tasks.list") return Promise.resolve(tasks);
     if (channel === "agents.list") return Promise.resolve([agent]);
+    if (channel === "tasks.create") {
+      return Promise.resolve(
+        task({ id: "t-new", title: String(args.title), order: Number(args.order ?? 0) }),
+      );
+    }
     if (channel === "tasks.update") {
       const existing = tasks.find((t) => t.id === args.id);
       if (!existing) return Promise.reject(new Error(`unknown task: ${String(args.id)}`));
@@ -172,11 +177,51 @@ describe("TasksPane (SPEC R16)", () => {
     );
   });
 
-  it("keeps manual add disabled — no tasks.create channel exists yet", async () => {
+  it("adds a task on Enter via tasks.create, appended after the last order", async () => {
+    const user = userEvent.setup();
     render(<TasksPane {...props} />);
     await screen.findByTestId("tasks-group-pending");
 
-    expect(screen.getByTestId("tasks-add-input")).toBeDisabled();
+    const input = screen.getByTestId("tasks-add-input");
+    expect(input).toBeEnabled();
+    await user.type(input, "Typed by hand{Enter}");
+
+    await waitFor(() =>
+      expect(ipcInvoke).toHaveBeenCalledWith("tasks.create", {
+        sessionId: "s1",
+        title: "Typed by hand",
+        order: 1,
+      }),
+    );
+    expect(await screen.findByText("Typed by hand")).toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveValue(""));
+  });
+
+  it("does not call tasks.create for a blank or whitespace-only title", async () => {
+    const user = userEvent.setup();
+    render(<TasksPane {...props} />);
+    await screen.findByTestId("tasks-group-pending");
+
+    await user.type(screen.getByTestId("tasks-add-input"), "   {Enter}");
+
+    expect(ipcInvoke).not.toHaveBeenCalledWith("tasks.create", expect.anything());
+  });
+
+  it("surfaces a tasks.create failure instead of clearing the input", async () => {
+    const user = userEvent.setup();
+    ipcInvoke.mockImplementation((channel: string) => {
+      if (channel === "tasks.list") return Promise.resolve(tasks);
+      if (channel === "agents.list") return Promise.resolve([agent]);
+      if (channel === "tasks.create") return Promise.reject(new Error("db is locked"));
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
+    render(<TasksPane {...props} />);
+    await screen.findByTestId("tasks-group-pending");
+
+    await user.type(screen.getByTestId("tasks-add-input"), "Typed by hand{Enter}");
+
+    expect(await screen.findByTestId("tasks-error")).toHaveTextContent("db is locked");
+    expect(screen.getByTestId("tasks-add-input")).toHaveValue("Typed by hand");
   });
 
   it("shows the empty state when there are no tasks", async () => {

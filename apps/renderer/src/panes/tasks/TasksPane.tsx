@@ -11,12 +11,11 @@
  * project: the cross-session view is the Tasks *page* (P10, Phase 8), a
  * different surface with its own IPC needs.
  *
- * Manual "add" is a known gap, not an oversight: `TasksRepo.create` exists
- * (`packages/db/src/repos.ts`), but no `tasks.create` IPC channel wires it up
- * yet — only `tasks.list`/`tasks.update` are in `@capygen/shared/ipc.ts`, and
- * `tasks.update` throws `unknown task: <id>` for an id that does not already
- * exist (it is a merge-patch, not an upsert). The input below stays disabled
- * with that explanation rather than pretending to work.
+ * Manual "add" goes through `tasks.create` (never `tasks.update`, which is a
+ * merge-patch and throws `unknown task: <id>` for a row that does not exist
+ * yet). The new row is appended optimistically from the channel's own return
+ * value; the `tasks.updated` broadcast the handler sends replaces the list a
+ * moment later with the authoritative roster.
  */
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2Icon, CircleDotIcon, CircleIcon, ListTodoIcon, RefreshCwIcon, XCircleIcon } from "lucide-react";
@@ -73,6 +72,7 @@ export function TasksPane({ params }: WorkspacePaneProps) {
   const [editingTitle, setEditingTitle] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [addTitle, setAddTitle] = useState("");
+  const [adding, setAdding] = useState(false);
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -147,11 +147,31 @@ export function TasksPane({ params }: WorkspacePaneProps) {
     }
   }
 
+  /** Enter on the add row. Appends after the highest `order` currently in the
+   *  list so a typed task lands at the bottom rather than jumping above an
+   *  agent's plan. */
+  async function commitAdd(): Promise<void> {
+    const title = addTitle.trim();
+    if (!title || adding) return;
+    setAdding(true);
+    setError(null);
+    try {
+      const order = tasks.reduce((max, t) => Math.max(max, t.order + 1), 0);
+      const created = await ipc().invoke("tasks.create", { sessionId, title, order });
+      setAddTitle("");
+      setTasks((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, created]));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAdding(false);
+    }
+  }
+
   const total = tasks.length;
   const completed = tasks.filter((t) => t.status === "completed").length;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="tasks-pane">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="tasks-pane">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border-weak px-3">
         <ListTodoIcon className="size-3.5 text-muted-foreground" />
         <span className="flex-1 text-sm font-medium text-foreground">
@@ -276,8 +296,12 @@ export function TasksPane({ params }: WorkspacePaneProps) {
           value={addTitle}
           onChange={(e) => setAddTitle(e.target.value)}
           placeholder="Add a task…"
-          disabled
-          title="Manual task creation needs a tasks.create IPC channel, not yet in this build's contract (packages/shared/src/ipc.ts only has tasks.list/tasks.update)."
+          aria-label="Add a task"
+          disabled={adding}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void commitAdd();
+            if (e.key === "Escape") setAddTitle("");
+          }}
           data-testid="tasks-add-input"
           className="w-full rounded-md border border-input bg-transparent px-2 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
         />

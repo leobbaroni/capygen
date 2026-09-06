@@ -6,7 +6,10 @@
  * unavailable and what sentence the user is shown*, so every case below pins a
  * reason string as well as the boolean.
  */
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexProbeResult } from "@capygen/engine";
 import {
   claudeSignInSignal,
@@ -83,6 +86,88 @@ describe("claude availability", () => {
       how: "ANTHROPIC_API_KEY",
     });
     expect(claudeSignInSignal({}, "C:\\nowhere")).toEqual({ signedIn: false, how: "" });
+  });
+
+  it("[C] looks for the credentials inside CLAUDE_CONFIG_DIR when one is set", () => {
+    // An isolated home (`CAPYGEN_CLAUDE_CONFIG_DIR` → `CLAUDE_CONFIG_DIR`,
+    // `win/configHomes.ts`) moves `.credentials.json` with it. Reading the
+    // fixed `~/.claude` there reported a login the SDK would never find.
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-signin-"));
+    try {
+      const home = "C:\\Users\\somebody";
+      expect(claudeSignInSignal({ CLAUDE_CONFIG_DIR: isolated }, home).signedIn).toBe(false);
+      fs.writeFileSync(path.join(isolated, ".credentials.json"), "{}", "utf8");
+      const signal = claudeSignInSignal({ CLAUDE_CONFIG_DIR: isolated }, home);
+      expect(signal.signedIn).toBe(true);
+      expect(signal.how).toBe(path.join(isolated, ".credentials.json"));
+    } finally {
+      fs.rmSync(isolated, { recursive: true, force: true });
+    }
+  });
+
+  describe("[C] a credentials file that exists but holds nothing", () => {
+    let dir: string;
+    const file = () => path.join(dir, ".credentials.json");
+    const signal = () => claudeSignInSignal({ CLAUDE_CONFIG_DIR: dir }, "C:\Users\somebody");
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-cred-"));
+    });
+    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    function write(oauth: unknown): void {
+      fs.writeFileSync(file(), JSON.stringify({ claudeAiOauth: oauth }), "utf8");
+    }
+
+    it("is not a login when both token strings are empty", () => {
+      // The exact shape this machine has: a Claude Code host that refreshes
+      // auth out of process leaves the object in place and the tokens blank.
+      write({ accessToken: "", refreshToken: "", expiresAt: 0 });
+      const s = signal();
+      expect(s.signedIn).toBe(false);
+      expect(s.how).toBe("");
+      expect(s.reason).toContain("holds no token");
+    });
+
+    it("is a login when either token is present", () => {
+      write({ accessToken: "a", refreshToken: "" });
+      expect(signal().signedIn).toBe(true);
+      write({ accessToken: "", refreshToken: "r" });
+      expect(signal().signedIn).toBe(true);
+    });
+
+    it("ignores an expired ACCESS token — that is the normal state between refreshes", () => {
+      write({ accessToken: "a", refreshToken: "r", expiresAt: 1 });
+      expect(signal().signedIn).toBe(true);
+    });
+
+    it("is not a login once the REFRESH token itself has expired", () => {
+      write({ accessToken: "a", refreshToken: "r", refreshTokenExpiresAt: 1 });
+      const s = signal();
+      expect(s.signedIn).toBe(false);
+      expect(s.reason).toContain("expired");
+    });
+
+    it("stays a login for a shape it does not recognise, or one it cannot parse", () => {
+      // Conservative on purpose: an unknown credential format must not lock a
+      // working machine out of its own backend.
+      fs.writeFileSync(file(), JSON.stringify({ somethingElse: true }), "utf8");
+      expect(signal().signedIn).toBe(true);
+      fs.writeFileSync(file(), "{ not json", "utf8");
+      expect(signal().signedIn).toBe(true);
+    });
+
+    it("surfaces the reason through harness.list rather than a generic line", async () => {
+      write({ accessToken: "", refreshToken: "" });
+      const rows = (await lister({ env: { CLAUDE_CONFIG_DIR: dir } })()) as {
+        backend: string;
+        available: boolean;
+        reason?: string;
+      }[];
+      const claude = rows.find((r) => r.backend === "claude");
+      expect(claude?.available).toBe(false);
+      expect(claude?.reason).toContain("holds no token");
+    });
   });
 });
 

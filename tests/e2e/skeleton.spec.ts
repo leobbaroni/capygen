@@ -28,6 +28,7 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import { skipUnlessClaudeAvailable } from "./claudeAvailability";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -125,6 +126,9 @@ test.describe("live Claude walking skeleton", () => {
       ).toBeGreaterThan(0);
       await expect(page.getByTestId("project-chip")).toContainText(path.basename(projectDir));
 
+      // Everything above is R1 and runs anywhere. Everything below costs a
+      // real Claude turn, so ask the app whether it can take one first.
+      await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
 
       // --- one live turn (R5, R6, R23) ---------------------------------
@@ -210,6 +214,7 @@ test.describe("live Claude walking skeleton", () => {
       launched = await launch(userDataDir, projectDir);
       const page = launched.page;
       await expect(page.getByTestId("landing")).toBeVisible();
+      await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
 
       const composer = page.getByTestId("landing-composer-input");

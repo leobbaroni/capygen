@@ -115,6 +115,7 @@ install. `workers: 1` — Electron windows are singletons per user-data-dir.
 | `tests/e2e/widget.spec.ts` | the real Claude harness + a fixture MCP server | **real model calls** |
 | `tests/e2e/roundtable.spec.ts` | four live (Claude + Codex), one offline (`CAPYGEN_ENGINE=stub-roundtable`) | **real model calls** (a few cents) |
 | `tests/e2e/workspace.spec.ts` | `CAPYGEN_ENGINE=stub` | none — it spawns a 30-line node http server on 5199, nothing else |
+| `tests/e2e/settings.spec.ts` | the real config stores, on **isolated** backend homes | none except its one live Claude case, which skips without a usable login |
 
 `skeleton.spec.ts` is the PLAN Phase 2 proof: landing → live Claude reply with a usage/cost line
 → close → relaunch → same transcript out of SQLite; plus an `AskUserQuestion` card answered in
@@ -200,6 +201,57 @@ Each spec launches into a fresh `mkdtemp` profile and a fresh temp project direc
 
 ---
 
+`settings.spec.ts` is the Phase 6 proof (SPEC R3, R19–R21, R27–R30). Everything it can write —
+MCP servers, tool policies, `config.toml`, API keys — goes to a **temp** `CLAUDE_CONFIG_DIR` and
+`CODEX_HOME`, handed to the app as `CAPYGEN_CLAUDE_CONFIG_DIR` / `CAPYGEN_CODEX_HOME`
+(`apps/desktop/src/win/configHomes.ts` maps them onto the CLIs' own variables for the app, for
+every child it spawns, and for the config stores). The machine's real `~/.claude` and `~/.codex`
+are only ever **read**, by the two tests whose names say so:
+
+- **(a)** the nav lists all 22 section ids and each one routes to a non-empty body; the app's own
+  log is then checked for the two `[config] …=<temp>` lines, so a run that silently used the real
+  homes cannot pass as an isolated one;
+- **(b)** adding a stdio server at user scope in the UI writes the isolated `.claude.json`, and
+  **`claude mcp list`** — the CLI, pointed at the same temp home — prints it back;
+- **(b3)** capygen's own MCP client then connects to that registered server and reads its tools
+  (`show_card`, `echo`). Live in the sense that matters — a real child process and a real MCP
+  handshake — with no model and no sign-in, so it never skips;
+- **(b2)** the model half: a real Claude turn in a session whose **project-scope** `.mcp.json`
+  holds the server, asserting the tools reach the agent's live list. It runs against the *real*
+  Claude home, because a login cannot be isolated (see below), and writes only inside a temp
+  project directory; it re-checks the real home's mtimes at the end;
+- **(c)** a `permissions.allow` entry appended to the isolated `settings.json` from outside the
+  app appears in the Tools table within 3 s — R29's watcher half;
+- **(d)** Codex: a UI add patches `config.toml` and every pre-existing comment survives; an
+  external `[mcp_servers.…]` block comes back into the UI;
+- **(e)** an API key entered in Providers is absent, byte-for-byte, from every file in the
+  profile and both backend homes, and from the log — while `secrets.has` says `stored` (R21);
+- **(f)** with every `codex`-bearing directory pruned off `PATH`, the setup panel shows the step
+  and **Run…** reaches the confirm dialog and spawns nothing (R3/R27);
+- **(g)** the dark-theme screenshot, and `nativeTheme.themeSource === "dark"` in the main process;
+- **(h)** the Plugins page lists the machine's genuinely installed Claude plugins — read-only,
+  against the real config dir.
+
+**Why (b2) can skip.** `CLAUDE_CONFIG_DIR` relocates `.credentials.json` along with everything
+else, so an isolated home has no login. Copying the real one in is worse than a config write: the
+SDK refreshes it from there, the refresh **rotates** the token server-side, and the new one lands
+in a directory the test then deletes — logging the real Claude Code out. So (b2) uses the real
+home and skips when the machine's own OAuth session is unusable. It says which:
+
+```
+- (b2) tools from the fixture server appear in the agent's live tool list
+  the machine's Claude OAuth session expired …; refreshing it would rewrite the real
+  ~/.claude/.credentials.json — sign in with `claude` and re-run
+```
+
+Fix it with `claude` in a terminal (`/login`), then re-run. **A Claude Code terminal is not a
+terminal for this purpose**: a host that refreshes auth for its children out of process leaves
+`.credentials.json` holding empty token strings, and capygen's own `harness.list` now reports
+that as "the Claude credentials file holds no token" rather than offering a backend whose every
+turn 401s.
+
+---
+
 ## 5. Spikes and live smoke checks
 
 ```sh
@@ -253,6 +305,9 @@ logged with its real message before it is re-thrown to the renderer.
 | `CAPYGEN_PROJECT_DIR` / `--project=<dir>` | pre-select a project folder at launch |
 | `CAPYGEN_ENGINE=stub` | run the offline echo double instead of a real backend |
 | `CAPYGEN_ENGINE=stub-roundtable` | the same echo double, but every reply @-mentions the next agent and dispatch goes through the real round table — how the hop cap is proved offline |
+| `CAPYGEN_CLAUDE_CONFIG_DIR` | set `CLAUDE_CONFIG_DIR` to this for the app **and every child it spawns** — the whole Claude home (settings, `.claude.json`, credentials, skills, plugins) moves there. The directory is created if absent, and the mapping is logged once as `[config] CLAUDE_CONFIG_DIR=… (from CAPYGEN_CLAUDE_CONFIG_DIR)` |
+| `CAPYGEN_CODEX_HOME` | the same for `CODEX_HOME` (`config.toml`, skills, plugin cache) |
+| `CAPYGEN_PREREQ_CONFIRM=cancel` | **e2e only.** Replaces the prerequisites confirm dialog — and only the dialog — with one that answers Cancel without drawing, so `settings.spec.ts` can click Run… and prove nothing was spawned. Any other value (including unset) leaves the real `dialog.showMessageBox` in place |
 
 ---
 

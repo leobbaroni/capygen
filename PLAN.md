@@ -193,7 +193,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
         create one — noted for whoever next owns the shared contract.
       * **The Codex plan path is unit-tested, not live**: `CodexHarness` does not yet map
         `turn/plan/updated` to a block, so `readPlan` has nothing to observe from a real backend.
-- [ ] Phase 6: Settings hub and prerequisites
+- [x] Phase 6: Settings hub and prerequisites
       Done when: nav test lists every section id; MCP/skills/plugins edits round-trip on temp
       homes for Claude and Codex; API key stored via safeStorage, absent from files/logs;
       setup panel shows steps with confirm + visible console (unit-tested gate).
@@ -204,6 +204,74 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       files); global settings hub separate from per-backend config with per-agent overrides;
       bootstrap panel (reuse the Omnigent-windows pattern).
       Covers: R3, R19, R20, R21, R28, R29, R30; checks: A9, A14.
+      **Accepted 2026-09-06.** All four Done-when clauses hold:
+      * *nav test lists every section id* — `tests/e2e/settings.spec.ts` (a): the 22 ids in
+        `apps/renderer/src/shell/settingsNav.tsx`, restated in the spec rather than imported from
+        it, and each one routed to a non-empty body.
+      * *MCP/skills/plugins edits round-trip on temp homes for Claude and Codex* —
+        `packages/engine/test/configStores.test.ts` (38) covers every write on temp homes for both
+        backends (`.claude.json` via the CLI, `.mcp.json` directly, `skillOverrides`, plugin
+        enable/disable, and the TOML patcher); e2e (b) then adds a server **in the UI** and has
+        `claude mcp list` — the CLI, pointed at the same temp home — print it back, and (d) does
+        the Codex half with every pre-existing comment intact.
+      * *API key stored via safeStorage, absent from files/logs* — e2e (e): every file in the
+        profile and both backend homes is read byte-for-byte, and the log too; `secrets.has`
+        answers `{has:true, source:"stored"}`.
+      * *setup panel shows steps with confirm + visible console (unit-tested gate)* —
+        `apps/desktop/test/prereqsRunGate.test.ts` (10) + `prereqsIpc.test.ts` (13); e2e (f)
+        prunes every `codex`-bearing directory off `PATH`, sees the step, clicks **Run…** and
+        proves from the app's own log that the dialog was built for that exact command and that
+        the console launcher was never reached.
+      Two-way sync (R29) is proved in both directions e2e: (c) an outside edit to the isolated
+      `settings.json` reaches the Tools table inside 3 s, and (d) an outside `[mcp_servers.…]`
+      block reaches the MCP page. A9 holds (plugins/skills/MCP through the headless `claude` CLI
+      plus file edits — no gap found); A14 holds (files are the source of truth; watchers plus the
+      CLIs' live lists keep up).
+      Isolation, which every one of those depends on: `CAPYGEN_CLAUDE_CONFIG_DIR` /
+      `CAPYGEN_CODEX_HOME` (`apps/desktop/src/win/configHomes.ts`) are applied to `process.env` in
+      `main.ts` before anything reads it, so the config stores, the watchers and **every child
+      process** (`cleanEnv`) see the temp homes. The app logs the mapping once and (a) asserts on
+      that line, so a run that quietly used the real `~/.claude` cannot pass as an isolated one.
+      Deviations, recorded rather than hidden:
+      * **The one live Claude case skips on this machine.** e2e (b2) — "a new Claude session's
+        tool list contains the server's tools" — needs a signed-in Claude, and a sign-in cannot be
+        isolated: `CLAUDE_CONFIG_DIR` relocates `.credentials.json` too. Copying the real one into
+        a temp home is *worse* than a config write — the SDK refreshes it there, the refresh
+        rotates the token server-side, and the new one lands in a directory the test deletes,
+        logging the real Claude Code out. So (b2) runs against the real home with the server at
+        **project** scope (`<tempProject>/.mcp.json`, plus `enableAllProjectMcpServers` in that
+        project's own `.claude/settings.json`) and re-checks the real home's mtimes at the end —
+        and skips when the machine's OAuth session is unusable, which it is here: this machine's
+        `~/.claude/.credentials.json` holds **empty** token strings (a Claude Code host refreshes
+        auth out of process), and `claude -p` outside that host answers `Failed to authenticate`.
+        The half that does *not* need a model is proved instead and never skips: (b3) has
+        capygen's own MCP client connect to the server it just registered and read its two tools.
+      * That same discovery fixed a real bug rather than only a test:
+        `claudeSignInSignal` treated the *existence* of `.credentials.json` as a login, so the New
+        Session picker offered a backend whose every turn 401s. It now reads three fields (never
+        returning or logging any token): both token strings must be non-empty and
+        `refreshTokenExpiresAt` must not be past; `expiresAt` is ignored, because an expired
+        access token is the normal state between refreshes; and an unparseable or unrecognised
+        credential shape still counts as a login, so a working machine cannot be locked out.
+        Consequence for the suite: the Claude-dependent tests in `harnesses`/`roundtable` and (new
+        here) `skeleton`/`widget` now **skip in seconds with the reason** instead of failing after
+        a 150 s timeout — `tests/e2e/claudeAvailability.ts`.
+      * **Dev servers has no `GlobalSettings.devServers` field**, so that section keeps its
+        preferences in `localStorage` with an on-page note. Adding the field is a shared-contract
+        change nobody in this phase owned.
+      * **Codex has no per-tool permission list** (`v2/Config.ts` 0.153.4 has neither), so a
+        `codex`/`api` tool policy is capygen's own SQLite row enforced by capygen's permission
+        cards, and a re-sync never prunes it.
+      * **`integrations.list` takes no `projectId`**, so project-scope rows are read for the
+        most-recently-touched project (`projects.list()` is `updated_at DESC`); the watchers
+        re-point when it changes.
+      * **Plugin install/uninstall is Claude-only** (A9); the other backends refuse by name.
+      * `PrereqsSection.tsx` and `PrereqPanel.tsx` were built in parallel and are **not**
+        de-duplicated: the section keeps its own inline step list, the panel is what the landing
+        `SetupBanner` renders.
+      * `import`/`updates`/`members`/`policies`/`sharing` render placeholders naming the phase
+        that fills them (7, 12, 9) — R19 asks for the ids, and inventing behaviour those phases
+        own would be worse than saying so.
 - [ ] Phase 7: Projects, worktrees, git, imports (M2)
       Done when: create a worktree from the composer chip, session runs in it, diff pane shows
       changes, commit from the UI; import a Claude Code and a Codex transcript into sessions.
@@ -273,12 +341,12 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
 | A6 | Omnigent Tailwind 4 tokens copy verbatim | same stack (verified) | look parity | Phase 2 |
 | A7 | Round-table rules: mentions, lead fallback, 3-hop cap | stated in interview, unvetoed | dispatcher | Phase 4 — **held**: shipped and proved e2e; the cap is per-session (`settings.hopCap`) |
 | A8 | Mascot: 8 states, 96 px sprite, CSS steps; generated image or code-drawn | user brief | landing only | Phase 2 |
-| A9 | Plugin/skill management via headless `claude` CLI + file edits is sufficient | CLI exposes `/plugin`; files readable | settings hub | Phase 6 |
+| A9 | Plugin/skill management via headless `claude` CLI + file edits is sufficient | CLI exposes `/plugin`; files readable | settings hub | Phase 6 — **held**: `claude mcp add/remove`, `claude plugin list/install/uninstall/enable/disable --json`, `claude plugin marketplace list --json` all verified live against 2.1.261, with `.mcp.json`, `settings.json` `permissions`/`skillOverrides` and `config.toml` edited as files. Two gaps recorded, neither fatal: `claude mcp list` has **no `--json`** (text-parsed, enrich-only) and there is no `mcp update` (remove-then-add) |
 | A10 | Unsigned builds acceptable (SmartScreen warns) | prior project | install UX | Phase 12 |
 | A11 | Font may be bundled | no license found | wordmark | Phase 2 (SVG fallback) |
 | A12 | Local-only members/policies/sharing satisfy parity | scope: no cloud | M6 depth | Phase 9 |
 | A13 | MCP App widget HTML can be fetched by capygen's own MCP client for CLI-hosted servers (or via the backend's resource read) | ext-apps host model (verified: npm readme); SDK exposes resource_links only | widget rendering (R31) | Phase 3 spike |
-| A14 | Backend config files are the source of truth for plugins/skills/MCP; watchers + live lists keep the app in sync | user rule (R29) | settings hub design | Phase 6 |
+| A14 | Backend config files are the source of truth for plugins/skills/MCP; watchers + live lists keep the app in sync | user rule (R29) | settings hub design | Phase 6 — **held**, both directions proved e2e (an outside `settings.json` edit reaches the Tools table in <3 s; an outside `config.toml` block reaches the MCP page; a UI add is printed back by `claude mcp list`). One asterisk: `chokidar.watch()` returns **before** its initial scan, so with `ignoreInitial: true` an edit inside that window is silently dropped — the watcher must be awaited to `ready` |
 
 ## Open Items (none blocking)
 

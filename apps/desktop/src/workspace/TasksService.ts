@@ -72,6 +72,24 @@ export class TasksService {
     });
   }
 
+  /**
+   * A manually-typed task (`tasks.create`). Goes straight to the repo — there
+   * is nothing to derive — and then re-broadcasts the roster so every pane on
+   * the session sees the new row without re-listing.
+   */
+  create(args: {
+    sessionId: string;
+    agentId?: string | null;
+    title: string;
+    status?: TaskStatus;
+    source?: TaskSource;
+    order?: number;
+  }): Task {
+    const task = this.deps.store.tasks.create(args);
+    if (task.sessionId) this.broadcastSession(task.sessionId);
+    return task;
+  }
+
   update(args: { id: string; patch: TaskPatch }): Task {
     const task = this.deps.store.tasks.update(args.id, args.patch);
     if (task.sessionId) this.broadcastSession(task.sessionId);

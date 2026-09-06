@@ -27,7 +27,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { probeCodex, type CodexProbeResult } from "@capygen/engine";
+import { probeCodex, resolveBackendHomes, type CodexProbeResult } from "@capygen/engine";
 import { API_PROVIDERS, type ApiProvider, type HarnessInfo } from "@capygen/shared";
 import type { SecretsStore } from "./handlers.js";
 
@@ -102,6 +102,15 @@ export const API_ENV_KEYS: Record<ApiProvider, string> = {
   openrouter: "OPENROUTER_API_KEY",
 };
 
+/** What `claudeSignInSignal` answers. `reason` is set only when it says no. */
+export interface ClaudeSignInSignal {
+  signedIn: boolean;
+  /** Which signal said yes — an env var name or the credentials path. Never a token. */
+  how: string;
+  /** `HarnessInfo.reason` when the answer is no and there is more to say. */
+  reason?: string;
+}
+
 /**
  * Anything whose presence means "the Claude SDK has a credential". The OAuth
  * login file first, because that is what a signed-in `claude` CLI writes on
@@ -110,14 +119,88 @@ export const API_ENV_KEYS: Record<ApiProvider, string> = {
 export function claudeSignInSignal(
   env: NodeJS.ProcessEnv = process.env,
   home: string = os.homedir(),
-): { signedIn: boolean; how: string } {
+): ClaudeSignInSignal {
   if (env.CLAUDE_CODE_OAUTH_TOKEN) return { signedIn: true, how: "CLAUDE_CODE_OAUTH_TOKEN" };
   if (env.ANTHROPIC_API_KEY) return { signedIn: true, how: "ANTHROPIC_API_KEY" };
-  const credentials = path.join(home, ".claude", ".credentials.json");
-  // Existence only. The file holds the user's OAuth tokens and capygen has no
-  // reason to open it — `claude` is the only thing that should ever read it.
-  if (fs.existsSync(credentials)) return { signedIn: true, how: credentials };
-  return { signedIn: false, how: "" };
+  // [C] `resolveBackendHomes`, not `join(home, ".claude")`: `CLAUDE_CONFIG_DIR`
+  // relocates the *whole* Claude home, credentials included, and capygen sets
+  // it for its own children whenever `CAPYGEN_CLAUDE_CONFIG_DIR` is given
+  // (`win/configHomes.ts`). Reading the fixed `~/.claude` under an isolated
+  // home made `harness.list` report a login the SDK would not actually find —
+  // the picker offering Claude, and the first turn failing with a 401.
+  const credentials = path.join(
+    resolveBackendHomes(env, home).claude,
+    ".credentials.json",
+  );
+  if (!fs.existsSync(credentials)) return { signedIn: false, how: "" };
+  return claudeCredentialSignal(credentials);
+}
+
+/**
+ * [C] Existence is not the signal it looks like.
+ *
+ * The first version of this function stopped at `existsSync`, on the grounds
+ * that the file holds the user's OAuth tokens and capygen has no business
+ * reading them. That is still the rule — nothing below is returned, logged or
+ * copied — but "the file is there" turned out to be a different claim from
+ * "there is a credential in it". A Claude Code host that refreshes auth for
+ * its children out of process (`CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH`) leaves
+ * a **stub** on disk: the `claudeAiOauth` object is present and its
+ * `accessToken` / `refreshToken` are empty strings. Measured on this machine,
+ * 2026-09-06 — and `claude -p` run outside that host answers `Failed to
+ * authenticate: OAuth session expired and could not be refreshed`.
+ *
+ * Reporting that as a login costs three separate things: the New Session
+ * picker offers a backend whose every turn 401s; the live e2e specs spend
+ * their full timeout before saying so; and the reason the user is shown
+ * ("Claude is available") is simply false.
+ *
+ * So the file is opened, and exactly three fields are looked at — whether the
+ * two token strings are non-empty, and whether the refresh token's own expiry
+ * is in the past. Deliberately conservative in both directions:
+ *
+ *  - a file that will not parse, or has no `claudeAiOauth` object at all, is
+ *    treated as a login. Other credential shapes exist (enterprise, a future
+ *    format) and capygen must not lock a working machine out over one it does
+ *    not recognise;
+ *  - `expiresAt` (the *access* token's) is **not** consulted. An expired
+ *    access token is the normal state of a working login between refreshes;
+ *    only `refreshTokenExpiresAt` means the session is actually finished.
+ */
+function claudeCredentialSignal(file: string): ClaudeSignInSignal {
+  let oauth: { accessToken?: unknown; refreshToken?: unknown; refreshTokenExpiresAt?: unknown };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      claudeAiOauth?: typeof oauth;
+    };
+    if (!parsed.claudeAiOauth || typeof parsed.claudeAiOauth !== "object") {
+      return { signedIn: true, how: file };
+    }
+    oauth = parsed.claudeAiOauth;
+  } catch {
+    return { signedIn: true, how: file };
+  }
+  const hasToken =
+    (typeof oauth.accessToken === "string" && oauth.accessToken.length > 0) ||
+    (typeof oauth.refreshToken === "string" && oauth.refreshToken.length > 0);
+  if (!hasToken) {
+    return {
+      signedIn: false,
+      how: "",
+      reason:
+        "the Claude credentials file holds no token — sign in with `claude` in a terminal" +
+        " (a Claude Code host that refreshes auth out of process leaves this file empty)",
+    };
+  }
+  const refreshExpiry = oauth.refreshTokenExpiresAt;
+  if (typeof refreshExpiry === "number" && refreshExpiry > 0 && refreshExpiry <= Date.now()) {
+    return {
+      signedIn: false,
+      how: "",
+      reason: "the Claude session has expired — sign in with `claude` in a terminal",
+    };
+  }
+  return { signedIn: true, how: file };
 }
 
 export interface HarnessListerDeps {
@@ -164,7 +247,7 @@ export function createHarnessLister(deps: HarnessListerDeps): () => Promise<Harn
     const claudeAvailable = claude.ok && login.signedIn;
     const claudeReason = !claude.ok
       ? (claude.reason ?? "claude CLI not found")
-      : "no Claude login found — run `claude login` in a terminal";
+      : (login.reason ?? "no Claude login found — run `claude login` in a terminal");
 
     const codexModels = codex.models
       .filter((m) => !m.hidden)

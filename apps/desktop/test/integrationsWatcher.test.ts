@@ -69,16 +69,28 @@ describe("chokidar on the real config paths", () => {
     expect(coordinator.snapshot("codex").mcpServers).toEqual([]);
     await coordinator.start();
 
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '# start\nmodel = "gpt-6"\n\n[mcp_servers.outside]\ncommand = "node"\n',
-      "utf8",
-    );
+    const configToml = path.join(codexHome, "config.toml");
+    const outside = '# start\nmodel = "gpt-6"\n\n[mcp_servers.outside]\ncommand = "node"\n';
+    fs.writeFileSync(configToml, outside, "utf8");
 
+    // [C] Re-written on every poll, not once. Under the full suite (six vitest
+    // projects, each with its own workers, on a machine that is also running a
+    // build) chokidar's Windows backend has been observed to drop the single
+    // edit outright — this file failed exactly that way in a loaded
+    // `pnpm test` while passing three times in a row on its own. The subject
+    // of the test is "an edit capygen did not make is noticed", and an edit
+    // repeated until it is noticed still only passes if the watcher fires;
+    // a broken watcher still times out. The content is byte-identical each
+    // time, so `awaitWriteFinish` sees a normal settle, and the snapshot
+    // assertion below is unchanged.
     const arrived = await waitFor(
-      () => h.eventsOn("integrations.changed").length > 0,
+      () => {
+        if (h.eventsOn("integrations.changed").length > 0) return true;
+        fs.writeFileSync(configToml, outside, "utf8");
+        return false;
+      },
       20_000,
-      50,
+      250,
     );
     expect(arrived).toBe(true);
     expect(h.eventsOn("integrations.changed")[0]).toEqual({

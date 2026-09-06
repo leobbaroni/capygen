@@ -31,6 +31,7 @@ import {
   type FrameLocator,
   type Page,
 } from "@playwright/test";
+import { skipUnlessClaudeAvailable } from "./claudeAvailability";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -144,6 +145,7 @@ test.describe("MCP Apps widget host", () => {
       launched = await launch(userDataDir, projectDir);
       const page = launched.page;
       await expect(page.getByTestId("landing")).toBeVisible();
+      await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
 
       const composer = page.getByTestId("landing-composer-input");

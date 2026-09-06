@@ -251,6 +251,13 @@ describe("sub-agent completion", () => {
 });
 
 describe("manual edits", () => {
+  it("tasks.create inserts a manual row and broadcasts the roster", () => {
+    const created = service.create({ sessionId, title: "Typed by hand" });
+    expect(created).toMatchObject({ sessionId, title: "Typed by hand", status: "pending", source: "manual" });
+    expect(h.store.tasks.get(created.id)).not.toBeNull();
+    expect((h.eventsOn("tasks.updated").at(-1) as { tasks: Task[] }).tasks).toHaveLength(1);
+  });
+
   it("tasks.update patches a row and re-broadcasts the roster", () => {
     const manual = h.store.tasks.create({ sessionId, title: "Typed by hand" });
     const updated = service.update({ id: manual.id, patch: { status: "completed" } });

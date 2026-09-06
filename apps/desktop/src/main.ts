@@ -19,6 +19,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   BrowserWindow,
   Menu,
+  Notification,
   clipboard,
   Tray,
   WebContentsView,
@@ -61,6 +62,8 @@ import {
   parseWindowState,
 } from "./win/windowState.js";
 import { longPath, resolveInitialProjectDir } from "./win/projectArg.js";
+import { applyConfigHomes } from "./win/configHomes.js";
+import { createNotifier, type Notifier } from "./win/notify.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
 import { createMcpPoolRegistry, type McpPoolRegistry } from "./ipc/mcpPools.js";
 import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
@@ -97,6 +100,7 @@ let ipc: IpcContext | null = null;
 let widgets: WidgetHostHandlers | null = null;
 let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
+let notifier: Notifier | null = null;
 
 // ---------------------------------------------------------------------------
 // single instance
@@ -114,6 +118,20 @@ if (userDataOverride) {
   app.setPath("userData", userDataOverride);
 }
 app.setName("capygen");
+// Windows shows a toast under the *AppUserModelID*, not the process name; an
+// unset one makes `new Notification(...)` silently do nothing on Windows 10.
+app.setAppUserModelId("com.capygen.app");
+
+/**
+ * [Phase 6/C] Point every backend at an isolated config home when asked to
+ * (`CAPYGEN_CLAUDE_CONFIG_DIR` → `CLAUDE_CONFIG_DIR`, `CAPYGEN_CODEX_HOME` →
+ * `CODEX_HOME`). This must happen **before** anything reads `process.env`:
+ * `resolveBackendHomes()` and `cleanEnv()` both copy it, and the second is
+ * what every harness child, `claude` CLI spawn and MCP stdio server inherits.
+ * See `win/configHomes.ts` for why the seam is capygen-namespaced rather than
+ * the backends' own variable names.
+ */
+const configHomes = applyConfigHomes(process.env);
 
 /**
  * MCP App widgets (SPEC R31) are served from their own privileged scheme so
@@ -128,6 +146,15 @@ protocol.registerSchemesAsPrivileged([WIDGET_SCHEME_PRIVILEGES]);
 // ---------------------------------------------------------------------------
 
 const shellWindows = new Set<BrowserWindow>();
+
+/** What the notifier reads when the settings hub cannot be asked (shutdown,
+ *  a store that threw): silence, never a guessed "on". */
+const DEFAULT_NOTIFICATIONS_OFF = {
+  enabled: false,
+  onFinish: false,
+  onNeedsInput: false,
+  onRunnerDisconnect: false,
+} as const;
 
 /** The `webContents.id` of the renderer whose IPC call is currently running.
  *  Read only by the Browser pane's window resolution — see the
@@ -258,6 +285,14 @@ function broadcast<E extends EventChannel>(event: E, payload: EventInput<E>): vo
   for (const win of shellWindows) {
     if (win.isDestroyed()) continue;
     win.webContents.send(event, parsed);
+  }
+  // [Phase 6/C] The desktop-notification tap (SPEC R19's `notifications`).
+  // After the sends, and inside its own try: a toast must never be able to
+  // stop an event reaching the UI.
+  try {
+    notifier?.handle(event, parsed);
+  } catch (err) {
+    log?.warn(`[notify] handler threw for ${event}`, err);
   }
 }
 
@@ -418,12 +453,32 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
         // Windows' Run key, via Electron. `openAsHidden` is deliberately off:
         // a window that appears is what a person expects from "start with
         // Windows", and the tray (R2) is where it goes when they close it.
+        //
+        // Read-then-write, not write-unconditionally: `applyOnStart` runs this
+        // on **every** launch, so an unconditional call would have every e2e
+        // run (and every ordinary start) touch the machine's real Run key to
+        // rewrite the value it already had. Comparing first makes the common
+        // case a registry read and nothing else.
+        let current = false;
+        try {
+          current = app.getLoginItemSettings().openAtLogin;
+        } catch (err) {
+          log.warn("[settings] could not read the login-item state", err);
+        }
+        if (current === enabled) return;
         app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
         log.info(`[settings] start with Windows: ${enabled ? "on" : "off"}`);
       },
+      // The tray's own `closeToTray` callback reads the hub directly (see the
+      // `createTrayIntegration` call), so there is nothing to push here — this
+      // is the audit line that says which value is live.
       applyCloseToTray: (enabled) => log.info(`[settings] close to tray: ${enabled ? "on" : "off"}`),
       applyNotifications: (notifications) =>
-        log.info(`[settings] notifications: ${notifications.enabled ? "on" : "off"}`),
+        log.info(
+          `[settings] notifications: ${notifications.enabled ? "on" : "off"}` +
+            ` (finish=${notifications.onFinish} needsInput=${notifications.onNeedsInput}` +
+            ` disconnect=${notifications.onRunnerDisconnect})`,
+        ),
     },
 
     // [Phase 6] The config-sync engine (SPEC R28-R30). Only the two pieces it
@@ -451,6 +506,30 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
         }
       },
     },
+    // [Phase 6/C] The one seam the prerequisites gate needs for e2e (SPEC R3,
+    // R27). `CAPYGEN_PREREQ_CONFIRM=cancel` replaces the *confirm dialog* —
+    // and only the confirm dialog — with one that answers "Cancel" without
+    // drawing anything, so `tests/e2e/settings.spec.ts` can click Run… and
+    // prove that (a) the gate really asked and (b) nothing was spawned. The
+    // console launcher is untouched: it is never reached, which is the
+    // assertion. Any other value (including unset) leaves the real
+    // `dialog.showMessageBox` in place, so the shipping build has no way in.
+    ...(process.env.CAPYGEN_PREREQ_CONFIRM === "cancel"
+      ? {
+          prereqs: {
+            confirm: async (options) => {
+              // `detail` is where `confirmOptionsFor` puts the exact command,
+              // so logging its first line proves the gate built a real dialog
+              // for this step rather than short-circuiting before it.
+              log.warn(
+                "[prereqs] CAPYGEN_PREREQ_CONFIRM=cancel — auto-cancelling the confirm for" +
+                  ` \`${options.detail.split("\n")[0] ?? ""}\``,
+              );
+              return false;
+            },
+          },
+        }
+      : {}),
     pickDirectory: async () => {
       const owner = [...shellWindows][0];
       const result = await (owner
@@ -536,6 +615,12 @@ app.whenReady().then(() => {
   log.captureConsole();
   log.captureProcessErrors();
   log.info(`[main] capygen ${app.getVersion()} starting; userData=${userData}`);
+  // Logged only once the logger exists — `applyConfigHomes` runs long before
+  // it does. A run whose line is absent used the machine's real homes, which
+  // is exactly the thing an e2e must be able to tell apart.
+  for (const mapping of configHomes) {
+    log.warn(`[config] ${mapping.to}=${mapping.dir} (from ${mapping.from})`);
+  }
 
   const dbFile = path.join(userData, DB_FILE_NAME);
   store = openStore(dbFile, {
@@ -563,6 +648,32 @@ app.whenReady().then(() => {
 
   ipc = registerIpc(store);
 
+  // [Phase 6/C] The notifications switch, made real (SPEC R19/R30). Built
+  // *after* the IPC context because it reads the settings hub, and assigned to
+  // the module-level `notifier` the `broadcast` tap above consults — so events
+  // fired before this point (there are none: nothing streams before a window)
+  // simply do not toast.
+  const activeStore = store;
+  notifier = createNotifier({
+    settings: () => ipc?.settings.all().notifications ?? DEFAULT_NOTIFICATIONS_OFF,
+    isFocused: () => [...shellWindows].some((win) => !win.isDestroyed() && win.isFocused()),
+    show: (request) => {
+      if (!Notification.isSupported()) return;
+      const toast = new Notification({ title: request.title, body: request.body });
+      if (request.onClick) toast.on("click", request.onClick);
+      toast.show();
+    },
+    reveal: revealWindow,
+    sessionTitle: (sessionId) => {
+      try {
+        return activeStore.sessions.get(sessionId)?.title ?? null;
+      } catch {
+        return null;
+      }
+    },
+    log,
+  });
+
   tray = createTrayIntegration({
     Tray,
     Menu,
@@ -574,7 +685,16 @@ app.whenReady().then(() => {
     createWindow: () => createWindow(),
     quit: () => app.quit(),
     log,
-    closeToTray: () => store?.settings.all().closeToTray ?? true,
+    // [Phase 6/C] The hub is the authority; the flat row (which the hub
+    // projects onto, see `SettingsService.project`) is the fallback for a
+    // profile whose hub row has not been written yet.
+    closeToTray: () => {
+      try {
+        return ipc?.settings.all().closeToTray ?? store?.settings.all().closeToTray ?? true;
+      } catch {
+        return true;
+      }
+    },
   });
   tray.create();
 

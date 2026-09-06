@@ -956,3 +956,64 @@ Not fixed, on purpose
   4 skipped, zero failures repo-wide; `corepack pnpm build` clean. COMPAT.md gained a
   "Config sync" section (every file, CLI command and flag relied on, with the version it was
   verified against) plus three Internal-seams rows.
+
+## 2026-09-06 — Phase 6 / C: settings hub + two-way config sync + prerequisites integrated, e2e green
+
+- **Isolation seam** (`apps/desktop/src/win/configHomes.ts`, applied in `main.ts` before anything
+  reads `process.env`): `CAPYGEN_CLAUDE_CONFIG_DIR` → `CLAUDE_CONFIG_DIR`, `CAPYGEN_CODEX_HOME` →
+  `CODEX_HOME`. One interception point, because everything downstream copies `process.env` —
+  `resolveBackendHomes()` (stores, watchers, settings pages) and `cleanEnv()` (every harness
+  child, every `claude mcp`/`claude plugin` spawn, MCP stdio servers, terminals, dev servers).
+  Namespaced rather than the backends' own names on purpose: a capygen launched *from* a Claude
+  Code terminal inherits that terminal's `CLAUDE_CONFIG_DIR` and would silently drive the wrong
+  home. The directory is created first (`claude mcp add -s user` writes into it but will not make
+  it) and the mapping is logged once, which the e2e asserts on — a run that used the real homes
+  cannot pass as an isolated one.
+- **Settings that actually do something**: `nativeTheme.themeSource` (e2e reads it back from the
+  main process), `app.setLoginItemSettings` now **read-then-write** so `applyOnStart` on every
+  launch is a registry read rather than a write to the machine's real Run key, the tray's
+  `closeToTray` reads the hub with the flat row as fallback, and `notifications` finally has a
+  consumer: `apps/desktop/src/win/notify.ts` taps the same `broadcast` the UI gets (no second
+  event path, nothing new in a model's context — R26). `onFinish` ← `chat.turnStatus: done`;
+  `onNeedsInput` ← the three R32 blocking cards; `onRunnerDisconnect` ← turn `error` +
+  `app.status` `error`. A focused window never toasts, and each `<kind>:<turnId>` fires once.
+  `app.setAppUserModelId` is required or `new Notification(...)` silently does nothing on
+  Windows 10.
+- **e2e** `tests/e2e/settings.spec.ts` — 9 pass, 1 skips: (a) all 22 nav ids + a non-empty body
+  each + the isolation log lines; (b) a UI add writes the isolated `.claude.json` and
+  `claude mcp list` (same temp home) prints it; (b3) capygen's own MCP client connects to that
+  registered server and reads `show_card`/`echo` — live, no model, never skips; (c) an outside
+  `permissions.allow` edit reaches the Tools table in <3 s; (d) a Codex UI add patches
+  `config.toml` with every comment intact, and an outside `[mcp_servers.…]` block comes back;
+  (e) an API key is absent byte-for-byte from every file in the profile and both homes and from
+  the log, while `secrets.has` says `stored`; (f) with every `codex`-bearing directory pruned off
+  `PATH`, Run… builds the dialog for that exact command and never reaches the console launcher
+  (`CAPYGEN_PREREQ_CONFIRM=cancel` replaces the dialog and *only* the dialog); (g)
+  `e2e-out/settings-dark.png`; (h) the real installed Claude plugins, read-only.
+- **A safety call, and a real bug behind it.** The first draft of (b2) copied the machine's
+  `~/.claude/.credentials.json` into the temp home so a live turn could run there. That is worse
+  than a config write: the SDK refreshes from the copy, the refresh **rotates** the token
+  server-side, and the new one lands in a directory the test deletes — logging the real Claude
+  Code out. Removed. (b2) now runs against the real home with the server at **project** scope
+  (`<tempProject>/.mcp.json` + `enableAllProjectMcpServers` in that project's `.claude/settings.json`)
+  and re-checks the real home's mtimes at the end.
+  Investigating why it still failed turned up the bug: this machine's `.credentials.json` **exists
+  and holds empty token strings** (a Claude Code host that refreshes auth out of process leaves a
+  stub; `claude -p` outside that host answers `Failed to authenticate: OAuth session expired and
+  could not be refreshed`). `claudeSignInSignal` treated existence as a login, so the New Session
+  picker offered a backend whose every turn 401s. It now reads three fields, returning and logging
+  none of them: both token strings must be non-empty and `refreshTokenExpiresAt` must not be past;
+  `expiresAt` is ignored (an expired access token is the normal state between refreshes); an
+  unparseable or unrecognised shape still counts as a login, so a working machine cannot be locked
+  out. Six unit tests pin each branch.
+- Consequence for the suite: `tests/e2e/claudeAvailability.ts` gives `skeleton`/`widget` the skip
+  guard `harnesses`/`roundtable` already had, quoting the app's own reason. On this machine the
+  Claude-dependent tests now skip **in seconds with a sentence you can act on** instead of failing
+  after a 150 s timeout.
+- Also finished, from a session that ended mid-change: `tasks.create` (IPC channel, `TasksService`,
+  the Tasks pane's add row) and the type errors its `notify.test.ts` had left behind.
+- Gate: `corepack pnpm typecheck` clean (5 projects + `tests/tsconfig.json`); `corepack pnpm test`
+  99 files / 1272 passed, 4 skipped; `corepack pnpm build` clean; `corepack pnpm exec playwright
+  test` 34 tests — 0 failed. PLAN.md Phase 6 ticked with its deviations; COMPAT.md gained the
+  credential-stub row and three Internal-seams rows; `docs/RUN.md` §4 gained the settings spec and
+  §7 the three new environment seams.

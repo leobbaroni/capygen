@@ -53,6 +53,7 @@ export const WORKSPACE_CHANNELS = [
   "servers.logs",
   "servers.saveCustom",
   "servers.remove",
+  "tasks.create",
   "tasks.list",
   "tasks.update",
   "browser.attach",
@@ -156,6 +157,7 @@ export function createWorkspaceIpc(deps: WorkspaceIpcDeps): WorkspaceIpc {
       store.devServers.create({ projectId: args.projectId, server: args.server }),
     "servers.remove": (args) => ({ ok: store.devServers.remove(args.serverId) }),
 
+    "tasks.create": (args) => tasks.create(args),
     "tasks.list": (args) => tasks.list(args),
     "tasks.update": (args) => tasks.update(args),
 

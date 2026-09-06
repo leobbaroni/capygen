@@ -187,6 +187,11 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   // live update after a Run, and this is what makes that event real.
   const prereqs = createPrereqsIpc({
     broadcastChanged: (steps) => broadcast("prereqs.changed", { steps }),
+    // [C] The gate's refusals ("unknown step", "`codex-cli` is not detected
+    // yet") and its "launched in a visible console" line are the only record
+    // that R27 held for a given run. They were being written to a logger that
+    // was never supplied, so a refusal left no trace at all in the app.
+    log: { info: (msg) => log.info(msg), warn: (msg) => log.warn(msg) },
     ...deps.prereqs,
   });
 
