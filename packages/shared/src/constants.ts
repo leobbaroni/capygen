@@ -33,13 +33,29 @@ export const MASCOT_STATES = [
 ] as const;
 export type MascotState = (typeof MASCOT_STATES)[number];
 
+export interface BuiltinSlashCommand {
+  name: string;
+  description: string;
+  /** Shown next to the name in the slash menu; also the signal the composer
+   *  uses to decide insert-then-edit vs. run-immediately (R14). */
+  argumentHint?: string;
+}
+
 /** Built-in slash commands (R14); backends add their own on top. */
-export const BUILTIN_SLASH_COMMANDS = [
+export const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
   { name: "/compact", description: "Summarise the conversation to free context" },
   { name: "/context", description: "Show what is in the model's context" },
-  { name: "/effort", description: "Set the reasoning effort" },
-  { name: "/model", description: "Switch the model for this agent" },
+  {
+    name: "/effort",
+    description: "Set the reasoning effort",
+    argumentHint: "low | medium | high | default",
+  },
+  {
+    name: "/model",
+    description: "Switch the model for this agent",
+    argumentHint: "<name> | default",
+  },
   { name: "/help", description: "List available commands" },
   { name: "/clear", description: "Start a fresh context in this session" },
   { name: "/cost", description: "Show tokens and cost so far" },
-] as const;
+];

@@ -34,6 +34,8 @@ describe("IPC contract", () => {
       "sessions.get",
       "sessions.archive",
       "turns.list",
+      "blocks.getOutput",
+      "turns.usage",
       "chat.send",
       "chat.interrupt",
       "chat.listCommands",

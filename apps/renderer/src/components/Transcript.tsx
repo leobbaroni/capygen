@@ -44,7 +44,13 @@ function TurnView({ turn, blocks }: { turn: Turn; blocks: Block[] }) {
           </span>
         ) : null}
         {blocks.map((block) => (
-          <BlockRenderer key={block.id} block={block} isUser={isUser} />
+          // `id` is a scroll anchor: a `task`-family `ToolCallCard` links to
+          // the sub-agent block it spawned (`toolFamily.ts`'s
+          // `subagentBlockId`), and `TurnRail`-style deep links reuse the
+          // same `block-<id>` convention as `turn-<id>`.
+          <div key={block.id} id={`block-${block.id}`}>
+            <BlockRenderer block={block} isUser={isUser} />
+          </div>
         ))}
         {blocks.length === 0 && turn.status === "streaming" ? <StreamingDots /> : null}
         {turn.status === "interrupted" ? (

@@ -6,6 +6,7 @@
 import { NavLink, useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
+import { ProvidersSection } from "./settings/ProvidersSection";
 
 /** R19: Omnigent's sections plus capygen's own. Order is the nav order. */
 export const SETTINGS_SECTIONS = [
@@ -67,12 +68,20 @@ export function SettingsPage() {
 
       <div className="titlebar-clearance min-h-0 flex-1 overflow-y-auto p-8">
         <h1 className="text-3xl font-normal tracking-[-0.03em]">{current.label}</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          This section lands in Phase 6 (SPEC R19–R21).
-        </p>
-        <pre className="mt-6 max-w-xl overflow-x-auto rounded-lg bg-code-bg p-3 text-sm">
-          {JSON.stringify(settings, null, 2)}
-        </pre>
+        {current.id === "api-keys" ? (
+          <div className="mt-6">
+            <ProvidersSection />
+          </div>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-muted-foreground">
+              This section lands in Phase 6 (SPEC R19–R21).
+            </p>
+            <pre className="mt-6 max-w-xl overflow-x-auto rounded-lg bg-code-bg p-3 text-sm">
+              {JSON.stringify(settings, null, 2)}
+            </pre>
+          </>
+        )}
       </div>
     </div>
   );

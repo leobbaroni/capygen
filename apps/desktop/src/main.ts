@@ -24,6 +24,8 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
+  protocol,
+  safeStorage,
   screen,
   shell,
 } from "electron";
@@ -55,6 +57,14 @@ import {
 } from "./win/windowState.js";
 import { resolveInitialProjectDir } from "./win/projectArg.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
+import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
+import { createHarnessLister } from "./ipc/harnessList.js";
+import {
+  WIDGET_SCHEME,
+  WIDGET_SCHEME_PRIVILEGES,
+  createWidgetHost,
+  type WidgetHostHandlers,
+} from "./ipc/widgets.js";
 import { createStubEngine } from "./engine/stub.js";
 
 /**
@@ -75,6 +85,7 @@ const APP_ICON = path.join(HERE, "assets", "icon.png");
 let store: CapygenStore | null = null;
 let log: Logger;
 let ipc: IpcContext | null = null;
+let widgets: WidgetHostHandlers | null = null;
 let tray: TrayIntegration | null = null;
 
 // ---------------------------------------------------------------------------
@@ -93,6 +104,14 @@ if (userDataOverride) {
   app.setPath("userData", userDataOverride);
 }
 app.setName("capygen");
+
+/**
+ * MCP App widgets (SPEC R31) are served from their own privileged scheme so
+ * each document carries the CSP its `ui://` resource declared. This must run
+ * before `app.whenReady()`; `protocol.handle` is installed once the store is
+ * open (`registerIpc`).
+ */
+protocol.registerSchemesAsPrivileged([WIDGET_SCHEME_PRIVILEGES]);
 
 // ---------------------------------------------------------------------------
 // windows
@@ -234,11 +253,65 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   const useStub = process.env[ENGINE_ENV] === "stub";
   if (useStub) log.warn(`[engine] ${ENGINE_ENV}=stub — running the offline echo engine`);
 
+  // The widget host owns one MCP client pool per project directory; it never
+  // reads a resource for a session whose project we cannot name.
+  widgets = createWidgetHost({
+    log: { info: (...a) => log.info(...(a as [string])), warn: (...a) => log.warn(...(a as [string])) },
+    projectPathFor: (sessionId) => {
+      const session = activeStore.sessions.get(sessionId);
+      if (!session) return null;
+      return activeStore.projects.get(session.projectId)?.path ?? null;
+    },
+    openExternal: (url) => shell.openExternal(url),
+    saveFile: async (file) => {
+      const owner = [...shellWindows][0];
+      const result = await dialog.showSaveDialog(
+        ...((owner ? [owner, { defaultPath: file.fileName }] : [{ defaultPath: file.fileName }]) as [
+          Electron.BrowserWindow,
+          Electron.SaveDialogOptions,
+        ]),
+      );
+      if (result.canceled || !result.filePath) return false;
+      const data =
+        file.base64 !== undefined
+          ? Buffer.from(file.base64, "base64")
+          : Buffer.from(file.text ?? "", "utf8");
+      fs.writeFileSync(result.filePath, data);
+      log.info(`[widget] saved ${result.filePath} (${data.length} bytes)`);
+      return true;
+    },
+  });
+
+  protocol.handle(WIDGET_SCHEME, (request) => {
+    const served = widgets?.serve(request.url) ?? null;
+    if (!served) return new Response("widget not found", { status: 404 });
+    return new Response(served.body, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": served.csp,
+        // A widget document is per-block state, never a cacheable asset.
+        "cache-control": "no-store",
+      },
+    });
+  });
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
     log,
+    widgets,
     ...(useStub ? { makeEngine: createStubEngine } : {}),
+    // R21: keys live in their own small ciphertext file next to the database,
+    // never in settings or logs — `secrets.ts` refuses to write plaintext if
+    // OS-level encryption is unavailable rather than falling back to it.
+    secrets: createSafeStorageSecretsStore({
+      safeStorage,
+      filePath: path.join(app.getPath("userData"), "secrets.json"),
+      log: { warn: (m) => log.warn(m) },
+    }),
+    listHarnesses: createHarnessLister({
+      defaultModel: () => activeStore.settings.all().defaultModel,
+    }),
     pickDirectory: async () => {
       const owner = [...shellWindows][0];
       const result = await (owner
@@ -383,6 +456,11 @@ app.on("will-quit", (event) => {
   shuttingDown = true;
   event.preventDefault();
   void (async () => {
+    try {
+      await widgets?.dispose();
+    } catch (err) {
+      log?.error("[main] widget host shutdown error", err);
+    }
     try {
       await ipc?.dispose();
     } catch (err) {

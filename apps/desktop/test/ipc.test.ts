@@ -271,6 +271,67 @@ describe("permission and question answers", () => {
   });
 });
 
+describe("tool outputs and usage (B4)", () => {
+  it("returns a stored tool output by id, and null for an unknown one", async () => {
+    // `tool_outputs.block_id` is `REFERENCES blocks(id)` (migration 0002) —
+    // a fixture id with no real block row violates the FK, so a real
+    // session/turn/block is created first rather than an arbitrary string.
+    const { sessionId } = await newSession();
+    const turn = store.turns.create({ sessionId, role: "agent" });
+    const block = store.blocks.upsert({
+      id: "blk_1",
+      turnId: turn.id,
+      sessionId,
+      index: 0,
+      kind: "tool_call",
+      name: "Bash",
+      input: { command: "ls" },
+      status: "success",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    const saved = store.toolOutputs.put({ blockId: block.id, content: { lines: ["a", "b"] } });
+    expect(await call("blocks.getOutput", { id: saved.id })).toEqual(saved);
+    expect(await call("blocks.getOutput", { id: "tout_nope" })).toBeNull();
+  });
+
+  it("lists usage_events for a session, oldest first", async () => {
+    // `usage_events.turn_id` is `REFERENCES turns(id)` — same FK reasoning
+    // as above, a real turn id rather than a fixture string.
+    const { sessionId } = await newSession();
+    const turn = store.turns.create({ sessionId, role: "agent" });
+    store.usage.record({
+      sessionId,
+      agentId: null,
+      turnId: turn.id,
+      backend: "claude",
+      model: "claude-sonnet-4-5",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      costUsd: 0.01,
+    });
+    store.usage.record({
+      sessionId,
+      agentId: null,
+      turnId: turn.id,
+      backend: "claude",
+      model: "claude-opus-4-5",
+      inputTokens: 20,
+      outputTokens: 8,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      costUsd: 0.02,
+    });
+    const result = (await call("turns.usage", { sessionId })) as {
+      events: { model: string; turnId: string | null }[];
+    };
+    expect(result.events.map((e) => e.model)).toEqual(["claude-sonnet-4-5", "claude-opus-4-5"]);
+    expect(result.events.every((e) => e.turnId === turn.id)).toBe(true);
+  });
+});
+
 describe("settings, commands, version", () => {
   it("returns the defaults, patches, and persists", async () => {
     expect(await call("settings.get", {})).toMatchObject({ theme: "system", hopCap: 3 });
@@ -282,10 +343,15 @@ describe("settings, commands, version", () => {
     const commands = (await call("chat.listCommands", {})) as {
       name: string;
       source: string;
+      argumentHint?: string;
     }[];
     expect(commands.map((c) => c.name)).toContain("/compact");
     expect(commands.map((c) => c.name)).toContain("/cost");
     expect(commands.every((c) => c.source === "builtin")).toBe(true);
+    // /effort and /model take an argument; the composer uses this to decide
+    // insert-then-edit vs. run-immediately (R14).
+    expect(commands.find((c) => c.name === "/model")?.argumentHint).toBe("<name> | default");
+    expect(commands.find((c) => c.name === "/compact")?.argumentHint).toBeUndefined();
   });
 
   it("reports the runtime the shell is on", async () => {

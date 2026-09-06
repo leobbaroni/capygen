@@ -26,8 +26,10 @@ import {
   SettingsSchema,
   SlashCommandSchema,
   TimestampSchema,
+  ToolOutputSchema,
   TurnSchema,
   TurnStatusSchema,
+  UsageEventSchema,
 } from "./domain.js";
 
 /** One request/response pair. */
@@ -99,6 +101,31 @@ export const INVOKE_CHANNELS = {
   "turns.list": channel(
     z.object({ sessionId: z.string().min(1) }),
     z.object({ turns: z.array(TurnSchema), blocks: z.array(BlockSchema) }),
+  ),
+
+  /**
+   * The whole value behind a truncated tool_call block's `outputRef` (R25's
+   * "expandable" stub, for the case a harness moved the full value into
+   * `tool_outputs` instead of keeping it on the block row as `fullOutput`).
+   * `null` when the id is unknown (a relaunch against a different profile, or
+   * a row a migration dropped) — the card says the full output is gone rather
+   * than throwing.
+   */
+  "blocks.getOutput": channel(
+    z.object({ id: z.string().min(1) }),
+    ToolOutputSchema.nullable(),
+  ),
+
+  /**
+   * Raw `usage_events` rows for a session (R23) — the session header meter
+   * sums them, and a turn's `UsageLine` groups the ones matching its own
+   * `turnId` for the per-model breakdown tooltip. Kept as the raw rows rather
+   * than a pre-aggregated shape so both call sites can slice it differently
+   * without two channels.
+   */
+  "turns.usage": channel(
+    z.object({ sessionId: z.string().min(1) }),
+    z.object({ events: z.array(UsageEventSchema) }),
   ),
 
   /** Submit a user message. Returns the user turn and the agent turn it started. */

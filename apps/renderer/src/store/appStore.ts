@@ -13,12 +13,19 @@
  * Task B2 additions: answering permission/question blocks, archiving
  * sessions, a local send queue for messages typed while a turn is streaming,
  * and the raw timestamps `hooks/useMascotState.ts` turns into a mascot state.
+ *
+ * Task B4 additions: answering elicitation blocks, the session's raw
+ * `usage_events` (the header meter and each turn's byModel tooltip both read
+ * this rather than two separate fetches), and the `harness.list` catalogue
+ * the composer's backend/model picker and Settings ▸ Harnesses both need.
  */
 import { create } from "zustand";
 import {
   DEFAULT_SETTINGS,
   type Agent,
+  type AgentDraft,
   type Block,
+  type HarnessInfo,
   type PermissionBlock,
   type Project,
   type QuestionBlock,
@@ -27,6 +34,7 @@ import {
   type SlashCommand,
   type TurnStatus,
   type Turn,
+  type UsageEvent,
 } from "@capygen/shared";
 import { hasBridge, ipc } from "@/lib/ipc";
 
@@ -39,6 +47,9 @@ export interface AppState {
   projects: Project[];
   sessions: Session[];
   commands: SlashCommand[];
+  /** Backend/model availability (`harness.list`) — the composer's picker and
+   *  Settings ▸ Harnesses both read this instead of invoking separately. */
+  harnesses: HarnessInfo[];
 
   /** The session the chat page is showing. */
   activeSessionId: string | null;
@@ -48,6 +59,9 @@ export interface AppState {
   blocks: Record<string, Block>;
   /** Turn id → live status, so the composer can disable while streaming. */
   turnStatus: Record<string, TurnStatus>;
+  /** Raw `usage_events` for the open session (R23) — summed for the header
+   *  meter, grouped by `turnId` for each turn's byModel breakdown tooltip. */
+  usageEvents: UsageEvent[];
 
   /** Messages typed while a turn was streaming; drained in order as it frees up. */
   queuedMessages: string[];
@@ -69,7 +83,15 @@ export interface AppState {
 
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
-  startSession(projectId: string, title?: string): Promise<Session>;
+  /** `leadAgent` seeds the session's lead agent's backend/model — the
+   *  composer's harness picker (SPEC item 5) passes what the user chose on
+   *  the New Session landing; omitted, `sessions.create` falls back to
+   *  Settings ▸ General's default backend/model. */
+  startSession(
+    projectId: string,
+    title?: string,
+    leadAgent?: Pick<AgentDraft, "backend" | "model" | "name">,
+  ): Promise<Session>;
   openSession(sessionId: string): Promise<void>;
   send(text: string): Promise<void>;
   interrupt(): Promise<void>;
@@ -80,6 +102,12 @@ export interface AppState {
     opts?: { updatedInput?: unknown; message?: string; scope?: "once" | "session" | "always" },
   ): Promise<void>;
   answerQuestion(requestId: string, answers: Record<string, string>): Promise<void>;
+  /** `null` answers means the user cancelled/declined the elicitation. */
+  answerElicitation(
+    turnId: string,
+    blockId: string,
+    answers: Record<string, unknown> | null,
+  ): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
   setShowArchived(show: boolean): Promise<void>;
   setListening(listening: boolean): void;
@@ -95,6 +123,20 @@ export function blocksOfTurn(state: AppState, turnId: string): Block[] {
 /** True while any turn in the open session is still streaming. */
 export function isBusy(state: AppState): boolean {
   return state.turns.some((t) => (state.turnStatus[t.id] ?? t.status) === "streaming");
+}
+
+/**
+ * This turn's own `usage_events` rows — a turn's `UsageLine` groups these by
+ * model for its breakdown tooltip (R23).
+ *
+ * Not safe to use directly as a zustand selector (`useAppStore((s) =>
+ * usageEventsForTurn(s, id))`): `.filter()` returns a new array every call,
+ * which `useSyncExternalStore` reads as "the store changed" on every render
+ * and loops forever. Select `s.usageEvents` (a stable reference) and call
+ * this inside a `useMemo` instead — see `UsageLine.tsx`.
+ */
+export function usageEventsForTurn(state: AppState, turnId: string): UsageEvent[] {
+  return state.usageEvents.filter((e) => e.turnId === turnId);
 }
 
 /**
@@ -165,6 +207,10 @@ export const useAppStore = create<AppState>()((set, get) => {
       // message, if the user typed ahead while this one was running.
       if (status === "done" || status === "error" || status === "interrupted") {
         drainQueue(sessionId);
+        // A finished turn is exactly when new usage_events rows land — the
+        // meter has nothing to catch them otherwise (there is no push event
+        // for usage the way there is for blocks/turn status).
+        void refreshUsage(sessionId);
       }
     });
 
@@ -188,6 +234,12 @@ export const useAppStore = create<AppState>()((set, get) => {
       turns,
       blocks: { ...Object.fromEntries(blocks.map((b) => [b.id, b])), ...pickLive(s.blocks, sessionId) },
     }));
+  }
+
+  async function refreshUsage(sessionId: string): Promise<void> {
+    const { events } = await ipc().invoke("turns.usage", { sessionId });
+    if (get().activeSessionId !== sessionId) return;
+    set({ usageEvents: events });
   }
 
   /** Keep any block that arrived by event and is newer than the fetched row. */
@@ -245,11 +297,13 @@ export const useAppStore = create<AppState>()((set, get) => {
     projects: [],
     sessions: [],
     commands: [],
+    harnesses: [],
     activeSessionId: null,
     agents: [],
     turns: [],
     blocks: {},
     turnStatus: {},
+    usageEvents: [],
     queuedMessages: [],
     listening: false,
     lastActivityAt: Date.now(),
@@ -268,13 +322,14 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
       subscribe();
       const client = ipc();
-      const [settings, projects, sessions, commands] = await Promise.all([
+      const [settings, projects, sessions, commands, harnesses] = await Promise.all([
         client.invoke("settings.get", {}),
         client.invoke("projects.list", {}),
         client.invoke("sessions.list", {}),
         client.invoke("chat.listCommands", {}),
+        client.invoke("harness.list", {}),
       ]);
-      set({ ready: true, settings, projects, sessions, commands, error: null });
+      set({ ready: true, settings, projects, sessions, commands, harnesses, error: null });
     },
 
     async pickProject() {
@@ -289,12 +344,14 @@ export const useAppStore = create<AppState>()((set, get) => {
       return project;
     },
 
-    async startSession(projectId, title = "") {
+    async startSession(projectId, title = "", leadAgent) {
       const { session, agents } = await ipc().invoke("sessions.create", {
         projectId,
         mode: "solo",
         title,
-        agents: [],
+        agents: leadAgent
+          ? [{ name: leadAgent.name, backend: leadAgent.backend, model: leadAgent.model, role: "lead" }]
+          : [],
       });
       set((s) => ({
         sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
@@ -303,6 +360,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         turns: [],
         blocks: {},
         turnStatus: {},
+        usageEvents: [],
         queuedMessages: [],
         lastDoneAt: null,
         staleRequests: [],
@@ -317,6 +375,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         turns: [],
         blocks: {},
         turnStatus: {},
+        usageEvents: [],
         queuedMessages: [],
         lastDoneAt: null,
         staleRequests: [],
@@ -334,6 +393,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         blocks: Object.fromEntries(loaded.blocks.map((b) => [b.id, b])),
         turnStatus: Object.fromEntries(loaded.turns.map((t) => [t.id, t.status])),
       });
+      void refreshUsage(sessionId);
     },
 
     async send(text) {
@@ -378,6 +438,19 @@ export const useAppStore = create<AppState>()((set, get) => {
       touchActivity();
       const { ok } = await ipc().invoke("question.answer", { requestId, answers });
       markStale(requestId, ok);
+    },
+
+    async answerElicitation(turnId, blockId, answers) {
+      const sessionId = get().activeSessionId;
+      if (!sessionId) return;
+      touchActivity();
+      // Keyed by `blockId`, not `requestId` (`elicitation.answer`'s own
+      // shape) — `staleRequests` just needs *an* id the card can check
+      // against, and reusing it here gives elicitation the same "no longer
+      // waiting" state permission/question cards get instead of pretending
+      // an undelivered answer was accepted.
+      const { ok } = await ipc().invoke("elicitation.answer", { sessionId, turnId, blockId, answers });
+      markStale(blockId, ok);
     },
 
     async archiveSession(sessionId, archived) {

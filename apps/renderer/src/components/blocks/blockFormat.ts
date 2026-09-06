@@ -2,6 +2,7 @@
  * Pure formatting helpers shared by the block cards. Split out from the
  * components so they can be unit-tested without React.
  */
+import type { UsageEvent, UsageTotals } from "@capygen/shared";
 
 /** `JSON.stringify(value, null, 2)`, falling back to `String(value)` for
  *  anything that throws (a circular structure, a BigInt, …). */
@@ -41,4 +42,48 @@ export function formatCount(n: number): string {
 
 export function formatCostUsd(costUsd: number): string {
   return `$${costUsd.toFixed(costUsd < 0.01 && costUsd > 0 ? 4 : 2)}`;
+}
+
+const EMPTY_TOTALS: UsageTotals = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  costUsd: 0,
+};
+
+/** Sum a list of `usage_events` into one `UsageTotals` (R23's session/day
+ *  meters, and a turn's overall total above its per-model breakdown). */
+export function sumUsage(events: readonly UsageEvent[]): UsageTotals {
+  return events.reduce<UsageTotals>(
+    (acc, e) => ({
+      inputTokens: acc.inputTokens + e.inputTokens,
+      outputTokens: acc.outputTokens + e.outputTokens,
+      cacheReadTokens: acc.cacheReadTokens + e.cacheReadTokens,
+      cacheCreationTokens: acc.cacheCreationTokens + e.cacheCreationTokens,
+      costUsd: acc.costUsd + e.costUsd,
+    }),
+    { ...EMPTY_TOTALS },
+  );
+}
+
+export interface UsageByModel {
+  model: string;
+  totals: UsageTotals;
+}
+
+/** Group `usage_events` by model, in first-seen order — the per-turn
+ *  breakdown tooltip (R23) and the Usage page's per-model rows both want
+ *  this shape rather than re-deriving it from the raw event list. */
+export function groupUsageByModel(events: readonly UsageEvent[]): UsageByModel[] {
+  const order: string[] = [];
+  const byModel = new Map<string, UsageEvent[]>();
+  for (const e of events) {
+    if (!byModel.has(e.model)) {
+      order.push(e.model);
+      byModel.set(e.model, []);
+    }
+    byModel.get(e.model)?.push(e);
+  }
+  return order.map((model) => ({ model, totals: sumUsage(byModel.get(model) ?? []) }));
 }

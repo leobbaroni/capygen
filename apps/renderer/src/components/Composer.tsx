@@ -9,13 +9,29 @@
  * pointer exception in the reference does not apply to a Windows app.
  *
  * Slash menu (R14): typing `/` at the start of an empty line filters
- * `commands` as you type (substring, so `pilot` finds `/cockpit:pilot`);
- * Up/Down move the highlight, Escape dismisses, Enter or a click writes the
- * command into the composer with the caret after it — the reference's
- * `applySlashSelection`, and the only way a command that takes an argument
- * (`/model opus`, `/cockpit:pilot what's next`) can be dispatched at all.
- * It lives outside the textarea's `overflow-hidden` wrapper, as a direct
- * child of the form, or the popup would be clipped away above it.
+ * `commands` as you type (substring, so `pilot` finds `/cockpit:pilot`,
+ * grouped into sections by `SlashMenu`); Up/Down move the highlight, Escape
+ * dismisses. Selecting a command (click or Enter) either runs it immediately
+ * — an argument-less built-in like `/compact` — or inserts it with the caret
+ * after it for a command that takes one (`argumentHint` set: `/model`,
+ * `/effort`, or any backend/plugin command that declares one) so the
+ * argument can be typed before it goes anywhere (`/model opus`,
+ * `/cockpit:pilot what's next`). It lives outside the textarea's
+ * `overflow-hidden` wrapper, as a direct child of the form, or the popup
+ * would be clipped away above it.
+ *
+ * Harness/model picker (SPEC item 5): lists `harnesses` (from `harness.list`)
+ * next to the send button. An agent's backend is fixed for its lifetime
+ * (`Harness`: "one harness instance per agent" — CONTEXT.md), so what the
+ * picker *does* with a choice depends on whether an agent exists yet:
+ *   - no `agent` (the New Session landing, before `startSession` has run):
+ *     `onPickAgent` just remembers the choice, threaded into `sessions.create`
+ *     as the lead agent's backend/model.
+ *   - an `agent` (an open, ongoing session): only that backend's own models
+ *     are offered, and picking one dispatches through the *existing* `/model`
+ *     built-in (R14) rather than any live "swap backends" operation, because
+ *     there isn't one — the caller's `onPickAgent` is expected to route this
+ *     to `send("/model <id>")`.
  *
  * Attach is disabled until `chat.send` can carry a file
  * (packages/shared/src/ipc.ts): taking one, showing a chip and then dropping
@@ -25,23 +41,32 @@
  * mascot's `listening` state (`hooks/useMascotState.ts`) even though actual
  * speech-to-text is Phase 10 (R18/P18).
  */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowUpIcon,
   ChevronDownIcon,
   MicIcon,
   PaperclipIcon,
-  SettingsIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react";
-import type { SlashCommand } from "@capygen/shared";
+import type { Backend, HarnessInfo, SlashCommand } from "@capygen/shared";
 import { SlashMenu } from "@/components/SlashMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
+
+export interface AgentChoice {
+  backend: Backend;
+  model: string;
+}
+
+const BACKEND_LABEL: Record<Backend, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  api: "API model",
+};
 
 export interface ComposerProps {
   onSubmit: (text: string) => void | Promise<void>;
@@ -51,9 +76,19 @@ export interface ComposerProps {
   placeholder?: string;
   autoFocus?: boolean;
   /** Rendered in the tray under the textarea (project chip, mode chip, …). */
-  tray?: React.ReactNode;
+  tray?: ReactNode;
   /** Slash-command catalogue (R14) — built-ins plus the backend's own. */
   commands?: SlashCommand[];
+  /** Backend/model catalogue for the picker (`harness.list`). Omitted or
+   *  empty: the picker still shows the current/default choice, just with
+   *  nothing to switch to. */
+  harnesses?: HarnessInfo[];
+  /** The agent the picker is showing, or `null`/undefined before one exists
+   *  (a brand-new session on the New Session landing). */
+  agent?: AgentChoice | null;
+  /** A different backend/model was chosen — see the file header for what
+   *  "picking" means with vs. without `agent`. */
+  onPickAgent?: (choice: AgentChoice) => void;
   testId?: string;
 }
 
@@ -66,6 +101,9 @@ export function Composer({
   autoFocus = true,
   tray,
   commands = [],
+  harnesses = [],
+  agent = null,
+  onPickAgent,
   testId = "composer",
 }: ComposerProps) {
   const [value, setValue] = useState("");
@@ -77,7 +115,6 @@ export function Composer({
   const [sendError, setSendError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
   const listening = useAppStore((s) => s.listening);
   const setListening = useAppStore((s) => s.setListening);
 
@@ -117,31 +154,48 @@ export function Composer({
   }, [value]);
 
   /**
-   * Send, and put the message back if it could not go.
+   * Send `text`, and put it back in the draft if it could not go — shared by
+   * `submit()` (whatever is currently typed) and an argument-less slash
+   * command run straight from the menu (SPEC R14).
    *
    * The draft is cleared first so the composer feels instant, which means a
    * rejected `chat.send` (an unknown session, a backend that refused) would
    * otherwise destroy what the user typed with nothing shown anywhere.
    */
-  async function submit(): Promise<void> {
-    const text = value.trim();
-    if (text === "" || disabled) return;
+  async function sendText(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (trimmed === "" || disabled) return;
     const keptFiles = files;
     setValue("");
     setFiles([]);
     setSendError(null);
     try {
-      await onSubmit(text);
+      await onSubmit(trimmed);
     } catch (err) {
-      setValue((current) => (current === "" ? text : current));
+      setValue((current) => (current === "" ? trimmed : current));
       setFiles(keptFiles);
       setSendError(err instanceof Error ? err.message : String(err));
       ref.current?.focus();
     }
   }
 
-  /** Write the command into the composer so arguments can be typed after it. */
+  async function submit(): Promise<void> {
+    await sendText(value);
+  }
+
+  /**
+   * A command with no `argumentHint` (SPEC R14: "Enter runs argument-less
+   * commands") sends immediately; one that takes an argument is written into
+   * the composer instead, caret after it, so the argument can be typed
+   * before anything is sent — the only way `/model opus` or
+   * `/cockpit:pilot what's next` can be dispatched at all.
+   */
   function selectCommand(command: SlashCommand): void {
+    setSlashDismissedFor(null);
+    if (!command.argumentHint) {
+      void sendText(command.name);
+      return;
+    }
     setValue(`${command.name} `);
     ref.current?.focus();
   }
@@ -179,6 +233,19 @@ export function Composer({
   function addFiles(list: FileList | null): void {
     if (!list || list.length === 0) return;
     setFiles((prev) => [...prev, ...Array.from(list)]);
+  }
+
+  // Harness/model picker (SPEC item 5). Only the backends `harness.list`
+  // reports available are offered; an `agent` narrows the list to its own
+  // backend (an agent cannot switch backends — see the file header).
+  const pickableHarnesses = harnesses.filter((h) => h.available && (!agent || h.backend === agent.backend));
+  const pickerLabel = agent
+    ? `${BACKEND_LABEL[agent.backend]} · ${agent.model}`
+    : (harnesses.find((h) => h.available)?.label ?? "Choose model");
+
+  function pick(backend: Backend, model: string): void {
+    setAgentMenuOpen(false);
+    onPickAgent?.({ backend, model });
   }
 
   return (
@@ -302,38 +369,49 @@ export function Composer({
               aria-expanded={agentMenuOpen}
               data-testid={`${testId}-agent-picker`}
             >
-              <span className="max-w-28 truncate">Claude Code</span>
+              <span className="max-w-40 truncate">{pickerLabel}</span>
               <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
-            </Button>
-            <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => navigate("/settings/harnesses")}
-              title="Configure Claude Code"
-              aria-label="Configure Claude Code"
-              data-testid={`${testId}-agent-gear`}
-            >
-              <SettingsIcon className="size-4" />
             </Button>
             {agentMenuOpen ? (
               <ul
                 role="listbox"
                 data-testid={`${testId}-agent-menu`}
-                className="absolute right-0 bottom-full z-20 mb-1 min-w-40 rounded-lg border border-border bg-popover p-1 text-sm shadow-menu"
+                className="absolute right-0 bottom-full z-20 mb-1 max-h-72 min-w-52 overflow-y-auto rounded-lg border border-border bg-popover p-1 text-sm shadow-menu"
               >
-                <li>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected="true"
-                    onClick={() => setAgentMenuOpen(false)}
-                    className="w-full rounded-md px-2 py-1.5 text-left text-foreground hover:bg-accent"
-                  >
-                    Claude Code
-                  </button>
-                </li>
+                {pickableHarnesses.length === 0 ? (
+                  <li className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No models available
+                  </li>
+                ) : (
+                  pickableHarnesses.map((harness) => (
+                    <li key={harness.backend}>
+                      {!agent ? (
+                        <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">
+                          {harness.label}
+                        </div>
+                      ) : null}
+                      {harness.models.map((model) => {
+                        const isCurrent = agent?.backend === harness.backend && agent.model === model.id;
+                        return (
+                          <button
+                            key={model.id}
+                            type="button"
+                            role="option"
+                            aria-selected={isCurrent}
+                            data-testid={`${testId}-agent-option`}
+                            onClick={() => pick(harness.backend, model.id)}
+                            className={cn(
+                              "w-full rounded-md px-2 py-1.5 text-left text-foreground hover:bg-accent",
+                              isCurrent && "bg-accent",
+                            )}
+                          >
+                            {agent ? model.label : `${harness.label} — ${model.label}`}
+                          </button>
+                        );
+                      })}
+                    </li>
+                  ))
+                )}
               </ul>
             ) : null}
           </div>

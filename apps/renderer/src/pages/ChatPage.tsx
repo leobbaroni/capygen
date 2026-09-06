@@ -9,6 +9,7 @@ import { useParams } from "react-router-dom";
 import { ArrowDownIcon, XIcon } from "lucide-react";
 import { Mascot } from "@/brand/Mascot";
 import { Composer } from "@/components/Composer";
+import { SessionUsageMeter } from "@/components/SessionUsageMeter";
 import { Transcript } from "@/components/Transcript";
 import { TurnRail } from "@/components/TurnRail";
 import { useMascotState } from "@/hooks/useMascotState";
@@ -24,6 +25,12 @@ export function ChatPage() {
   const busy = useAppStore(isBusy);
   const session = useAppStore((s) => s.sessions.find((x) => x.id === sessionId));
   const commands = useAppStore((s) => s.commands);
+  const harnesses = useAppStore((s) => s.harnesses);
+  // The picker for an ongoing session only ever shows/edits the lead agent —
+  // round-table's per-agent @-mention target picker is Phase 4 (R10/R11).
+  const leadAgent = useAppStore((s) =>
+    s.agents.find((a) => a.id === s.sessions.find((x) => x.id === sessionId)?.leadAgentId),
+  );
   const queuedMessages = useAppStore((s) => s.queuedMessages);
   const error = useAppStore((s) => s.error);
   // Subscribing to the map (not a derived array) keeps the component re-rendering
@@ -60,7 +67,7 @@ export function ChatPage() {
     <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-page">
       <header className="titlebar-clearance flex h-9 shrink-0 items-center gap-2 px-4">
         <Mascot state={mascotState} size={20} />
-        <span className="truncate text-sm text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {session?.title || "Untitled session"}
         </span>
         {session?.status === "running" ? (
@@ -70,6 +77,7 @@ export function ChatPage() {
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-info"
           />
         ) : null}
+        <SessionUsageMeter />
       </header>
 
       <TurnRail turns={turns} />
@@ -149,6 +157,14 @@ export function ChatPage() {
             testId="chat-composer"
             placeholder="Reply…"
             commands={commands}
+            harnesses={harnesses}
+            agent={leadAgent ? { backend: leadAgent.backend, model: leadAgent.model } : null}
+            // An agent's backend is fixed once it exists (CONTEXT.md); the
+            // picker only ever offers that same backend's other models here
+            // (Composer filters to `agent.backend`), so "picking" one is
+            // exactly what the `/model` built-in is for (R14) — there is no
+            // separate "switch model" IPC to call.
+            onPickAgent={({ model }) => void send(`/model ${model}`)}
           />
         </div>
       </div>

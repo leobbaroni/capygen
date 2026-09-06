@@ -25,6 +25,9 @@ import { useAppStore } from "@/store/appStore";
 export function QuestionCard({ block }: { block: QuestionBlock }) {
   const answerQuestion = useAppStore((s) => s.answerQuestion);
   const stale = useAppStore((s) => s.staleRequests.includes(block.requestId));
+  // Absent → "yes" (see domain.ts's own comment on `allowOther`): every
+  // harness that predates this field still gets the Other row it always had.
+  const allowOther = block.allowOther !== false;
   // question text → selected option labels (order preserved for the joined answer).
   const [selections, setSelections] = useState<Record<string, string[]>>({});
   // question text → the free-text answer, when the user picked "Other".
@@ -142,19 +145,21 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
                     ) : null}
                   </Button>
                 ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={otherOn ? "default" : "outline"}
-                  data-testid="block-question-other"
-                  aria-pressed={otherOn}
-                  onClick={() => toggleCustom(q.question, q.multiSelect)}
-                  className={cn(otherOn && "ring-2 ring-ring")}
-                >
-                  Other…
-                </Button>
+                {allowOther ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={otherOn ? "default" : "outline"}
+                    data-testid="block-question-other"
+                    aria-pressed={otherOn}
+                    onClick={() => toggleCustom(q.question, q.multiSelect)}
+                    className={cn(otherOn && "ring-2 ring-ring")}
+                  >
+                    Other…
+                  </Button>
+                ) : null}
               </div>
-              {otherOn ? (
+              {allowOther && otherOn ? (
                 <input
                   type="text"
                   autoFocus

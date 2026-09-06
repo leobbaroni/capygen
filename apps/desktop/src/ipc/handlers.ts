@@ -20,6 +20,7 @@ import {
   type SlashCommand,
 } from "@capygen/shared";
 import { createSessionRunner } from "../engine/SessionRunner.js";
+import type { WidgetHostHandlers } from "./widgets.js";
 import { emitBlock as persistBlock, textBlock } from "../engine/persist.js";
 import type {
   Broadcast,
@@ -71,8 +72,18 @@ export interface IpcContextDeps {
   makeEngine?: EngineFactory;
   /** Defaults to an in-memory store; see `createInMemorySecretsStore`. */
   secrets?: SecretsStore;
-  /** Defaults to a static Claude-only list; see the `harness.list` handler. */
-  listHarnesses?: () => InvokeResult<"harness.list">;
+  /**
+   * Defaults to a static Claude-only list; see the `harness.list` handler.
+   * May return a `Promise` — `apps/desktop/src/ipc/harnessList.ts` probes the
+   * `claude`/`codex` CLIs, which is inherently async.
+   */
+  listHarnesses?: () => InvokeResult<"harness.list"> | Promise<InvokeResult<"harness.list">>;
+  /**
+   * [B3] The MCP Apps widget host (`apps/desktop/src/ipc/widgets.ts`, SPEC
+   * R31). Absent in tests and in any profile with no MCP client, in which case
+   * the three widget channels refuse loudly instead of pretending.
+   */
+  widgets?: WidgetHostHandlers;
 }
 
 export type IpcHandlers = {
@@ -88,7 +99,12 @@ export interface IpcContext {
 
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const { store, broadcast, log } = deps;
-  const engineDeps: EngineDeps = { store, broadcast, log };
+  const engineDeps: EngineDeps = {
+    store,
+    broadcast,
+    log,
+    ...(deps.widgets ? { widgets: deps.widgets } : {}),
+  };
   const secrets = deps.secrets ?? createInMemorySecretsStore();
 
   /** Persist a block and push it to every renderer (upsert by id). */
@@ -169,6 +185,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       turns: store.turns.list(args.sessionId),
       blocks: store.blocks.listBySession(args.sessionId),
     }),
+
+    "blocks.getOutput": (args) => store.toolOutputs.get(args.id),
+
+    "turns.usage": (args) => ({ events: store.usage.listBySession(args.sessionId) }),
 
     "chat.send": (args) => {
       const session = store.sessions.get(args.sessionId);
@@ -252,6 +272,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         name: c.name,
         description: c.description,
         source: "builtin" as const,
+        ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
       }));
       const seen = new Set(commands.map((c) => c.name));
       for (const command of args.sessionId ? engine.listCommands(args.sessionId) : []) {
@@ -334,13 +355,13 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Phase 3 stub: static capability list, no real probing (`claude
-     * --version`, `codex app-server`, model catalogs) yet. `deps.listHarnesses`
-     * lets a later phase (or a test) supply the real thing without another
-     * contract change.
+     * `deps.listHarnesses` (`apps/desktop/src/ipc/harnessList.ts`) probes the
+     * `claude`/`codex` CLIs; the fallback below is the honest static list a
+     * caller that supplies nothing gets instead (tests, and any future
+     * profile that has not wired a lister in).
      */
-    "harness.list": () =>
-      deps.listHarnesses?.() ?? [
+    "harness.list": async () =>
+      (await deps.listHarnesses?.()) ?? [
         {
           backend: "claude" as const,
           label: "Claude Code",
@@ -385,27 +406,30 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Phase 3 stub: no MCP client exists yet to actually read a resource from
-     * (A13 — the widget-HTML spike). Refusing loudly beats returning an empty
-     * body a widget host would render as "the tool has no UI".
+     * The three widget channels are the MCP Apps host's whole renderer-facing
+     * surface (R31). All of the policy — which server a widget may call, which
+     * URLs may leave the app — lives in `deps.widgets`, never here and never in
+     * the renderer, because the renderer is the side a hostile widget talks to.
+     *
+     * Refusing loudly when no host is wired beats returning an empty body,
+     * which a widget host would render as "this tool has no UI".
      */
-    "mcp.readResource": () => {
-      throw new Error("mcp.readResource: no MCP client is wired yet (Phase 3)");
+    "mcp.readResource": (args) => {
+      if (!deps.widgets) throw new Error("mcp.readResource: no MCP client is wired");
+      return deps.widgets.readResource(args);
     },
 
-    /** Phase 3 stub: no widget host exists yet to route this through. */
-    "widget.callTool": () => {
-      throw new Error("widget.callTool: no widget host is wired yet (Phase 3)");
+    "widget.callTool": (args) => {
+      if (!deps.widgets) throw new Error("widget.callTool: no widget host is wired");
+      return deps.widgets.callTool(args);
     },
 
-    /**
-     * Phase 3 stub: logged rather than dropped silently, so a widget author
-     * testing against a dev build can see their `ui/*` messages arrived even
-     * before the host does anything with them.
-     */
     "widget.event": (args) => {
-      log.info(`[ipc] widget event ${args.type} for block ${args.blockId} (no host wired yet)`);
-      return { ok: true };
+      if (!deps.widgets) {
+        log.info(`[ipc] widget event ${args.type} for block ${args.blockId} (no host wired)`);
+        return { ok: false };
+      }
+      return deps.widgets.event(args);
     },
 
     "settings.get": () => store.settings.all(),

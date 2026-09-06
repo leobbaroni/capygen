@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
@@ -20,6 +20,7 @@ const COMMANDS: SlashCommand[] = [
   { name: "/compact", description: "Summarise the conversation", source: "builtin" },
   { name: "/context", description: "Show context", source: "builtin" },
   { name: "/clear", description: "Start fresh", source: "builtin" },
+  { name: "/model", description: "Switch model", source: "builtin", argumentHint: "<name> | default" },
 ];
 
 describe("Composer", () => {
@@ -75,27 +76,62 @@ describe("Composer", () => {
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
   });
 
-  it("filters the slash menu as the user types and inserts the selected command", async () => {
+  it("filters the slash menu as the user types", async () => {
     const user = userEvent.setup();
-    const { onSubmit } = renderComposer({ commands: COMMANDS });
+    renderComposer({ commands: COMMANDS });
     const input = screen.getByTestId("composer-input");
 
     await user.type(input, "/co");
 
     const items = screen.getAllByTestId("slash-menu-item");
-    // "/compact" and "/context" match "/co"; "/clear" does not.
+    // "/compact" and "/context" match "/co"; "/clear" and "/model" do not.
     expect(items).toHaveLength(2);
+  });
 
+  it("runs an argument-less command immediately when clicked (R14)", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderComposer({ commands: COMMANDS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "/co");
     await user.click(screen.getByText("/compact"));
+
+    // /compact takes no argument — it goes straight through, the composer
+    // clears, and the slash menu closes with it.
+    expect(onSubmit).toHaveBeenCalledWith("/compact");
+    expect(input).toHaveValue("");
+    expect(screen.queryByTestId("slash-menu")).not.toBeInTheDocument();
+  });
+
+  it("inserts (does not run) a command that takes an argument, for editing", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderComposer({ commands: COMMANDS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "/model");
+    // Scoped to the menu: the textarea's own typed value is also "/model" at
+    // this point, and `getByText` would otherwise find both.
+    await user.click(within(screen.getByTestId("slash-menu")).getByText("/model"));
 
     // Inserted, not sent: `/model opus` and `/cockpit:pilot <task>` need their
     // argument typed after the command before it goes anywhere.
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(input).toHaveValue("/compact ");
+    expect(input).toHaveValue("/model ");
     expect(screen.queryByTestId("slash-menu")).not.toBeInTheDocument();
 
-    await user.type(input, "now{Enter}");
-    expect(onSubmit).toHaveBeenCalledWith("/compact now");
+    await user.type(input, "opus{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith("/model opus");
+  });
+
+  it("Enter on a highlighted argument-less command runs it immediately (R14)", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderComposer({ commands: COMMANDS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "/compact{Enter}");
+
+    expect(onSubmit).toHaveBeenCalledWith("/compact");
+    expect(input).toHaveValue("");
   });
 
   it("matches a namespaced command on a substring, not just its prefix", async () => {

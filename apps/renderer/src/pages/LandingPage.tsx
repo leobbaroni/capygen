@@ -15,7 +15,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Folder, GitBranch } from "lucide-react";
 import { DEFAULT_HEADING, type Project } from "@capygen/shared";
-import { Composer } from "@/components/Composer";
+import { Composer, type AgentChoice } from "@/components/Composer";
 import { Mascot } from "@/brand/Mascot";
 import { Wordmark } from "@/brand/Wordmark";
 import { useMascotState } from "@/hooks/useMascotState";
@@ -28,12 +28,17 @@ export function LandingPage() {
   const startSession = useAppStore((s) => s.startSession);
   const send = useAppStore((s) => s.send);
   const commands = useAppStore((s) => s.commands);
+  const harnesses = useAppStore((s) => s.harnesses);
   const bridgeAvailable = useAppStore((s) => s.bridgeAvailable);
   const error = useAppStore((s) => s.error);
   const mascotState = useMascotState();
 
   const [selected, setSelected] = useState<Project | null>(null);
   const project = selected ?? projects[0] ?? null;
+  // SPEC item 5's harness picker: nothing chosen yet reads as "use the
+  // default backend/model" (Settings ▸ General) — `startSession` only gets a
+  // `leadAgent` override once the user has actually picked one.
+  const [leadAgent, setLeadAgent] = useState<AgentChoice | null>(null);
 
   async function handleSubmit(text: string): Promise<void> {
     // No project yet: ask for one first. The picker is the shell's native
@@ -44,7 +49,12 @@ export function LandingPage() {
       if (!target) return;
       setSelected(target);
     }
-    const session = await startSession(target.id, text.slice(0, 60));
+    const harnessName = harnesses.find((h) => h.backend === leadAgent?.backend)?.label ?? "Agent";
+    const session = await startSession(
+      target.id,
+      text.slice(0, 60),
+      leadAgent ? { ...leadAgent, name: harnessName } : undefined,
+    );
     navigate(`/c/${session.id}`);
     await send(text);
   }
@@ -74,6 +84,9 @@ export function LandingPage() {
           disabled={!bridgeAvailable}
           testId="landing-composer"
           commands={commands}
+          harnesses={harnesses}
+          agent={leadAgent}
+          onPickAgent={setLeadAgent}
           tray={
             <>
               {/* Host chip: capygen is local-only (no host/sandbox picker per

@@ -7,6 +7,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/shell/AppShell";
 import { LandingPage } from "@/pages/LandingPage";
 import { ChatPage } from "@/pages/ChatPage";
+import { DevCardsPage } from "@/pages/DevCardsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { useAppStore } from "@/store/appStore";
 
@@ -25,6 +26,9 @@ export function App() {
           <Route path="/c/:sessionId" element={<ChatPage />} />
           <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
           <Route path="/settings/:section" element={<SettingsPage />} />
+          {/* Fixture page for every card kind (B4 evidence) — dev-only, never
+              part of a production build. */}
+          {import.meta.env.DEV ? <Route path="/dev/cards" element={<DevCardsPage />} /> : null}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
