@@ -8,6 +8,7 @@
  */
 import type { ComponentType } from "react";
 import { NavLink, useParams } from "react-router-dom";
+import { SelectedProjectNote } from "@/components/settings/primitives";
 import { cn } from "@/lib/utils";
 import { findSettingsSection, SETTINGS_NAV_GROUPS } from "@/shell/settingsNav";
 import { ProvidersSection } from "./settings/ProvidersSection";
@@ -64,6 +65,13 @@ const SECTION_BODIES: Record<string, ComponentType> = {
   archived: ArchivedSection,
 };
 
+/**
+ * The sections whose data is read and written **per project** (Phase 7-P0):
+ * they send this window's selected project id on every `integrations.*` call,
+ * so the page names the project they are scoped to.
+ */
+const PROJECT_SCOPED_SECTIONS = new Set(["mcp", "skills", "plugins", "tools"]);
+
 export function SettingsPage() {
   const { section = "general" } = useParams();
   const current = findSettingsSection(section);
@@ -112,7 +120,10 @@ export function SettingsPage() {
 
       <div className="titlebar-clearance min-h-0 flex-1 overflow-y-auto p-8" data-testid="settings-body">
         <h1 className="mb-1 text-3xl font-normal tracking-[-0.03em]">{current.label}</h1>
-        <div className="mt-6 max-w-2xl">{Body ? <Body /> : null}</div>
+        <div className="mt-6 max-w-2xl">
+          {PROJECT_SCOPED_SECTIONS.has(current.id) ? <SelectedProjectNote /> : null}
+          {Body ? <Body /> : null}
+        </div>
       </div>
     </div>
   );

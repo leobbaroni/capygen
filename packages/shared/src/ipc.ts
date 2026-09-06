@@ -99,6 +99,24 @@ const Empty = z.object({});
 
 const OkSchema = z.object({ ok: z.boolean() });
 
+/**
+ * Phase 7-P0: the explicit project scope every integrations operation carries.
+ *
+ * A Project id names **one concrete execution directory** (a future worktree is
+ * a Project id of its own, linked to the same repository — selecting it must
+ * never execute at the parent root). Spread into an integrations channel's args:
+ *
+ *  - present → that project's files (`.mcp.json`, `.claude/settings.local.json`,
+ *    `<project>/.claude/skills`, …) **plus** the global ones;
+ *  - absent → the **global** files only. Never "the most recently touched
+ *    project": two windows on two projects would otherwise read and write each
+ *    other's scope depending on which one last touched a session row.
+ *
+ * An id that names no project is refused before any read, write, probe or shell
+ * open, and a project/local mutation requires one.
+ */
+const ProjectScoped = { projectId: z.string().min(1).optional() } as const;
+
 // ---------------------------------------------------------------------------
 // renderer → main (invoke)
 // ---------------------------------------------------------------------------
@@ -431,7 +449,7 @@ export const INVOKE_CHANNELS = {
    *  Integrations page (R28). `lastSync` is `null` until `.refresh` (or an
    *  app-start sync) has run at least once this session. */
   "integrations.list": channel(
-    z.object({ backend: BackendSchema }),
+    z.object({ backend: BackendSchema, ...ProjectScoped }),
     z.object({
       mcpServers: z.array(McpServerEntrySchema),
       plugins: z.array(PluginEntrySchema),
@@ -446,6 +464,7 @@ export const INVOKE_CHANNELS = {
       backend: BackendSchema,
       scope: McpServerScopeSchema,
       entry: McpServerEntryDraftSchema,
+      ...ProjectScoped,
     }),
     McpServerEntrySchema,
   ),
@@ -455,11 +474,17 @@ export const INVOKE_CHANNELS = {
       scope: McpServerScopeSchema,
       name: z.string().min(1),
       patch: McpServerEntryPatchSchema,
+      ...ProjectScoped,
     }),
     McpServerEntrySchema,
   ),
   "integrations.mcp.remove": channel(
-    z.object({ backend: BackendSchema, scope: McpServerScopeSchema, name: z.string().min(1) }),
+    z.object({
+      backend: BackendSchema,
+      scope: McpServerScopeSchema,
+      name: z.string().min(1),
+      ...ProjectScoped,
+    }),
     OkSchema,
   ),
   /** Connect and list tools, with a timeout (R28) — a live check, never a
@@ -471,6 +496,7 @@ export const INVOKE_CHANNELS = {
       backend: BackendSchema,
       name: z.string().min(1),
       scope: McpServerScopeSchema.optional(),
+      ...ProjectScoped,
     }),
     z.object({
       ok: z.boolean(),
@@ -481,19 +507,29 @@ export const INVOKE_CHANNELS = {
   ),
 
   "integrations.plugin.install": channel(
-    z.object({ backend: BackendSchema, marketplace: z.string().min(1), name: z.string().min(1) }),
+    z.object({
+      backend: BackendSchema,
+      marketplace: z.string().min(1),
+      name: z.string().min(1),
+      ...ProjectScoped,
+    }),
     PluginEntrySchema,
   ),
   "integrations.plugin.uninstall": channel(
-    z.object({ backend: BackendSchema, name: z.string().min(1) }),
+    z.object({ backend: BackendSchema, name: z.string().min(1), ...ProjectScoped }),
     OkSchema,
   ),
   "integrations.plugin.setEnabled": channel(
-    z.object({ backend: BackendSchema, name: z.string().min(1), enabled: z.boolean() }),
+    z.object({
+      backend: BackendSchema,
+      name: z.string().min(1),
+      enabled: z.boolean(),
+      ...ProjectScoped,
+    }),
     PluginEntrySchema,
   ),
   "integrations.plugin.marketplaces": channel(
-    z.object({ backend: BackendSchema }),
+    z.object({ backend: BackendSchema, ...ProjectScoped }),
     z.array(PluginMarketplaceEntrySchema),
   ),
 
@@ -506,6 +542,7 @@ export const INVOKE_CHANNELS = {
        *  affects the first match for `backend`+`name` (SPEC's own field list
        *  for this call is `{backend, name, enabled}`). */
       scope: SkillScopeSchema.optional(),
+      ...ProjectScoped,
     }),
     SkillEntrySchema,
   ),
@@ -515,12 +552,16 @@ export const INVOKE_CHANNELS = {
       scope: SkillScopeSchema,
       name: z.string().min(1),
       markdown: z.string().min(1),
+      ...ProjectScoped,
     }),
     SkillEntrySchema,
   ),
   /** Reveal the skill's file in the Editor pane or the OS shell — which one
    *  is main's call; nothing in the contract says which it picked. */
-  "integrations.skill.open": channel(z.object({ path: z.string().min(1) }), OkSchema),
+  "integrations.skill.open": channel(
+    z.object({ path: z.string().min(1), ...ProjectScoped }),
+    OkSchema,
+  ),
 
   "integrations.tools.setPolicy": channel(
     z.object({
@@ -528,17 +569,23 @@ export const INVOKE_CHANNELS = {
       scope: ToolPolicyScopeSchema,
       pattern: z.string().min(1),
       decision: ToolPolicyDecisionSchema,
+      ...ProjectScoped,
     }),
     ToolPolicyEntrySchema,
   ),
   "integrations.tools.removePolicy": channel(
-    z.object({ backend: BackendSchema, scope: ToolPolicyScopeSchema, pattern: z.string().min(1) }),
+    z.object({
+      backend: BackendSchema,
+      scope: ToolPolicyScopeSchema,
+      pattern: z.string().min(1),
+      ...ProjectScoped,
+    }),
     OkSchema,
   ),
 
   /** Re-read the backend's own files/live lists and refresh the cache
    *  (R29); fires `integrations.changed` for whatever kinds actually moved. */
-  "integrations.refresh": channel(z.object({ backend: BackendSchema }), OkSchema),
+  "integrations.refresh": channel(z.object({ backend: BackendSchema, ...ProjectScoped }), OkSchema),
 
   /** The setup panel's steps (R3), freshly probed every call. */
   "prereqs.status": channel(
@@ -841,7 +888,12 @@ export const EVENT_CHANNELS = {
    *  file watcher on the backend's own config noticed an outside edit (R29:
    *  two-way sync). `kinds` names which of `mcpServers`/`plugins`/`skills`/
    *  `tools` actually moved, so a listener need not re-fetch all four. */
-  "integrations.changed": z.object({ backend: BackendSchema, kinds: z.array(z.string()) }),
+  "integrations.changed": z.object({
+    backend: BackendSchema,
+    kinds: z.array(z.string()),
+    /** The scope that moved: a project id, or `null` for the global files. */
+    projectId: z.string().nullable(),
+  }),
   /** The setup panel's steps changed (a step finished, or a fresh probe
    *  found something newly detected). */
   "prereqs.changed": z.object({ steps: z.array(PrereqStepSchema) }),

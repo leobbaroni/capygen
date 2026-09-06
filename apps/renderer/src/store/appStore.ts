@@ -53,6 +53,18 @@ export interface AppState {
 
   settings: Settings;
   projects: Project[];
+  /**
+   * The project this **window** is on (Phase 7-P0). Every project-scoped IPC
+   * call sends this id explicitly; nothing in the main process resolves a
+   * request by recency any more, so two windows on two projects stay on their
+   * own project no matter which one wrote last.
+   *
+   * `null` means "no project selected", which is a real state on a fresh
+   * profile: the settings page then shows the global configuration only.
+   * Recency (`projects.list` is `updated_at DESC`) seeds this **once**, on
+   * `init`, as the landing page's opening guess — it never resolves a request.
+   */
+  selectedProjectId: string | null;
   sessions: Session[];
   commands: SlashCommand[];
   /** Backend/model availability (`harness.list`) — the composer's picker and
@@ -114,6 +126,10 @@ export interface AppState {
 
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
+  /** Point this window at a project (the landing's folder chip, opening a
+   *  session). Survives navigation, settings included — it is window state,
+   *  not page state. */
+  selectProject(projectId: string | null): void;
   /** `leadAgent` seeds the session's lead agent's backend/model — the
    *  composer's harness picker (SPEC item 5) passes what the user chose on
    *  the New Session landing; omitted, `sessions.create` falls back to
@@ -437,6 +453,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     error: null,
     settings: DEFAULT_SETTINGS,
     projects: [],
+    selectedProjectId: null,
     sessions: [],
     commands: [],
     harnesses: [],
@@ -472,7 +489,17 @@ export const useAppStore = create<AppState>()((set, get) => {
         client.invoke("sessions.list", {}),
         client.invoke("chat.listCommands", {}),
       ]);
-      set({ ready: true, settings, projects, sessions, commands, error: null });
+      set((s) => ({
+        ready: true,
+        settings,
+        projects,
+        sessions,
+        commands,
+        error: null,
+        // The one place recency is allowed to matter: the opening guess for
+        // this window, and only while nothing has been selected yet.
+        selectedProjectId: s.selectedProjectId ?? projects[0]?.id ?? null,
+      }));
       // Deliberately **not** awaited above (G1: composer usable within 3 s).
       // `harness.list` probes the machine — it spawns a short-lived `codex
       // app-server` to ask `account/read` — so blocking the landing on it
@@ -492,12 +519,20 @@ export const useAppStore = create<AppState>()((set, get) => {
           projects: s.projects.some((p) => p.id === project.id)
             ? s.projects.map((p) => (p.id === project.id ? project : p))
             : [project, ...s.projects],
+          selectedProjectId: project.id,
         }));
       }
       return project;
     },
 
+    selectProject(projectId) {
+      set({ selectedProjectId: projectId });
+    },
+
     async startSession(projectId, title = "", mode = "solo", agents = [], leadAgent) {
+      // Opening a session is a project selection: the settings page this
+      // window navigates to next must be scoped to the same project.
+      set({ selectedProjectId: projectId });
       const { session, agents: created } = await ipc().invoke("sessions.create", {
         projectId,
         mode,
@@ -547,6 +582,9 @@ export const useAppStore = create<AppState>()((set, get) => {
       if (get().activeSessionId !== sessionId) return;
       set({ commands });
       if (!loaded) return;
+      // Opening a session points the window at that session's project, so
+      // Settings ▸ MCP/Skills/Tools show the same project the agent runs in.
+      set({ selectedProjectId: loaded.session.projectId });
       // The main process still holds the hop the cap refused; rebuild the
       // Continue bar from that rather than from an event this renderer may
       // never have heard. `turnId` is the chain's last agent turn, which is

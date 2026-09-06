@@ -97,6 +97,7 @@ describe("chokidar on the real config paths", () => {
     expect(h.eventsOn("integrations.changed")[0]).toEqual({
       backend: "codex",
       kinds: ["mcpServers"],
+      projectId: null,
     });
     expect(coordinator.snapshot("codex").mcpServers.map((e) => e.name)).toEqual(["outside"]);
   }, 30_000);
@@ -112,16 +113,18 @@ describe("chokidar on the real config paths", () => {
 });
 
 /**
- * [review] `integrations.list` calls `retargetIfProjectMoved()` and then reads
- * `sync.snapshot()` synchronously. `retarget()` only clears the cache after it
- * has awaited every watcher's `close()`, and nothing awaits it — so with a
- * real TTL the first list after a project switch used to answer out of the
- * *previous* project's snapshot, project-scope MCP servers and skills
- * included. This runs with `ttlMs` well above the test's own duration, so a
- * regression cannot pass by the cache expiring on its own.
+ * [7-P0] The scope an `integrations.list` answers in is the `projectId` it was
+ * given, resolved once, per request — not "whichever project was touched most
+ * recently". This used to be a mutable service-wide active project re-pointed
+ * on every list, so two windows on two projects raced: whichever one last
+ * touched a session row decided which `.mcp.json` *both* of them saw.
+ *
+ * `ttlMs` here is far longer than the test, so a regression cannot pass by the
+ * cache happening to expire: the two answers have to come from two separately
+ * keyed snapshots.
  */
-describe("switching project invalidates the cache before the next list", () => {
-  it("does not answer with the previous project's .mcp.json", async () => {
+describe("two projects are two scopes, resolved per request", () => {
+  it("answers each project from its own .mcp.json regardless of recency", async () => {
     const projectA = path.join(h.dir, "a");
     const projectB = path.join(h.dir, "b");
     fs.mkdirSync(projectA, { recursive: true });
@@ -147,24 +150,153 @@ describe("switching project invalidates the cache before the next list", () => {
       log: h.log,
       env: { CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: path.join(h.dir, "codex") },
       home: h.dir,
-      // Far longer than this test takes: the cache must be dropped by the
-      // project switch itself, never by the TTL running out.
       ttlMs: 60_000,
       createWatcher: () => ({ on: () => undefined, close: () => undefined }),
     });
     try {
       await service.start();
-      h.store.projects.touch(a.id);
-      expect(service.list({ backend: "claude" }).mcpServers.map((e) => e.name)).toEqual([
+      // B is the most recent project throughout: it must not affect any answer.
+      h.store.projects.touch(b.id);
+
+      expect(service.list({ backend: "claude", projectId: a.id }).mcpServers.map((e) => e.name)).toEqual([
         "only-in-a",
       ]);
-
-      h.store.projects.touch(b.id);
-      expect(service.list({ backend: "claude" }).mcpServers.map((e) => e.name)).toEqual([
+      expect(service.list({ backend: "claude", projectId: b.id }).mcpServers.map((e) => e.name)).toEqual([
         "only-in-b",
       ]);
+      // Back to A, within the (very long) TTL: still A's file, from A's own
+      // cache entry rather than the one B just filled.
+      expect(service.list({ backend: "claude", projectId: a.id }).mcpServers.map((e) => e.name)).toEqual([
+        "only-in-a",
+      ]);
+      // And no project named means the global files only.
+      expect(service.list({ backend: "claude" }).mcpServers).toEqual([]);
     } finally {
       await service.dispose();
     }
+  });
+
+  it("refuses an id that names no project", async () => {
+    const service = new IntegrationsService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      env: { CLAUDE_CONFIG_DIR: path.join(h.dir, "claude"), CODEX_HOME: codexHome },
+      home: h.dir,
+      createWatcher: () => ({ on: () => undefined, close: () => undefined }),
+    });
+    try {
+      expect(() => service.list({ backend: "claude", projectId: "nope" })).toThrow(
+        /unknown project/i,
+      );
+    } finally {
+      await service.dispose();
+    }
+  });
+});
+
+/**
+ * [7-P0] Watcher lifecycle. Two things must hold no matter how the awaits
+ * interleave: one (backend, scope) pair opens **one** watcher however many
+ * requests ask for it, and a watcher that was still starting when the service
+ * was disposed is closed rather than left running — a live watcher outliving
+ * the service resurrects refreshes and broadcasts after shutdown.
+ */
+describe("watchers start once and close on disposal", () => {
+  function makeService(opened: { paths: string[]; closed: boolean }[]): IntegrationsService {
+    return new IntegrationsService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      env: { CLAUDE_CONFIG_DIR: path.join(h.dir, "claude"), CODEX_HOME: codexHome },
+      home: h.dir,
+      ttlMs: 0,
+      debounceMs: 5,
+      createWatcher: (paths) => {
+        const record = { paths, closed: false };
+        opened.push(record);
+        return {
+          on: () => undefined,
+          close: () => {
+            record.closed = true;
+          },
+        };
+      },
+    });
+  }
+
+  it("opens one watcher per (backend, project), not one per request", async () => {
+    const projectDir = path.join(h.dir, "one");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const project = h.store.projects.upsertByPath({ path: projectDir });
+    const opened: { paths: string[]; closed: boolean }[] = [];
+    const service = makeService(opened);
+    try {
+      await service.start();
+      const afterStart = opened.length;
+      for (let i = 0; i < 5; i += 1) service.list({ backend: "claude", projectId: project.id });
+      await waitFor(() => opened.length > afterStart, 2_000, 10);
+      // Exactly one more watcher than the global ones `start()` opened.
+      expect(opened.length).toBe(afterStart + 1);
+    } finally {
+      await service.dispose();
+    }
+    expect(opened.every((w) => w.closed)).toBe(true);
+  });
+
+  it("closes a watcher that was still starting, and ignores its late events", async () => {
+    const projectDir = path.join(h.dir, "two");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const project = h.store.projects.upsertByPath({ path: projectDir });
+    const opened: { paths: string[]; closed: boolean; fire: () => void }[] = [];
+    const releases: (() => void)[] = [];
+    const service = new IntegrationsService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      env: { CLAUDE_CONFIG_DIR: path.join(h.dir, "claude"), CODEX_HOME: codexHome },
+      home: h.dir,
+      ttlMs: 0,
+      debounceMs: 5,
+      // Every watcher parks until the test releases it, so disposal happens
+      // while they are all mid-start.
+      createWatcher: async (paths) => {
+        await new Promise<void>((resolve) => releases.push(resolve));
+        const handlers: (() => void)[] = [];
+        const record = {
+          paths,
+          closed: false,
+          fire: () => handlers.forEach((fn) => fn()),
+        };
+        opened.push(record);
+        return {
+          on: (event: string, fn: (changed: string) => void) => {
+            if (event !== "error") handlers.push(() => fn("changed"));
+          },
+          close: () => {
+            record.closed = true;
+          },
+        };
+      },
+    });
+    void service.start();
+    service.list({ backend: "claude", projectId: project.id });
+    expect(await waitFor(() => releases.length > 0, 2_000, 5)).toBe(true);
+
+    const disposed = service.dispose();
+    for (const resolve of releases) resolve();
+    // A watcher released *after* dispose started still has to be closed.
+    await waitFor(() => releases.length === opened.length, 2_000, 5);
+    for (const resolve of releases) resolve();
+    await disposed;
+
+    expect(opened.length).toBeGreaterThan(0);
+    expect(opened.every((w) => w.closed)).toBe(true);
+
+    // And a late callback from one of them resurrects nothing.
+    h.events.length = 0;
+    for (const watcher of opened) watcher.fire();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(h.eventsOn("integrations.changed")).toEqual([]);
   });
 });

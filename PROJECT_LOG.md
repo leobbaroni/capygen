@@ -1405,3 +1405,33 @@ corepack pnpm build
 
 Logs: `e2e-out/review/p0-gate-{typecheck,unit,build}.log`. This is offline evidence, not a live
 CLI capability proof or an overall phase completion. Full e2e and P0 final review are pending.
+
+### Phase 7-P0 accepted — explicit project scope
+
+Astra reviewed the final implementation, inspected the isolated Plugins screenshot showing
+its project label, and verified the complete gate evidence. Fable's final substantive review
+found no high/medium findings after the seven fixes. Native Windows gate on this implementation:
+
+```text
+corepack pnpm typecheck
+all packages: Done
+corepack pnpm test
+Test Files 104 passed (104)
+Tests 1388 passed | 4 skipped (1392)
+Duration 42.29s
+corepack pnpm build
+[build] desktop bundle written
+corepack pnpm exec playwright test
+12 skipped
+43 passed (55.6s)
+```
+
+Astra ran the first three checks; the e2e worker ran the full final suite after static isolation
+review, and Astra collected its literal output. Nine converted settings cases passed offline.
+The 12 skips are pending live/runtime proofs: six UI-created effort gates, five unavailable
+backends in disposable homes and one case requiring dedicated authenticated homes. They do
+not complete the remaining Phase 7 runtime/worktree/import acceptance.
+
+Low follow-ups: remove dead MCP/plugin/skill projections, avoid an evicted watcher's last
+queued read, and avoid broad manual-refresh notifications. P1 owns full transport redaction,
+canonical runtime defaults and widget configuration identity; none is silently claimed here.

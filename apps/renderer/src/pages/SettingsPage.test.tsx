@@ -51,7 +51,7 @@ beforeEach(() => {
         return Promise.resolve({ ok: true });
     }
   });
-  useAppStore.setState({ harnesses: [], sessions: [] });
+  useAppStore.setState({ harnesses: [], sessions: [], selectedProjectId: null, projects: [] });
 });
 
 function renderSection(sectionId: string) {
@@ -89,6 +89,36 @@ describe("SettingsPage nav", () => {
   it.each(SETTINGS_SECTIONS.map((s) => s.id))("renders a body for every section id: %s", async (id) => {
     renderSection(id);
     await waitFor(() => expect(screen.getByTestId("settings-body")).not.toBeEmptyDOMElement());
+  });
+
+  // 7-P0: the project-scoped sections send this window's selected project id
+  // on every integrations call, so the page has to name the project it is
+  // showing — and keep naming it as the user navigates between sections.
+  it("names the selected project on the project-scoped sections, across navigation", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      selectedProjectId: "p-a",
+      projects: [
+        { id: "p-a", name: "alpha", path: "C:/tmp/alpha", layout: null, devServers: null, createdAt: 0, updatedAt: 0 },
+      ],
+    });
+    renderSection("mcp");
+    expect((await screen.findByTestId("settings-scope-note")).textContent).toContain("alpha");
+    expect(screen.getByTestId("settings-scope-note")).toHaveAttribute("data-project-id", "p-a");
+
+    await user.click(screen.getByTestId("settings-nav-skills"));
+    expect((await screen.findByTestId("settings-scope-note")).textContent).toContain("alpha");
+    expect(invoke).toHaveBeenCalledWith(
+      "integrations.list",
+      expect.objectContaining({ projectId: "p-a" }),
+    );
+  });
+
+  it("says the scope is global when no project is selected", async () => {
+    renderSection("mcp");
+    expect((await screen.findByTestId("settings-scope-note")).textContent).toContain(
+      "global configuration only",
+    );
   });
 
   it("clicking a nav row navigates to that section's body", async () => {

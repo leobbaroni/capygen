@@ -6,6 +6,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolPolicyEntry } from "@capygen/shared";
+import { useAppStore } from "@/store/appStore";
 import { ToolsSection } from "./ToolsSection";
 
 const invoke = vi.fn();
@@ -18,7 +19,21 @@ const CLAUDE_POLICIES: ToolPolicyEntry[] = [
   { backend: "claude", pattern: "Bash(rm *)", decision: "deny", scope: "global" },
 ];
 
+/** This window's selected project (7-P0); `null` unless a case sets one. */
+function selectProject(projectId: string | null): void {
+  useAppStore.setState({
+    selectedProjectId: projectId,
+    projects:
+      projectId === null
+        ? []
+        : [
+            { id: projectId, name: "alpha", path: "C:/tmp/alpha", layout: null, devServers: null, createdAt: 0, updatedAt: 0 },
+          ],
+  });
+}
+
 beforeEach(() => {
+  selectProject(null);
   invoke.mockReset();
   invoke.mockImplementation((channel: string, args: { backend?: string }) => {
     if (channel === "integrations.list") {
@@ -135,12 +150,51 @@ describe("ToolsSection", () => {
   });
 
   it("never offers session scope, which no turn reads", async () => {
+    selectProject("p-alpha");
     render(<ToolsSection />);
     await screen.findByTestId("tool-policy-row-Bash(rm *)");
     const options = Array.from(
       screen.getByTestId("tool-policy-input-scope").querySelectorAll("option"),
     ).map((o) => o.getAttribute("value"));
     expect(options).toEqual(["global", "project"]);
+  });
+
+  // 7-P0: a `project` policy is written into `<project>/.claude/settings.json`,
+  // and the main process refuses that write without an explicit project id.
+  // Offering the scope with nothing selected would only offer an error.
+  it("offers only global scope while no project is selected", async () => {
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+    const options = Array.from(
+      screen.getByTestId("tool-policy-input-scope").querySelectorAll("option"),
+    ).map((o) => o.getAttribute("value"));
+    expect(options).toEqual(["global"]);
+  });
+
+  it("sends the selected project id on every read and write", async () => {
+    selectProject("p-alpha");
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+    expect(invoke).toHaveBeenCalledWith(
+      "integrations.list",
+      expect.objectContaining({ backend: "claude", projectId: "p-alpha" }),
+    );
+
+    await userEvent.type(screen.getByTestId("tool-policy-input-pattern"), "Bash(ls)");
+    await userEvent.click(screen.getByTestId("tool-policy-add"));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "integrations.tools.setPolicy",
+        expect.objectContaining({ pattern: "Bash(ls)", projectId: "p-alpha" }),
+      ),
+    );
+  });
+
+  it("sends no project id at all when none is selected", async () => {
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+    const [, args] = invoke.mock.calls.find(([channel]) => channel === "integrations.list") ?? [];
+    expect(args).toEqual({ backend: "claude" });
   });
 
   it("badges an existing session-scope row as not enforced", async () => {

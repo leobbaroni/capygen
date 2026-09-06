@@ -9,7 +9,7 @@
  * from another backend, and an `sse` entry (this form cannot express one — see
  * `toFormState`). Each says why.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PlugZapIcon, TrashIcon } from "lucide-react";
 import type { Backend, McpServerEntry, McpServerScope, McpTransport } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,6 @@ import {
 import { useIntegrations, useRowActions } from "@/components/settings/useIntegrations";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { ipc } from "@/lib/ipc";
-import { useAppStore } from "@/store/appStore";
 
 const BACKENDS: Backend[] = ["claude", "codex", "api"];
 
@@ -100,18 +99,30 @@ export function McpSection() {
 }
 
 function McpBackendPanel({ backend }: { backend: Backend }) {
-  const { data, loading, error, reload, refreshFromBackend } = useIntegrations(backend);
+  const { data, loading, error, reload, refreshFromBackend, projectId, scopeArgs } =
+    useIntegrations(backend);
   const rows = useRowActions();
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; entry: McpServerEntry } | null>(null);
+  // The rows the dialog was opened from belong to the scope that was showing;
+  // once the window moves to another project or backend tab, that dialog is
+  // about data this panel no longer displays, so it closes with it.
+  useEffect(() => {
+    setDialog(null);
+  }, [backend, projectId]);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; message: string }>>({});
-  // `integrations.list` reads project scope for the most-recently-touched
-  // project, which is the head of this same list (`projects.list` is
-  // `updated_at DESC`) — so "is there a project at all" is the right question.
-  const hasProject = useAppStore((s) => s.projects.length > 0);
+  // 7-P0: the project scopes are offered only when this window actually has a
+  // project selected — `project`/`local` writes are refused without an explicit
+  // id, so offering them with nothing selected would offer a guaranteed error.
+  const hasProject = projectId !== null;
   const scopeOptions = useMemo(() => scopeOptionsFor(backend, hasProject), [backend, hasProject]);
 
   async function remove(entry: McpServerEntry): Promise<void> {
-    await ipc().invoke("integrations.mcp.remove", { backend, scope: entry.scope, name: entry.name });
+    await ipc().invoke("integrations.mcp.remove", {
+      backend,
+      scope: entry.scope,
+      name: entry.name,
+      ...scopeArgs,
+    });
     await reload();
   }
 
@@ -121,13 +132,19 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
       scope: entry.scope,
       name: entry.name,
       patch: { enabled },
+      ...scopeArgs,
     });
     await reload();
   }
 
   async function test(entry: McpServerEntry): Promise<void> {
     const key = `${entry.scope}:${entry.name}`;
-    const result = await ipc().invoke("integrations.mcp.test", { backend, name: entry.name, scope: entry.scope });
+    const result = await ipc().invoke("integrations.mcp.test", {
+      backend,
+      name: entry.name,
+      scope: entry.scope,
+      ...scopeArgs,
+    });
     setTestResult((prev) => ({
       ...prev,
       [key]: {
@@ -238,6 +255,7 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
       {dialog ? (
         <McpDialog
           backend={backend}
+          projectId={projectId}
           scopeOptions={scopeOptions}
           initial={dialog.mode === "edit" ? dialog.entry : null}
           onClose={() => setDialog(null)}
@@ -294,12 +312,15 @@ export function envRecord(pairs: EnvPair[]): Record<string, string> {
 /** Add/edit dialog — `stdio` and `http`. */
 function McpDialog({
   backend,
+  projectId,
   scopeOptions,
   initial,
   onClose,
   onSaved,
 }: {
   backend: Backend;
+  /** This window's selected project **when the dialog opened**; see `captured`. */
+  projectId: string | null;
   scopeOptions: { value: McpServerScope; label: string }[];
   initial: McpServerEntry | null;
   onClose: () => void;
@@ -310,6 +331,19 @@ function McpDialog({
   );
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /**
+   * [review] The scope this dialog is *about*, frozen when it opened.
+   *
+   * The form is filled in over seconds; the selected project (or the backend
+   * tab) can move under it in another part of the window in that time. Reading
+   * the live scope at submit meant the row the user was looking at in project A
+   * was written into project B — silently, and into a file they never opened.
+   * The captured pair is what the write is addressed to, and if the page has
+   * moved on the dialog refuses rather than guessing which one the user meant.
+   */
+  const captured = useRef({ backend, projectId });
+  const scopeArgs = captured.current.projectId === null ? {} : { projectId: captured.current.projectId };
+  const drifted = captured.current.backend !== backend || captured.current.projectId !== projectId;
 
   const nameError = form.name.trim() === "" ? "Name is required." : null;
   const commandError =
@@ -322,6 +356,13 @@ function McpDialog({
 
   async function save(): Promise<void> {
     if (!valid) return;
+    if (drifted) {
+      setSubmitError(
+        "The selected project or backend changed while this dialog was open, so nothing " +
+          "was written. Close it and start again on the project you meant.",
+      );
+      return;
+    }
     setSaving(true);
     setSubmitError(null);
     const stdio = form.transport === "stdio";
@@ -332,7 +373,8 @@ function McpDialog({
     try {
       if (initial) {
         await ipc().invoke("integrations.mcp.update", {
-          backend,
+          backend: captured.current.backend,
+          ...scopeArgs,
           scope: initial.scope,
           name: initial.name,
           patch: {
@@ -346,7 +388,8 @@ function McpDialog({
         });
       } else {
         await ipc().invoke("integrations.mcp.add", {
-          backend,
+          backend: captured.current.backend,
+          ...scopeArgs,
           scope: form.scope,
           entry: {
             name: form.name.trim(),
@@ -455,7 +498,11 @@ function McpDialog({
           <Button variant="outline" onClick={onClose} data-testid="mcp-dialog-cancel">
             Cancel
           </Button>
-          <Button disabled={!valid || saving} onClick={() => void save()} data-testid="mcp-dialog-save">
+          <Button
+            disabled={!valid || saving || drifted}
+            onClick={() => void save()}
+            data-testid="mcp-dialog-save"
+          >
             {saving ? "Saving…" : "Save"}
           </Button>
         </DialogFooter>

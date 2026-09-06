@@ -24,7 +24,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CrownIcon, Folder, GitBranch, UsersIcon, XIcon } from "lucide-react";
-import { DEFAULT_HEADING, type AgentDraft, type Project, type SessionMode } from "@capygen/shared";
+import { DEFAULT_HEADING, type AgentDraft, type SessionMode } from "@capygen/shared";
 import { AddAgentDialog } from "@/components/AddAgentDialog";
 import { Composer, type AgentChoice } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
@@ -46,8 +46,12 @@ export function LandingPage() {
   const error = useAppStore((s) => s.error);
   const mascotState = useMascotState();
 
-  const [selected, setSelected] = useState<Project | null>(null);
-  const project = selected ?? projects[0] ?? null;
+  // 7-P0: the selected project is **window** state, not page state — the
+  // settings page this window navigates to next scopes its integrations calls
+  // to the same project. `init` seeds it from recency once; picking a folder
+  // here sets it.
+  const selectedProjectId = useAppStore((s) => s.selectedProjectId);
+  const project = projects.find((p) => p.id === selectedProjectId) ?? null;
   // SPEC item 5's harness picker. Seeded from the first *available* backend as
   // soon as `harness.list` answers, and not touched again once the user picks.
   //
@@ -103,7 +107,6 @@ export function LandingPage() {
     if (!target) {
       target = await pickProject();
       if (!target) return;
-      setSelected(target);
     }
     const harnessName = harnesses.find((h) => h.backend === leadAgent?.backend)?.label ?? "Agent";
     // The drafted round-table roster wins whole over the harness picker's
@@ -167,7 +170,7 @@ export function LandingPage() {
               </span>
               <button
                 type="button"
-                onClick={() => void pickProject().then((p) => p && setSelected(p))}
+                onClick={() => void pickProject()}
                 data-testid="project-chip"
                 className="flex h-6 cursor-pointer items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
               >

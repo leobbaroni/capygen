@@ -16,14 +16,24 @@
  *    all) and is therefore capygen's own row, enforced by capygen's own
  *    permission cards.
  *
- * **Which project?** `integrations.list` takes only `{backend}` — the contract
- * has no `projectId` — so the project-scope rows (`.mcp.json`,
- * `.claude/settings.local.json`, `.claude/skills`) are read for the
- * **most-recently-touched project**, which is the one the landing page and the
- * open session are already on (`projects.list` is ordered by `updated_at
- * DESC`). When that project changes, the watchers are re-pointed at the new
- * one. A profile with no project at all simply has no project-scope rows,
- * which is the truth.
+ * **Which project? (Phase 7-P0)** Every channel carries an optional explicit
+ * `projectId`, and this service resolves it **once per request** into an
+ * immutable `ProjectScope`:
+ *
+ *  - **omitted → global only.** The project-scope files (`.mcp.json`,
+ *    `.claude/settings.local.json`, `<project>/.claude/skills`) are not read at
+ *    all. It used to mean "the most-recently-touched project", which made every
+ *    answer depend on which window last touched a session row: two windows on
+ *    two projects read and wrote each other's scope.
+ *  - **present → that project plus the globals.** A Project id names one
+ *    concrete execution directory; a future worktree is a Project id of its own
+ *    and must never resolve to its repository's root.
+ *  - **unknown → refused**, before any read, write, probe or shell open.
+ *  - a **project/local mutation needs one**: there is no implicit target.
+ *
+ * The scope is a value, not service state. Nothing here holds an "active
+ * project", so an operation that awaits a dialog or a CLI finishes against the
+ * project it started on even though another window has moved on.
  */
 import path from "node:path";
 import type { CapygenStore } from "@capygen/db";
@@ -56,7 +66,13 @@ import {
   pluginConfirmOptions,
   type PluginGateAction,
 } from "./installGate.js";
-import { SyncCoordinator, type BackendSyncSource, type WatcherLike } from "./SyncCoordinator.js";
+import {
+  GLOBAL_SCOPE,
+  SyncCoordinator,
+  type BackendSyncSource,
+  type ProjectScope,
+  type WatcherLike,
+} from "./SyncCoordinator.js";
 
 export interface IntegrationsDeps {
   store: CapygenStore;
@@ -71,6 +87,10 @@ export interface IntegrationsDeps {
   createWatcher?: (paths: string[]) => Promise<WatcherLike> | WatcherLike;
   ttlMs?: number;
   debounceMs?: number;
+  /** Bounds on the project watcher pool; see `SyncCoordinator`. Test seams. */
+  maxProjectWatchers?: number;
+  watchRetryCooldownMs?: number;
+  now?: () => number;
   /** Connect to a server and list its tools — `integrations.mcp.test`. */
   probeMcpServer?: (entry: McpServerEntry, projectPath: string | null) => Promise<string[]>;
   /** Reveal a skill file; injected because it needs Electron's `shell`. */
@@ -84,9 +104,18 @@ export interface IntegrationsDeps {
   confirmInstall?: (options: ConfirmOptions) => Promise<boolean>;
 }
 
+/**
+ * Where the thing a write touched actually lives — which decides what has to be
+ * re-read, not the `projectId` the caller happened to send. `global` is the
+ * backend's own home files (`~/.claude.json`, `settings.json`,
+ * `installed_plugins.json`, `config.toml`, capygen's own SQLite rows);
+ * `project` is the selected project's directory, or its node inside
+ * `.claude.json` (a `local`-scope MCP server).
+ */
+type WriteReach = "global" | "project";
+
 export class IntegrationsService {
   readonly sync: SyncCoordinator;
-  private watchedProject: string | null | undefined;
 
   constructor(private readonly deps: IntegrationsDeps) {
     this.sync = new SyncCoordinator({
@@ -101,11 +130,17 @@ export class IntegrationsService {
       ...(deps.createWatcher ? { createWatcher: deps.createWatcher } : {}),
       ...(deps.ttlMs !== undefined ? { ttlMs: deps.ttlMs } : {}),
       ...(deps.debounceMs !== undefined ? { debounceMs: deps.debounceMs } : {}),
+      ...(deps.maxProjectWatchers !== undefined
+        ? { maxProjectWatchers: deps.maxProjectWatchers }
+        : {}),
+      ...(deps.watchRetryCooldownMs !== undefined
+        ? { watchRetryCooldownMs: deps.watchRetryCooldownMs }
+        : {}),
+      ...(deps.now ? { now: deps.now } : {}),
     });
   }
 
   async start(): Promise<void> {
-    this.watchedProject = this.projectPath();
     await this.sync.start();
   }
 
@@ -117,25 +152,55 @@ export class IntegrationsService {
   // stores
   // -------------------------------------------------------------------------
 
-  /** The most-recently-touched project, or null. See this file's header. */
-  projectPath(): string | null {
-    try {
-      return this.deps.store.projects.list()[0]?.path ?? null;
-    } catch {
-      return null;
+  /**
+   * Resolve one request's `projectId` into the scope it runs in, once, before
+   * anything is read or written.
+   *
+   * `undefined` is the global-only scope. A string that names no project row
+   * throws — the caller asked about a project that does not exist, and
+   * answering with the globals (or with somebody else's project) would be a
+   * silently wrong answer to a specific question.
+   */
+  scopeFor(projectId: string | undefined): ProjectScope {
+    if (projectId === undefined) return GLOBAL_SCOPE;
+    const project = this.deps.store.projects.get(projectId);
+    if (!project) {
+      throw new Error(
+        `unknown project "${projectId}": capygen has no project with that id, so there is ` +
+          "no directory to read or write for it",
+      );
     }
+    return { projectId: project.id, projectPath: project.path };
+  }
+
+  /**
+   * The scope a project/local mutation needs. Writing `.mcp.json`,
+   * `.claude/settings.local.json` or a project skill has no implicit target:
+   * without an explicit id there is nothing to write *to*, and picking the
+   * most-recent project would write into whichever directory another window
+   * happened to touch last.
+   */
+  private mutationScope(projectId: string | undefined, what: string): ProjectScope {
+    const scope = this.scopeFor(projectId);
+    if (scope.projectPath === null) {
+      throw new Error(
+        `a ${what} needs an explicit project: send \`projectId\` with this request ` +
+          "(capygen never picks a project for you)",
+      );
+    }
+    return scope;
   }
 
   private homes(): { claude: string; codex: string; home: string } {
     return resolveBackendHomes(this.deps.env ?? process.env, this.deps.home);
   }
 
-  claude(): ClaudeConfigStore {
+  claude(scope: ProjectScope = GLOBAL_SCOPE): ClaudeConfigStore {
     const homes = this.homes();
     return new ClaudeConfigStore({
       configDir: homes.claude,
       home: homes.home,
-      projectPath: this.projectPath(),
+      projectPath: scope.projectPath,
       env: this.deps.env ?? process.env,
       ...(this.deps.io ? { io: this.deps.io } : {}),
       ...(this.deps.run ? { run: this.deps.run } : {}),
@@ -144,16 +209,16 @@ export class IntegrationsService {
     });
   }
 
-  codex(): CodexConfigStore {
+  codex(scope: ProjectScope = GLOBAL_SCOPE): CodexConfigStore {
     return new CodexConfigStore({
       configDir: this.homes().codex,
-      projectPath: this.projectPath(),
+      projectPath: scope.projectPath,
       ...(this.deps.io ? { io: this.deps.io } : {}),
       log: { info: (m) => this.deps.log.info(m), warn: (m) => this.deps.log.warn(m) },
     });
   }
 
-  api(): ApiConfigStore {
+  api(scope: ProjectScope = GLOBAL_SCOPE): ApiConfigStore {
     const settings = this.deps.store.settings;
     return new ApiConfigStore({
       own: {
@@ -163,15 +228,18 @@ export class IntegrationsService {
       // What an `api` agent would actually be handed (`loadMcpServers`'s
       // sources), read through the same stores so the settings page and the
       // agent cannot disagree.
-      inherited: () => [...this.claude().read().mcpServers, ...this.codex().read().mcpServers],
+      inherited: () => [
+        ...this.claude(scope).read().mcpServers,
+        ...this.codex(scope).read().mcpServers,
+      ],
     });
   }
 
   private source(backend: Backend): BackendSyncSource {
     if (backend === "claude") {
       return {
-        read: () => this.claude().read(),
-        watchTargets: () => claudeWatchTargets(this.claude().paths),
+        read: (scope) => this.claude(scope).read(),
+        watchTargets: (scope) => claudeWatchTargets(this.claude(scope).paths),
         // The two scopes Claude's own settings files own; a `session` rule is
         // capygen's and is never pruned by a re-sync.
         toolPolicyScopes: ["global", "project"],
@@ -179,13 +247,13 @@ export class IntegrationsService {
     }
     if (backend === "codex") {
       return {
-        read: () => this.codex().read(),
-        watchTargets: () => codexWatchTargets(this.codex().paths),
+        read: (scope) => this.codex(scope).read(),
+        watchTargets: (scope) => codexWatchTargets(this.codex(scope).paths),
         toolPolicyScopes: [],
       };
     }
     return {
-      read: () => this.api().read(),
+      read: (scope) => this.api(scope).read(),
       // The `api` backend's own servers live in SQLite, and its inherited ones
       // are already watched under `claude`/`codex` — watching them twice would
       // only double the refreshes.
@@ -199,8 +267,9 @@ export class IntegrationsService {
   // -------------------------------------------------------------------------
 
   list(args: InvokeArgs<"integrations.list">): InvokeResult<"integrations.list"> {
-    this.retargetIfProjectMoved();
-    const snapshot = this.sync.snapshot(args.backend);
+    const scope = this.scopeFor(args.projectId);
+    this.watchForRead(args.backend, scope);
+    const snapshot = this.sync.snapshot(args.backend, scope);
     return {
       mcpServers: snapshot.mcpServers,
       plugins: snapshot.plugins,
@@ -208,7 +277,7 @@ export class IntegrationsService {
       // A backend with no permission file of its own still has capygen's rows
       // (see this file's header) — those come from the cache, not the store.
       tools: this.toolPolicies(args.backend, snapshot),
-      lastSync: this.sync.lastSyncAt(args.backend),
+      lastSync: this.sync.lastSyncAt(args.backend, scope),
     };
   }
 
@@ -223,40 +292,63 @@ export class IntegrationsService {
   }
 
   async mcpAdd(args: InvokeArgs<"integrations.mcp.add">): Promise<McpServerEntry> {
-    const entry = await this.dispatchMcpAdd(args.backend, args.scope, args.entry);
-    await this.afterWrite(args.backend);
+    const { scope, reach } = this.scopeForMcpWrite(args.scope, args.projectId);
+    const entry = await this.dispatchMcpAdd(args.backend, args.scope, args.entry, scope);
+    await this.afterWrite(args.backend, scope, reach);
     return entry;
+  }
+
+  /**
+   * A `project`/`local` MCP server lives in (or is keyed by) the project
+   * directory, so those scopes need an explicit id and are re-read per project;
+   * `user`/`plugin` land in the backend's own home files and are global no
+   * matter which project the window that asked was on.
+   */
+  private scopeForMcpWrite(
+    mcpScope: McpServerScope,
+    projectId: string | undefined,
+  ): { scope: ProjectScope; reach: WriteReach } {
+    if (mcpScope === "project" || mcpScope === "local") {
+      return {
+        scope: this.mutationScope(projectId, `${mcpScope}-scope MCP server`),
+        reach: "project",
+      };
+    }
+    return { scope: this.scopeFor(projectId), reach: "global" };
   }
 
   private dispatchMcpAdd(
     backend: Backend,
-    scope: McpServerScope,
+    mcpScope: McpServerScope,
     draft: InvokeArgs<"integrations.mcp.add">["entry"],
+    scope: ProjectScope,
   ): Promise<McpServerEntry> | McpServerEntry {
-    if (backend === "claude") return this.claude().addMcpServer(scope, draft);
-    if (backend === "codex") return this.codex().addMcpServer(scope, draft);
-    return this.api().addMcpServer(scope, draft);
+    if (backend === "claude") return this.claude(scope).addMcpServer(mcpScope, draft);
+    if (backend === "codex") return this.codex(scope).addMcpServer(mcpScope, draft);
+    return this.api(scope).addMcpServer(mcpScope, draft);
   }
 
   async mcpUpdate(args: InvokeArgs<"integrations.mcp.update">): Promise<McpServerEntry> {
+    const { scope, reach } = this.scopeForMcpWrite(args.scope, args.projectId);
     const entry =
       args.backend === "claude"
-        ? await this.claude().updateMcpServer(args.scope, args.name, args.patch)
+        ? await this.claude(scope).updateMcpServer(args.scope, args.name, args.patch)
         : args.backend === "codex"
-          ? this.codex().updateMcpServer(args.scope, args.name, args.patch)
-          : this.api().updateMcpServer(args.scope, args.name, args.patch);
-    await this.afterWrite(args.backend);
+          ? this.codex(scope).updateMcpServer(args.scope, args.name, args.patch)
+          : this.api(scope).updateMcpServer(args.scope, args.name, args.patch);
+    await this.afterWrite(args.backend, scope, reach);
     return entry;
   }
 
   async mcpRemove(args: InvokeArgs<"integrations.mcp.remove">): Promise<{ ok: boolean }> {
+    const { scope, reach } = this.scopeForMcpWrite(args.scope, args.projectId);
     const result =
       args.backend === "claude"
-        ? await this.claude().removeMcpServer(args.scope, args.name)
+        ? await this.claude(scope).removeMcpServer(args.scope, args.name)
         : args.backend === "codex"
-          ? this.codex().removeMcpServer(args.scope, args.name)
-          : this.api().removeMcpServer(args.scope, args.name);
-    await this.afterWrite(args.backend);
+          ? this.codex(scope).removeMcpServer(args.scope, args.name)
+          : this.api(scope).removeMcpServer(args.scope, args.name);
+    await this.afterWrite(args.backend, scope, reach);
     return result;
   }
 
@@ -272,7 +364,8 @@ export class IntegrationsService {
   async mcpTest(
     args: InvokeArgs<"integrations.mcp.test">,
   ): Promise<InvokeResult<"integrations.mcp.test">> {
-    const snapshot = this.sync.snapshot(args.backend);
+    const scope = this.scopeFor(args.projectId);
+    const snapshot = this.sync.snapshot(args.backend, scope);
     const entry = snapshot.mcpServers.find(
       (candidate) =>
         candidate.name === args.name && (args.scope === undefined || candidate.scope === args.scope),
@@ -282,7 +375,7 @@ export class IntegrationsService {
     }
     if (this.deps.probeMcpServer && entry.transport !== "claudeai-proxy") {
       try {
-        const tools = await this.deps.probeMcpServer(entry, this.projectPath());
+        const tools = await this.deps.probeMcpServer(entry, scope.projectPath);
         return { ok: true, status: "connected", tools };
       } catch (err) {
         // Fall through to the CLI only for Claude; for the others this *is*
@@ -294,7 +387,7 @@ export class IntegrationsService {
       }
     }
     if (args.backend === "claude") {
-      const rows = await this.claude().liveMcpStatus();
+      const rows = await this.claude(scope).liveMcpStatus();
       const row = rows.find((candidate) => candidate.name === entry.name);
       if (row) return { ok: row.status === "connected", status: row.status };
     }
@@ -309,10 +402,12 @@ export class IntegrationsService {
     args: InvokeArgs<"integrations.plugin.install">,
   ): Promise<InvokeResult<"integrations.plugin.install">> {
     if (args.backend !== "claude") throw new Error(pluginsAreClaudeOnly(args.backend));
+    const scope = this.scopeFor(args.projectId);
     const id = args.name.includes("@") ? args.name : `${args.name}@${args.marketplace}`;
     await this.confirmPluginCommand("install", id);
-    const entry = await this.claude().installPlugin(args.marketplace, args.name);
-    await this.afterWrite(args.backend);
+    const entry = await this.claude(scope).installPlugin(args.marketplace, args.name);
+    // A plugin is installed into the backend's own home, never into a project.
+    await this.afterWrite(args.backend, scope, "global");
     return entry;
   }
 
@@ -320,12 +415,13 @@ export class IntegrationsService {
     args: InvokeArgs<"integrations.plugin.uninstall">,
   ): Promise<{ ok: boolean }> {
     if (args.backend === "api") throw new Error(pluginsAreClaudeOnly(args.backend));
+    const scope = this.scopeFor(args.projectId);
     await this.confirmPluginCommand("uninstall", args.name);
     const result =
       args.backend === "claude"
-        ? await this.claude().uninstallPlugin(args.name)
-        : this.codex().removePlugin(args.name);
-    await this.afterWrite(args.backend);
+        ? await this.claude(scope).uninstallPlugin(args.name)
+        : this.codex(scope).removePlugin(args.name);
+    await this.afterWrite(args.backend, scope, "global");
     return result;
   }
 
@@ -354,56 +450,70 @@ export class IntegrationsService {
   async pluginSetEnabled(
     args: InvokeArgs<"integrations.plugin.setEnabled">,
   ): Promise<InvokeResult<"integrations.plugin.setEnabled">> {
+    const scope = this.scopeFor(args.projectId);
     const entry =
       args.backend === "claude"
-        ? await this.claude().setPluginEnabled(args.name, args.enabled)
+        ? await this.claude(scope).setPluginEnabled(args.name, args.enabled)
         : args.backend === "codex"
-          ? this.codex().setPluginEnabled(args.name, args.enabled)
+          ? this.codex(scope).setPluginEnabled(args.name, args.enabled)
           : (() => {
               throw new Error(pluginsAreClaudeOnly(args.backend));
             })();
-    await this.afterWrite(args.backend);
+    await this.afterWrite(args.backend, scope, "global");
     return entry;
   }
 
   async marketplaces(
     args: InvokeArgs<"integrations.plugin.marketplaces">,
   ): Promise<InvokeResult<"integrations.plugin.marketplaces">> {
-    if (args.backend === "claude") return this.claude().marketplaces();
-    if (args.backend === "codex") return this.codex().read().marketplaces;
+    const scope = this.scopeFor(args.projectId);
+    if (args.backend === "claude") return this.claude(scope).marketplaces();
+    if (args.backend === "codex") return this.codex(scope).read().marketplaces;
     return [];
   }
 
   async skillSetEnabled(
     args: InvokeArgs<"integrations.skill.setEnabled">,
   ): Promise<InvokeResult<"integrations.skill.setEnabled">> {
+    // `skillOverrides` for a project skill live in the project's settings file;
+    // a user skill's override is in the backend's home settings.
+    const reach: WriteReach = args.scope === "project" ? "project" : "global";
+    const scope =
+      args.scope === "project"
+        ? this.mutationScope(args.projectId, "project-scope skill")
+        : this.scopeFor(args.projectId);
     const entry =
       args.backend === "claude"
-        ? this.claude().setSkillEnabled(args.name, args.enabled, args.scope)
+        ? this.claude(scope).setSkillEnabled(args.name, args.enabled, args.scope)
         : args.backend === "codex"
-          ? this.codex().setSkillEnabled(args.name, args.enabled, args.scope)
+          ? this.codex(scope).setSkillEnabled(args.name, args.enabled, args.scope)
           : (() => {
               throw new Error(
                 "the api backend has no skill loader — a skill reaches an api agent as " +
                   "prompt text, not as a backend feature",
               );
             })();
-    await this.afterWrite(args.backend);
+    await this.afterWrite(args.backend, scope, reach);
     return entry;
   }
 
   async skillCreate(
     args: InvokeArgs<"integrations.skill.create">,
   ): Promise<InvokeResult<"integrations.skill.create">> {
+    const reach: WriteReach = args.scope === "project" ? "project" : "global";
+    const scope =
+      args.scope === "project"
+        ? this.mutationScope(args.projectId, "project-scope skill")
+        : this.scopeFor(args.projectId);
     const entry =
       args.backend === "claude"
-        ? this.claude().createSkill(args.scope, args.name, args.markdown)
+        ? this.claude(scope).createSkill(args.scope, args.name, args.markdown)
         : args.backend === "codex"
-          ? this.codex().createSkill(args.scope, args.name, args.markdown)
+          ? this.codex(scope).createSkill(args.scope, args.name, args.markdown)
           : (() => {
               throw new Error("the api backend has no skill loader");
             })();
-    await this.afterWrite(args.backend);
+    await this.afterWrite(args.backend, scope, reach);
     return entry;
   }
 
@@ -421,7 +531,8 @@ export class IntegrationsService {
    */
   async skillOpen(args: InvokeArgs<"integrations.skill.open">): Promise<{ ok: boolean }> {
     if (!this.deps.openPath) throw new Error("integrations.skill.open: no shell is wired");
-    if (!this.isKnownSkillFile(args.path)) {
+    const scope = this.scopeFor(args.projectId);
+    if (!this.isKnownSkillFile(args.path, scope)) {
       throw new Error(
         `integrations.skill.open refuses "${args.path}": it is not one of the skill files ` +
           "capygen lists (only a path from Settings ▸ Skills can be opened)",
@@ -432,11 +543,11 @@ export class IntegrationsService {
   }
 
   /** Case-insensitive path match against every skill the backends report. */
-  private isKnownSkillFile(candidate: string): boolean {
+  private isKnownSkillFile(candidate: string, scope: ProjectScope): boolean {
     const wanted = normalizePath(candidate);
     // `api` has no skill loader, so only these two ever produce a path.
     for (const backend of ["claude", "codex"] as const) {
-      for (const skill of this.sync.snapshot(backend).skills) {
+      for (const skill of this.sync.snapshot(backend, scope).skills) {
         if (normalizePath(skill.path) === wanted) return true;
       }
     }
@@ -445,69 +556,125 @@ export class IntegrationsService {
 
   /**
    * A `claude` policy is written into Claude's own `permissions` arrays so the
-   * CLI honours it too (R29); every other backend/scope is capygen's own row.
+   * CLI honours it too (R29); a `global` policy for the other backends is
+   * capygen's own SQLite row.
+   *
+   * [review] **Every other combination is refused.** The `policies` table is
+   * keyed by `(backend, scope, pattern)` and carries **no project or session
+   * id**, so a `project`- or `session`-scope row for `codex`/`api` — and a
+   * `session` row for `claude` — is a scoped promise the schema cannot keep:
+   * it is one global row wearing a scope label, and the next project would read
+   * (and overwrite) it. Storing it silently as if it were scoped is the exact
+   * class of thing 7-P0 exists to remove, so until Phase 9 gives these rows a
+   * real identity and an enforcement point, the write is refused with the
+   * reason. Reading an existing row still works, and so does removing one, so
+   * nothing already on disk becomes unreachable.
    */
   async setToolPolicy(
     args: InvokeArgs<"integrations.tools.setPolicy">,
   ): Promise<ToolPolicyEntry> {
-    const owned = args.backend === "claude" && args.scope !== "session";
-    const entry: ToolPolicyEntry = owned
-      ? this.claude().setToolPolicy(args.scope, args.pattern, args.decision)
+    const native = args.backend === "claude" && args.scope !== "session";
+    if (!native && args.scope !== "global") {
+      throw new Error(unscopedToolPolicy(args.backend, args.scope));
+    }
+    const reach: WriteReach = native && args.scope === "project" ? "project" : "global";
+    const scope =
+      reach === "project"
+        ? this.mutationScope(args.projectId, "project-scope tool policy")
+        : this.scopeFor(args.projectId);
+    const entry: ToolPolicyEntry = native
+      ? this.claude(scope).setToolPolicy(args.scope, args.pattern, args.decision)
       : this.deps.store.toolPolicies.upsert({
           backend: args.backend,
           scope: args.scope,
           pattern: args.pattern,
           decision: args.decision,
         });
-    if (owned) await this.afterWrite(args.backend);
+    if (native) await this.afterWrite(args.backend, scope, reach);
     return entry;
   }
 
+  /** Removal is allowed at every scope, including the ones `setToolPolicy`
+   *  refuses: a row written before this rule existed must stay deletable. */
   async removeToolPolicy(
     args: InvokeArgs<"integrations.tools.removePolicy">,
   ): Promise<{ ok: boolean }> {
-    const owned = args.backend === "claude" && args.scope !== "session";
-    const result = owned
-      ? this.claude().removeToolPolicy(args.scope, args.pattern)
+    const native = args.backend === "claude" && args.scope !== "session";
+    const reach: WriteReach = native && args.scope === "project" ? "project" : "global";
+    const scope =
+      reach === "project"
+        ? this.mutationScope(args.projectId, "project-scope tool policy")
+        : this.scopeFor(args.projectId);
+    const result = native
+      ? this.claude(scope).removeToolPolicy(args.scope, args.pattern)
       : { ok: this.deps.store.toolPolicies.remove(args.backend, args.scope, args.pattern) };
-    if (owned) await this.afterWrite(args.backend);
+    if (native) await this.afterWrite(args.backend, scope, reach);
     return result;
   }
 
   async refresh(args: InvokeArgs<"integrations.refresh">): Promise<{ ok: boolean }> {
-    this.retargetIfProjectMoved();
-    this.sync.invalidate(args.backend);
-    await this.sync.refresh(args.backend);
+    const scope = this.scopeFor(args.projectId);
+    this.watchForRead(args.backend, scope);
+    this.sync.invalidate(args.backend, scope);
+    await this.sync.refresh(args.backend, scope);
     return { ok: true };
   }
 
-  /** Re-read and broadcast after any write (SPEC R20's round-trip rule). */
-  private async afterWrite(backend: Backend): Promise<void> {
-    this.sync.invalidate(backend);
-    await this.sync.refresh(backend);
-    // An `api` row can be inherited from either of the others, so a Claude or
-    // Codex write moves the `api` view too.
-    if (backend !== "api") {
-      this.sync.invalidate("api");
-      await this.sync.refresh("api");
-    }
+  /**
+   * Start the watchers a read of `backend` in `scope` depends on.
+   *
+   * [review] The `api` backend watches **no files of its own** — its list is
+   * its own SQLite servers plus everything it inherits from Claude and Codex —
+   * so a window that only ever opens Settings ▸ MCP ▸ API for a project never
+   * caused that project's `.mcp.json` or `.codex/` to be watched, and the
+   * inherited half went stale until something else happened to look at it.
+   */
+  private watchForRead(backend: Backend, scope: ProjectScope): void {
+    this.sync.ensureWatched(backend, scope);
+    if (backend !== "api") return;
+    this.sync.ensureWatched("claude", scope);
+    this.sync.ensureWatched("codex", scope);
   }
 
-  private retargetIfProjectMoved(): void {
-    const current = this.projectPath();
-    if (this.watchedProject === undefined || this.watchedProject === current) return;
-    this.watchedProject = current;
-    // [review] Synchronously, before the caller reads `sync.snapshot(...)`:
-    // `retarget()` clears the cache too, but only after awaiting every
-    // watcher's `close()`, and nothing awaits it here. Without this line a
-    // `list()` immediately after a project switch answered out of the previous
-    // project's cached snapshot for the rest of the TTL.
-    this.sync.invalidateAll();
-    this.deps.log.info(`[integrations] project changed; re-pointing watchers at ${current ?? "(none)"}`);
-    void this.sync.retarget().catch((err: unknown) => {
-      this.deps.log.warn(`[integrations] retarget: ${describe(err)}`);
-    });
+  /**
+   * Re-read and broadcast after a write (SPEC R20's round-trip rule).
+   *
+   * [review] **The reach is the resource's, not the request's.** The settings
+   * page sends this window's selected project on every call, including a
+   * `user`-scope MCP add or a plugin install, which land in the *global* files.
+   * Keying the invalidation off `scope.projectId` therefore refreshed one
+   * project and left every other project's snapshot — and the global one, and
+   * the global SQLite projection — holding the pre-write content, while the
+   * broadcast claimed the change belonged to that one project. A global write
+   * is re-read at global scope, which drops every project snapshot of that
+   * backend before it broadcasts (`SyncCoordinator.refresh`), re-persists the
+   * global projection, and says `projectId: null` so every window reloads.
+   */
+  private async afterWrite(
+    backend: Backend,
+    scope: ProjectScope,
+    reach: WriteReach,
+  ): Promise<void> {
+    const target = reach === "global" ? GLOBAL_SCOPE : scope;
+    // `refresh` re-reads unconditionally, fans out to `api` (which inherits
+    // from the other two) and, for a global read, invalidates every project
+    // snapshot before broadcasting. It is deliberately not preceded by an
+    // `invalidate`: that would drop the `before` snapshot the change diff is
+    // computed against, and every write would claim all four kinds moved.
+    await this.sync.refresh(backend, target);
   }
+}
+
+/** Why a scoped policy this schema cannot identify is refused (see above). */
+function unscopedToolPolicy(backend: Backend, scope: string): string {
+  return (
+    `capygen cannot store a ${scope}-scope tool policy for the ${backend} backend: ` +
+    "its policy rows have no project column, their natural key is " +
+    "(backend, scope, pattern), and `session_id` is always written NULL — so the " +
+    "rule would carry no project or session identity and would apply everywhere " +
+    "while claiming to apply here. Claude's own permission files hold global and " +
+    "project rules today; the rest arrive with Phase 9's permission engine."
+  );
 }
 
 function pluginsAreClaudeOnly(backend: Backend): string {

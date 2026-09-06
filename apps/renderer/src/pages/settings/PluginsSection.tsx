@@ -53,7 +53,7 @@ export function PluginsSection() {
 }
 
 function ClaudePluginsPanel() {
-  const { data, loading, error, reload, refreshFromBackend } = useIntegrations("claude");
+  const { data, loading, error, reload, refreshFromBackend, scopeArgs } = useIntegrations("claude");
   // Enable/disable and Uninstall are per-row: their failures belong on the row
   // (see `useRowActions`), not swallowed by a bare `void`.
   const rows = useRowActions();
@@ -64,18 +64,18 @@ function ClaudePluginsPanel() {
   const [installError, setInstallError] = useState<string | null>(null);
 
   async function loadMarketplaces(): Promise<void> {
-    const list = await ipc().invoke("integrations.plugin.marketplaces", { backend: "claude" });
+    const list = await ipc().invoke("integrations.plugin.marketplaces", { backend: "claude", ...scopeArgs });
     setMarketplaces(list);
     if (list.length > 0 && installMarketplace === "") setInstallMarketplace(list[0]!.name);
   }
 
   async function toggle(name: string, enabled: boolean): Promise<void> {
-    await ipc().invoke("integrations.plugin.setEnabled", { backend: "claude", name, enabled });
+    await ipc().invoke("integrations.plugin.setEnabled", { backend: "claude", name, enabled, ...scopeArgs });
     await reload();
   }
 
   async function uninstall(name: string): Promise<void> {
-    await ipc().invoke("integrations.plugin.uninstall", { backend: "claude", name });
+    await ipc().invoke("integrations.plugin.uninstall", { backend: "claude", name, ...scopeArgs });
     await reload();
   }
 
@@ -88,6 +88,7 @@ function ClaudePluginsPanel() {
         backend: "claude",
         marketplace: installMarketplace,
         name: installName.trim(),
+        ...scopeArgs,
       });
       setInstallName("");
       await reload();

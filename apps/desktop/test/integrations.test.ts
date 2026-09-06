@@ -225,7 +225,13 @@ describe("integrations.list", () => {
       JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }),
     );
 
-    const result = (await call("integrations.list", { backend: "claude" })) as {
+    // 7-P0: the project-scope rows below (`<root>/.mcp.json`) are only in the
+    // answer because this call names the project. With no `projectId` the
+    // answer is the global files alone.
+    const result = (await call("integrations.list", {
+      backend: "claude",
+      projectId: h.projectId,
+    })) as {
       mcpServers: McpServerEntry[];
       skills: SkillEntry[];
       tools: ToolPolicyEntry[];
@@ -246,6 +252,11 @@ describe("integrations.list", () => {
       scope: "global",
     });
     expect(typeof result.lastSync).toBe("number");
+
+    const globalOnly = (await call("integrations.list", { backend: "claude" })) as {
+      mcpServers: McpServerEntry[];
+    };
+    expect(globalOnly.mcpServers.map((e) => e.name)).toEqual(["user-one"]);
   });
 
   it("shows the api backend its own servers plus what it inherits", async () => {
@@ -289,10 +300,27 @@ describe("outside edits reach the app (R29, two-way)", () => {
     expect(
       await waitFor(() => h.eventsOn("integrations.changed").length > 0, 4_000, 10),
     ).toBe(true);
-    const events = h.eventsOn("integrations.changed") as { backend: string; kinds: string[] }[];
-    expect(events[0]).toEqual({ backend: "codex", kinds: ["mcpServers"] });
+    const events = h.eventsOn("integrations.changed") as {
+      backend: string;
+      kinds: string[];
+      projectId: string | null;
+    }[];
+    expect(events[0]).toEqual({ backend: "codex", kinds: ["mcpServers"], projectId: null });
+    // [7-P0] …and `api`, which inherits Codex's servers and watches no files of
+    // its own, is told as well — otherwise nothing would ever tell it.
+    expect(
+      await waitFor(
+        () =>
+          (h.eventsOn("integrations.changed") as { backend: string }[]).some(
+            (e) => e.backend === "api",
+          ),
+        4_000,
+        10,
+      ),
+    ).toBe(true);
 
-    // A second event with no change on disk must not re-broadcast.
+    // A second event with no change on disk must not re-broadcast — neither
+    // for codex nor for the api view it fans out to.
     h.events.length = 0;
     fireWatch?.("codex");
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -499,15 +527,39 @@ describe("refusals carry the reason (SPEC §Edge Cases)", () => {
     ).rejects.toThrow(/belong to the plugin/);
   });
 
-  it("refuses a session-scope Claude policy as a file write and keeps it in SQLite", async () => {
-    const entry = (await call("integrations.tools.setPolicy", {
-      backend: "claude",
-      scope: "session",
-      pattern: "Bash(x)",
-      decision: "ask",
-    })) as ToolPolicyEntry;
-    expect(entry.scope).toBe("session");
+  // [7-P0 review] A `session`-scope policy used to be stored in capygen's own
+  // `policies` table — which is keyed by (backend, scope, pattern) and carries
+  // no session id at all, so the row applied to every session while claiming to
+  // apply to one. Until Phase 9 gives these rows an identity and an enforcement
+  // point, the write is refused with the reason rather than accepted as scoped.
+  it("refuses a session-scope policy, which its own table cannot identify", async () => {
+    await expect(
+      call("integrations.tools.setPolicy", {
+        backend: "claude",
+        scope: "session",
+        pattern: "Bash(x)",
+        decision: "ask",
+      }),
+    ).rejects.toThrow(/no project or session identity/i);
+    expect(h.store.toolPolicies.listByBackend("claude")).toEqual([]);
     expect(fs.existsSync(path.join(claudeHome, "settings.json"))).toBe(false);
+  });
+
+  it("still lets an existing unsupported row be removed", async () => {
+    // Written directly, as a row from before the rule above existed.
+    h.store.toolPolicies.upsert({
+      backend: "codex",
+      scope: "session",
+      pattern: "shell(x)",
+      decision: "deny",
+    });
+    const result = (await call("integrations.tools.removePolicy", {
+      backend: "codex",
+      scope: "session",
+      pattern: "shell(x)",
+    })) as { ok: boolean };
+    expect(result.ok).toBe(true);
+    expect(h.store.toolPolicies.listByBackend("codex")).toEqual([]);
   });
 });
 

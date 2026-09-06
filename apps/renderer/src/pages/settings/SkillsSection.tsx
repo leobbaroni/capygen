@@ -57,7 +57,8 @@ export function SkillsSection() {
 }
 
 function SkillsBackendPanel({ backend }: { backend: Backend }) {
-  const { data, loading, error, reload, refreshFromBackend } = useIntegrations(backend);
+  const { data, loading, error, reload, refreshFromBackend, projectId, scopeArgs } =
+    useIntegrations(backend);
   // [review] Every inline action here used to be `void toggle(...)`: a store
   // refusing the write (a plugin-scope skill, a project scope with no project
   // open) rejected into nothing and left the row unchanged with no message.
@@ -65,12 +66,12 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
   const [creating, setCreating] = useState(false);
 
   async function toggle(name: string, scope: SkillScope, enabled: boolean): Promise<void> {
-    await ipc().invoke("integrations.skill.setEnabled", { backend, name, enabled, scope });
+    await ipc().invoke("integrations.skill.setEnabled", { backend, name, enabled, scope, ...scopeArgs });
     await reload();
   }
 
   async function open(path: string): Promise<void> {
-    await ipc().invoke("integrations.skill.open", { path });
+    await ipc().invoke("integrations.skill.open", { path, ...scopeArgs });
   }
 
   if (error) return <SectionError message={error} />;
@@ -139,6 +140,7 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
       {creating ? (
         <CreateSkillDialog
           backend={backend}
+          projectId={projectId}
           onClose={() => setCreating(false)}
           onCreated={async () => {
             setCreating(false);
@@ -152,10 +154,14 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
 
 function CreateSkillDialog({
   backend,
+  projectId,
   onClose,
   onCreated,
 }: {
   backend: Backend;
+  /** This window's selected project (7-P0). A `project`-scope skill is written
+   *  into `<project>/.claude/skills`, so it is only offered when there is one. */
+  projectId: string | null;
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
@@ -174,7 +180,13 @@ function CreateSkillDialog({
     setSaving(true);
     setError(null);
     try {
-      await ipc().invoke("integrations.skill.create", { backend, scope, name: name.trim(), markdown });
+      await ipc().invoke("integrations.skill.create", {
+        backend,
+        scope,
+        name: name.trim(),
+        markdown,
+        ...(projectId === null ? {} : { projectId }),
+      });
       await onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -201,7 +213,7 @@ function CreateSkillDialog({
               <SettingSelect
                 value={scope}
                 onChange={(v) => setScope(v as SkillScope)}
-                options={SCOPE_OPTIONS}
+                options={projectId === null ? SCOPE_OPTIONS.filter((o) => o.value === "user") : SCOPE_OPTIONS}
                 data-testid="skill-select-scope"
                 aria-label="Scope"
               />

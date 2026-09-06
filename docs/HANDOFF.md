@@ -4,6 +4,22 @@ Lead from here: **GPT Astra (Codex)** — see `AGENTS.md`. Reviewers for dev: Cl
 Opus 5 (`CLAUDE.md`). Phases 1–6 were built by Claude Fable 5.1 orchestrating Opus 5 / Sonnet 5
 subagents with cross-model review waves.
 
+## Current continuation — 2026-09-07
+
+Astra is continuing on `review/phase7-preparation`; phases 7–12 and Custom Mode 9C remain open.
+Custom Mode is specified in SPEC R33–R34 and ADR-0006. Mascots use static pixel PNGs only.
+Accepted corrections: complete MCP connection identity, Claude/API effort propagation,
+explicit integration project scope, safeStorage MCP references, and isolated pinned test paths.
+The remaining runtime-default/resolver work is `docs/plans/phase7-runtime-config.md`.
+
+Latest offline gate: typecheck/build passed; 104 unit files, 1,388 passed and four skipped;
+Playwright 43 passed and 12 skipped. The e2e suite now uses disposable backend homes by default
+and synthetic plugin fixtures, with no personal configuration content reads. Six UI-created
+live paths are explicitly gated until P1 proves effective effort before dispatch; other live
+proofs need dedicated test identities. Only Sonnet 5 low and GPT Luna low may be used for live
+prompts. See `docs/RUN.md` and PROJECT_LOG for commands, limitations and literal result tails.
+Historical phase claims below are preserved as history, not re-proved by these skips.
+
 ## State
 
 | Phase | Status | Proof |

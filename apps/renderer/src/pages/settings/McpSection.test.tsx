@@ -7,6 +7,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerEntry } from "@capygen/shared";
+import { useAppStore } from "@/store/appStore";
 import { McpSection, envRecord, readOnlyReason, scopeOptionsFor } from "./McpSection";
 
 const invoke = vi.fn();
@@ -49,7 +50,21 @@ const CLAUDE_SERVERS: McpServerEntry[] = [
   },
 ];
 
+function selectProject(projectId: string | null): void {
+  useAppStore.setState({
+    selectedProjectId: projectId,
+    projects:
+      projectId === null
+        ? []
+        : [
+            { id: projectId, name: projectId, path: `C:/tmp/${projectId}`, layout: null, devServers: null, createdAt: 0, updatedAt: 0 },
+            { id: "p-b", name: "p-b", path: "C:/tmp/p-b", layout: null, devServers: null, createdAt: 0, updatedAt: 0 },
+          ],
+  });
+}
+
 beforeEach(() => {
+  selectProject(null);
   invoke.mockReset();
   invoke.mockImplementation((channel: string, args: { backend: string }) => {
     if (channel === "integrations.list") {
@@ -318,5 +333,54 @@ describe("envRecord", () => {
     expect(envRecord([{ key: " API_KEY ", value: "v" }, { key: "  ", value: "ignored" }])).toEqual({
       API_KEY: "v",
     });
+  });
+});
+
+/**
+ * [review] The add/edit dialog is filled in over seconds, and the selected
+ * project (or the backend tab) can move under it in that time. Reading the live
+ * scope at submit wrote the row the user was looking at in project A into
+ * project B — into a file they never opened. The dialog is addressed to the
+ * scope it opened on, and a scope that has moved refuses instead of guessing.
+ */
+describe("McpDialog carries the scope it opened on", () => {
+  it("sends the captured projectId with the add", async () => {
+    const user = userEvent.setup();
+    selectProject("p-a");
+    render(<McpSection />);
+    await screen.findByTestId("mcp-row-filesystem");
+    await user.click(screen.getByTestId("mcp-add-button"));
+    const dialog = await screen.findByTestId("mcp-dialog");
+    await user.type(within(dialog).getByTestId("mcp-input-name"), "capyfixture");
+    await user.type(within(dialog).getByTestId("mcp-input-command"), "node");
+    await user.click(within(dialog).getByTestId("mcp-dialog-save"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "integrations.mcp.add",
+        expect.objectContaining({ backend: "claude", projectId: "p-a" }),
+      ),
+    );
+  });
+
+  it("closes rather than writing when the selected project moves under it", async () => {
+    const user = userEvent.setup();
+    selectProject("p-a");
+    render(<McpSection />);
+    await screen.findByTestId("mcp-row-filesystem");
+    await user.click(screen.getByTestId("mcp-add-button"));
+    const dialog = await screen.findByTestId("mcp-dialog");
+    await user.type(within(dialog).getByTestId("mcp-input-name"), "capyfixture");
+    await user.type(within(dialog).getByTestId("mcp-input-command"), "node");
+
+    // Another part of the window moves this window to project B.
+    await waitFor(async () => {
+      useAppStore.setState({ selectedProjectId: "p-b" });
+    });
+
+    await waitFor(() => expect(screen.queryByTestId("mcp-dialog")).not.toBeInTheDocument());
+    expect(
+      invoke.mock.calls.filter(([channel]) => channel === "integrations.mcp.add"),
+    ).toEqual([]);
   });
 });

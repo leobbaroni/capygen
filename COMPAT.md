@@ -267,7 +267,7 @@ machine's real file has ~80 literal-quoted `[projects.'…']` headers to lose.
 |---|---|---|---|
 | `chokidar` **5.0.0** — `watch(paths[], {ignoreInitial, depth: 2, awaitWriteFinish})` | already a desktop dependency (Phase 5) | `SyncCoordinator` | the same package and options the Files pane uses |
 | **the watcher must be awaited to `ready`** | measured 2026-09-06 | `defaultCreateWatcher` | `chokidar.watch()` returns *before* its initial scan finishes, and with `ignoreInitial: true` an edit made inside that window is **silently dropped** — `integrationsWatcher.test.ts` failed in exactly that way before the `ready` await was added. `main.ts` does not await `start()`, so G1's 3 s landing budget is unaffected |
-| `integrations.changed {backend, kinds}` fires only for the kinds that actually differ | `changedKinds` | the settings page | `.claude.json` is rewritten constantly for unrelated session bookkeeping; broadcasting every write would re-render the page continuously |
+| `integrations.changed {backend, kinds, projectId}` identifies a project or global change (`null`) | `changedKinds`, scoped `SyncCoordinator` | the selected project's settings page | global changes invalidate project snapshots before notification; inherited API views refresh with Claude/Codex |
 | cache TTL 5 s, watcher debounce 300 ms | `DEFAULT_SYNC_TTL_MS` / `DEFAULT_SYNC_DEBOUNCE_MS` | `SyncCoordinator` | R23–R26: the settings page, the composer and a second window share one read rather than each costing a directory walk |
 | a re-sync **replaces** a backend's cached rows (`DELETE … WHERE backend = ?`, then upsert) | `SyncCoordinator.persist` | `mcp_servers`, `plugins`, `skills`, and only the policy scopes that backend's files own | the files are the source of truth, so a cached row the files stop mentioning is stale by definition. capygen's own `session` policies, and every policy for a backend with no permission file, are never pruned |
 
@@ -354,7 +354,8 @@ failures if missed:
 The historical API MCP inheritance, project-recency and settings-projection rows above describe
 intended or partial behavior. Shipping gaps are verified in `docs/reviews/phase1-6.md` R-A–R-D:
 API/widget discovery bypasses isolated homes and API-owned settings;
-global backend defaults are not fully consumed; project-scoping corrections remain under review.
+global backend defaults are not fully consumed. Explicit project-scoping corrections are accepted
+under the offline gate; the full Phase 7 worktree/import and live runtime proofs remain open.
 The MCP pool identity gap is fixed by the complete-connection digest documented below.
 Do not rely on those rows as proof of complete runtime integration until the corrective tests pass.
 
@@ -400,3 +401,16 @@ Only ENOENT means an absent file. Unreadable/malformed stores refuse mutation an
 bytes. Ciphertext writes use exclusive same-directory temporary files followed by rename;
 encryption errors are replaced with generic errors. Nineteen isolated fake-safeStorage tests
 cover compatibility and failure paths. API MCP reference wiring and migration remain P1 work.
+
+## Explicit integration project scope — 2026-09-07
+
+Every `integrations.*` request accepts optional `projectId`; omitted means global-only,
+unknown ids fail before side effects, and project/local writes require an explicit id.
+Projects identify concrete execution directories. Cache/read/watch identity is backend plus
+project, with at most eight watched projects and a 30-second failed-watch retry cooldown.
+Project reads do not overwrite global SQLite projections. Global resource mutations remain
+global even when sent by a project view. API inherited views watch the corresponding Claude
+and Codex project paths. Renderer selection is per window and captured by mutation dialogs.
+Project/session tool-policy writes without a representable backend identity are refused;
+legacy rows stay removable. `integrationsProjectScope.test.ts`, watcher tests and renderer
+scope tests cover these semantics. Worktree relation/operations remain a separate Phase 7 task.

@@ -112,7 +112,7 @@ function ClaudePermissionModesNote() {
 }
 
 function ToolsBackendPanel({ backend }: { backend: Backend }) {
-  const { data, loading, error, reload } = useIntegrations(backend);
+  const { data, loading, error, reload, projectId, scopeArgs } = useIntegrations(backend);
   // [review] Each row's own failure, kept next to the row: `updateDecision` and
   // `remove` were bare `void` calls, so a store's refusal produced an unhandled
   // rejection and a row that silently did not change.
@@ -120,12 +120,21 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
   const [pattern, setPattern] = useState("");
   const [decision, setDecision] = useState<ToolPolicyDecision>("ask");
   const [scope, setScope] = useState<ToolPolicyScope>("global");
+  // Nothing selected → nothing to write a project policy into; fall back
+  // rather than sending a request the main process must refuse.
+  const effectiveScope: ToolPolicyScope = projectId === null && scope === "project" ? "global" : scope;
   const enforced = policiesAreEnforced(backend);
 
   async function add(): Promise<void> {
     if (pattern.trim() === "") return;
     await rows.run("add", async () => {
-      await ipc().invoke("integrations.tools.setPolicy", { backend, scope, pattern: pattern.trim(), decision });
+      await ipc().invoke("integrations.tools.setPolicy", {
+        backend,
+        scope: effectiveScope,
+        pattern: pattern.trim(),
+        decision,
+        ...scopeArgs,
+      });
       setPattern("");
       await reload();
     });
@@ -141,12 +150,13 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
       scope: existingScope,
       pattern: existingPattern,
       decision: newDecision,
+      ...scopeArgs,
     });
     await reload();
   }
 
   async function remove(existingPattern: string, existingScope: ToolPolicyScope): Promise<void> {
-    await ipc().invoke("integrations.tools.removePolicy", { backend, scope: existingScope, pattern: existingPattern });
+    await ipc().invoke("integrations.tools.removePolicy", { backend, scope: existingScope, pattern: existingPattern, ...scopeArgs });
     await reload();
   }
 
@@ -264,9 +274,12 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
         <label className="flex w-32 flex-col gap-1">
           <span className="text-xs text-muted-foreground">Scope</span>
           <SettingSelect
-            value={scope}
+            value={effectiveScope}
             onChange={(v) => setScope(v as ToolPolicyScope)}
-            options={SCOPE_OPTIONS}
+            // 7-P0: a `project` policy is written into
+            // `<project>/.claude/settings.json`, which needs an explicit
+            // project — offer it only when this window has one selected.
+            options={projectId === null ? SCOPE_OPTIONS.filter((o) => o.value === "global") : SCOPE_OPTIONS}
             data-testid="tool-policy-input-scope"
             aria-label="New policy scope"
           />

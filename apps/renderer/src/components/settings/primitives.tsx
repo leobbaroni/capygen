@@ -6,8 +6,9 @@
  * codebase does not depend on — see `ui/dialog.tsx`'s doc comment for why).
  */
 import type { ReactNode } from "react";
-import { CircleAlertIcon, Loader2Icon } from "lucide-react";
+import { CircleAlertIcon, Folder, Loader2Icon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/store/appStore";
 
 /** Section heading + one-line description, the same shape every section opens with. */
 export function SectionIntro({ title, description }: { title: string; description?: string }) {
@@ -166,6 +167,41 @@ export function ArrivesLaterNote({ phase, what }: { phase: string; what: string 
         a real backend yet.
       </p>
     </div>
+  );
+}
+
+/**
+ * Which project the integrations sections on this page are reading and writing
+ * (Phase 7-P0).
+ *
+ * The scope is explicit now — this window sends its selected project id on
+ * every `integrations.*` call and the main process resolves nothing by
+ * recency — so the page has to say which project that is. Without a project
+ * selected the sections show the **global** configuration only, which is a
+ * different (and correct) answer rather than a missing one, and the note says
+ * so instead of leaving the user to guess.
+ */
+export function SelectedProjectNote() {
+  const projectId = useAppStore((s) => s.selectedProjectId);
+  const project = useAppStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
+  return (
+    <p
+      data-testid="settings-scope-note"
+      data-project-id={project?.id ?? ""}
+      className="mb-4 flex items-center gap-1.5 text-xs text-muted-foreground"
+    >
+      <Folder className="ui-icon shrink-0" aria-hidden />
+      {project ? (
+        <>
+          <span>Project:</span>
+          <span className="max-w-80 truncate font-medium text-foreground" title={project.path}>
+            {project.name}
+          </span>
+        </>
+      ) : (
+        <span>No project selected — showing the global configuration only.</span>
+      )}
+    </p>
   );
 }
 
