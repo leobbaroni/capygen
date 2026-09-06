@@ -67,7 +67,7 @@ import { createNotifier, type Notifier } from "./win/notify.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
 import { createMcpPoolRegistry, type McpPoolRegistry } from "./ipc/mcpPools.js";
 import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
-import { createHarnessLister } from "./ipc/harnessList.js";
+import { cachedCliProbe, createHarnessLister } from "./ipc/harnessList.js";
 import { createMcpPoolProbe } from "./integrations/probeMcpServer.js";
 import {
   WIDGET_SCHEME,
@@ -412,6 +412,9 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     log,
   });
 
+  // One CLI-version probe for every page that asks (see its doc comment).
+  const sharedCliProbe = cachedCliProbe();
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
@@ -433,6 +436,11 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
       // `has` only: whether a key exists decides availability, and the value
       // itself never leaves `secrets.get` for anything but the api harness.
       secrets: secretsStore,
+      // [review] One shared, TTL-cached CLI probe for the whole process. The
+      // Harnesses page and Settings ▸ Diagnostics ask the same CLIs the same
+      // `--version` question; before this they spawned a child process each,
+      // and diagnostics re-spawned on every `diagnostics.get`.
+      probe: sharedCliProbe,
     }),
 
     // [Phase 6] The Settings hub's OS-facing half (SPEC R19, R30). Each one is
@@ -497,6 +505,8 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     // reason this page needs Electron at all, and everything that reaches it
     // has been through `redact` first.
     diagnostics: {
+      // The very same cached probe `harness.list` uses (see above).
+      probe: sharedCliProbe,
       writeClipboard: (text) => clipboard.writeText(text),
       fileSize: (file) => {
         try {

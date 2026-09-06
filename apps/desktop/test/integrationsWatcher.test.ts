@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CodexConfigStore, codexWatchTargets } from "@capygen/engine";
+import { IntegrationsService } from "../src/integrations/IntegrationsService.js";
 import { SyncCoordinator } from "../src/integrations/SyncCoordinator.js";
 import { makeHarness, waitFor, type Harness } from "./workspaceHarness.js";
 
@@ -108,4 +109,62 @@ describe("chokidar on the real config paths", () => {
     expect(h.log.error).not.toHaveBeenCalled();
     expect(coordinator.snapshot("codex").skills).toEqual([]);
   }, 30_000);
+});
+
+/**
+ * [review] `integrations.list` calls `retargetIfProjectMoved()` and then reads
+ * `sync.snapshot()` synchronously. `retarget()` only clears the cache after it
+ * has awaited every watcher's `close()`, and nothing awaits it — so with a
+ * real TTL the first list after a project switch used to answer out of the
+ * *previous* project's snapshot, project-scope MCP servers and skills
+ * included. This runs with `ttlMs` well above the test's own duration, so a
+ * regression cannot pass by the cache expiring on its own.
+ */
+describe("switching project invalidates the cache before the next list", () => {
+  it("does not answer with the previous project's .mcp.json", async () => {
+    const projectA = path.join(h.dir, "a");
+    const projectB = path.join(h.dir, "b");
+    fs.mkdirSync(projectA, { recursive: true });
+    fs.mkdirSync(projectB, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectA, ".mcp.json"),
+      JSON.stringify({ mcpServers: { "only-in-a": { command: "node" } } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(projectB, ".mcp.json"),
+      JSON.stringify({ mcpServers: { "only-in-b": { command: "node" } } }),
+      "utf8",
+    );
+    const a = h.store.projects.upsertByPath({ path: projectA });
+    const b = h.store.projects.upsertByPath({ path: projectB });
+
+    const claudeHome = path.join(h.dir, "claude");
+    fs.mkdirSync(claudeHome, { recursive: true });
+    const service = new IntegrationsService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      env: { CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: path.join(h.dir, "codex") },
+      home: h.dir,
+      // Far longer than this test takes: the cache must be dropped by the
+      // project switch itself, never by the TTL running out.
+      ttlMs: 60_000,
+      createWatcher: () => ({ on: () => undefined, close: () => undefined }),
+    });
+    try {
+      await service.start();
+      h.store.projects.touch(a.id);
+      expect(service.list({ backend: "claude" }).mcpServers.map((e) => e.name)).toEqual([
+        "only-in-a",
+      ]);
+
+      h.store.projects.touch(b.id);
+      expect(service.list({ backend: "claude" }).mcpServers.map((e) => e.name)).toEqual([
+        "only-in-b",
+      ]);
+    } finally {
+      await service.dispose();
+    }
+  });
 });

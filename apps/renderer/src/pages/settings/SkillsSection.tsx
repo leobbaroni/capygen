@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  RowError,
   SectionError,
   SectionIntro,
   SectionLoading,
@@ -18,8 +19,9 @@ import {
   SettingSelect,
   SettingToggle,
   SettingsCard,
+  SyncStatus,
 } from "@/components/settings/primitives";
-import { useIntegrations } from "@/components/settings/useIntegrations";
+import { useIntegrations, useRowActions } from "@/components/settings/useIntegrations";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { ipc } from "@/lib/ipc";
 
@@ -55,7 +57,11 @@ export function SkillsSection() {
 }
 
 function SkillsBackendPanel({ backend }: { backend: Backend }) {
-  const { data, loading, error, reload } = useIntegrations(backend);
+  const { data, loading, error, reload, refreshFromBackend } = useIntegrations(backend);
+  // [review] Every inline action here used to be `void toggle(...)`: a store
+  // refusing the write (a plugin-scope skill, a project scope with no project
+  // open) rejected into nothing and left the row unchanged with no message.
+  const rows = useRowActions();
   const [creating, setCreating] = useState(false);
 
   async function toggle(name: string, scope: SkillScope, enabled: boolean): Promise<void> {
@@ -74,37 +80,61 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
 
   return (
     <div data-testid={`skills-panel-${backend}`} className="flex flex-col gap-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        <SyncStatus
+          lastSync={data?.lastSync}
+          busy={rows.busy("refresh")}
+          onRefresh={() => void rows.run("refresh", refreshFromBackend)}
+          testId="skills-sync"
+        />
         <Button size="sm" data-testid="skill-create-button" onClick={() => setCreating(true)}>
           Create skill
         </Button>
       </div>
+      {rows.errorFor("refresh") ? (
+        <RowError message={rows.errorFor("refresh") as string} testId="skills-refresh-error" />
+      ) : null}
       {skills.length === 0 ? (
         <p className="text-sm text-muted-foreground">No skills found for this backend.</p>
       ) : (
-        skills.map((skill) => (
-          <SettingsCard
-            key={`${skill.scope}:${skill.name}`}
-            testId={`skill-row-${skill.name}`}
-            title={skill.name}
-            subtitle={skill.description ?? skill.path}
-            action={
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">{skill.scope}</Badge>
-                {skill.pluginName ? <Badge variant="default">{skill.pluginName}</Badge> : null}
-                <Button size="sm" variant="outline" data-testid={`skill-open-${skill.name}`} onClick={() => void open(skill.path)}>
-                  Open
-                </Button>
-                <SettingToggle
-                  checked={skill.enabled}
-                  onChange={(checked) => void toggle(skill.name, skill.scope, checked)}
-                  data-testid={`skill-toggle-${skill.name}`}
-                  aria-label={`Enable ${skill.name}`}
-                />
-              </div>
-            }
-          />
-        ))
+        skills.map((skill) => {
+          const key = `${skill.scope}:${skill.name}`;
+          const rowError = rows.errorFor(key);
+          return (
+            <SettingsCard
+              key={key}
+              testId={`skill-row-${skill.name}`}
+              title={skill.name}
+              subtitle={skill.description ?? skill.path}
+              action={
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{skill.scope}</Badge>
+                  {skill.pluginName ? <Badge variant="default">{skill.pluginName}</Badge> : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={rows.busy(key)}
+                    data-testid={`skill-open-${skill.name}`}
+                    onClick={() => void rows.run(key, () => open(skill.path))}
+                  >
+                    Open
+                  </Button>
+                  <SettingToggle
+                    checked={skill.enabled}
+                    disabled={rows.busy(key)}
+                    onChange={(checked) =>
+                      void rows.run(key, () => toggle(skill.name, skill.scope, checked))
+                    }
+                    data-testid={`skill-toggle-${skill.name}`}
+                    aria-label={`Enable ${skill.name}`}
+                  />
+                </div>
+              }
+            >
+              {rowError ? <RowError message={rowError} testId={`skill-row-error-${skill.name}`} /> : null}
+            </SettingsCard>
+          );
+        })
       )}
       {creating ? (
         <CreateSkillDialog

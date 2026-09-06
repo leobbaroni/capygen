@@ -591,6 +591,48 @@ describe("ClaudeConfigStore — writes", () => {
     expect(() => store.createSkill("plugin", "x", "y")).toThrow(/belong to the plugin/);
   });
 
+  // [review] `FileIo.write` mkdir -p's the parent, and the IPC schema for
+  // `integrations.skill.create` only asks for a non-empty string, so a name
+  // carrying separators used to write markdown anywhere the process could.
+  it("refuses a skill name that would escape the skills directory", () => {
+    const { store, home } = fresh();
+    const outside = path.join(path.dirname(home), "escaped");
+    for (const name of [
+      String.raw`..\..\escaped`,
+      "../../escaped",
+      "..",
+      "sub/dir",
+      String.raw`C:\Windows\Temp\evil`,
+      "   ",
+    ]) {
+      expect(() => store.createSkill("user", name, "x")).toThrow(
+        /not a usable name|cannot be used as a name|would write outside/,
+      );
+    }
+    expect(fs.existsSync(outside)).toBe(false);
+    expect(fs.existsSync(path.join(outside, "SKILL.md"))).toBe(false);
+  });
+
+  // [review] `mcpAddArgs` puts the name before `--`, so a leading dash is read
+  // by the CLI's own option parser rather than as the server name.
+  it("refuses an MCP server or plugin name that the CLI would read as a flag", async () => {
+    const { store, calls } = fresh();
+    await expect(
+      store.addMcpServer("user", {
+        name: "--transport",
+        transport: "stdio",
+        command: "node",
+        source: "s",
+      }),
+    ).rejects.toThrow(/cannot start with "-"/);
+    await expect(store.removeMcpServer("user", "-s")).rejects.toThrow(/cannot start with "-"/);
+    await expect(store.installPlugin("mkt", "--yes")).rejects.toThrow(/cannot start with "-"/);
+    await expect(store.uninstallPlugin("-x")).rejects.toThrow(/cannot start with "-"/);
+    await expect(store.setPluginEnabled("-x", true)).rejects.toThrow(/cannot start with "-"/);
+    // Nothing reached the CLI at all.
+    expect(calls).toEqual([]);
+  });
+
   it("drives plugin enable/disable through the CLI", async () => {
     const { store, home, calls } = fresh();
     write(
@@ -836,6 +878,14 @@ describe("CodexConfigStore", () => {
     expect(fs.existsSync(path.join(project, ".codex", "skills", "repo-skill", "SKILL.md"))).toBe(
       true,
     );
+  });
+
+  it("refuses a skill name that would escape the codex skills directory", () => {
+    const { store, home } = fresh();
+    expect(() => store.createSkill("user", String.raw`..\..\escaped`, "x")).toThrow(
+      /cannot be used as a name/,
+    );
+    expect(fs.existsSync(path.join(path.dirname(home), "escaped"))).toBe(false);
   });
 
   it("reads an absent config.toml as an empty configuration", () => {

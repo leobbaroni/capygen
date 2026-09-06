@@ -61,6 +61,7 @@ import {
   nodeFileIo,
   readJsonFile,
   readSkillFrontMatter,
+  safeChildPath,
   updateJsonFile,
   type FileIo,
 } from "./files.js";
@@ -83,6 +84,18 @@ export interface ClaudeConfigStoreDeps {
 }
 
 const NO_LOG: ConfigStoreLogger = { info: () => {}, warn: () => {} };
+
+/**
+ * The two things every sub-read of `read()` needs: the merged settings chain
+ * and the parsed `.claude.json`. Built once per read pass and threaded down
+ * (see `read()`), never memoized on the instance — a store outlives a watcher
+ * tick and a cached parse would be exactly the stale-config bug R29 exists to
+ * prevent.
+ */
+interface ClaudeReadContext {
+  chain: { file: string; values: Record<string, unknown> }[];
+  globalConfig: Record<string, unknown> | undefined;
+}
 
 /** `permissions.<bucket>` ⇄ `ToolPolicyDecision`. */
 const DECISION_BUCKET: Record<ToolPolicyDecision, "allow" | "deny" | "ask"> = {
@@ -128,14 +141,44 @@ export class ClaudeConfigStore {
    * name the same server, not alphabetical.
    */
   read(): IntegrationsSnapshot {
-    const plugins = this.readPlugins();
+    // [review] One context per read, not one per sub-read. `settingsChain()`
+    // parses up to four settings files and `.claude.json` is the 70 KB
+    // bookkeeping blob described above; the previous shape re-read both once
+    // per `.mcp.json` server (`mcpJsonApproved`) *and* again in each of
+    // `readPlugins`/`readSkills`/`readToolPolicies`, so a project with N
+    // project-scope servers cost roughly N+4 parses of the same bytes.
+    const ctx = this.context();
+    const plugins = this.readPlugins(ctx);
     return {
-      mcpServers: this.readMcpServers(plugins),
+      mcpServers: this.readMcpServers(plugins, ctx),
       plugins,
-      skills: this.readSkills(plugins),
-      tools: this.readToolPolicies(),
+      skills: this.readSkills(plugins, ctx),
+      tools: this.readToolPolicies(ctx),
       marketplaces: this.readMarketplaces(),
     };
+  }
+
+  /** The files every sub-read shares, parsed once. */
+  private context(): ClaudeReadContext {
+    return {
+      chain: this.settingsChain(),
+      globalConfig: readJsonFile(this.io, this.paths.globalConfig, (m) =>
+        this.log.warn(`[claude] ${m}`),
+      ),
+    };
+  }
+
+  /** `readMcpServers` over a freshly-read context — the shape every write's
+   *  read-back needs. */
+  private currentMcpServers(): McpServerEntry[] {
+    const ctx = this.context();
+    return this.readMcpServers(this.readPlugins(ctx), ctx);
+  }
+
+  /** `readSkills` over a freshly-read context (see `currentMcpServers`). */
+  private currentSkills(): SkillEntry[] {
+    const ctx = this.context();
+    return this.readSkills(this.readPlugins(ctx), ctx);
   }
 
   /** The settings chain, lowest precedence first (user < project < local). */
@@ -154,11 +197,12 @@ export class ClaudeConfigStore {
     return out;
   }
 
-  private readMcpServers(plugins: PluginEntry[]): McpServerEntry[] {
+  private readMcpServers(
+    plugins: PluginEntry[],
+    ctx: ClaudeReadContext = this.context(),
+  ): McpServerEntry[] {
     const out: McpServerEntry[] = [];
-    const globalConfig = readJsonFile(this.io, this.paths.globalConfig, (m) =>
-      this.log.warn(`[claude] ${m}`),
-    );
+    const globalConfig = ctx.globalConfig;
 
     // user scope — `.claude.json` → mcpServers
     for (const entry of toEntries(globalConfig?.mcpServers, "user", this.paths.globalConfig)) {
@@ -196,7 +240,7 @@ export class ClaudeConfigStore {
         // `disabledMcpjsonServers` (both real settings keys) decide whether the
         // CLI will even connect, so the row says so rather than claiming the
         // server is live.
-        out.push({ ...entry, enabled: this.mcpJsonApproved(entry.name) });
+        out.push({ ...entry, enabled: this.mcpJsonApproved(entry.name, ctx) });
       }
     }
 
@@ -218,9 +262,9 @@ export class ClaudeConfigStore {
   }
 
   /** Is a `.mcp.json` server approved for this project? (settings chain). */
-  private mcpJsonApproved(name: string): boolean {
+  private mcpJsonApproved(name: string, ctx: ClaudeReadContext): boolean {
     let approved: boolean | null = null;
-    for (const { values } of this.settingsChain()) {
+    for (const { values } of ctx.chain) {
       if (values.enableAllProjectMcpServers === true) approved = true;
       const enabled = asStringArray(values.enabledMcpjsonServers);
       const disabled = asStringArray(values.disabledMcpjsonServers);
@@ -229,7 +273,7 @@ export class ClaudeConfigStore {
     }
     // The project-scope trust flags also live in `.claude.json`'s project node,
     // which is where the CLI actually records an approval.
-    const globalConfig = readJsonFile(this.io, this.paths.globalConfig);
+    const globalConfig = ctx.globalConfig;
     const project = this.deps.projectPath;
     if (project) {
       const node = asRecord(asRecord(globalConfig?.projects)?.[claudeProjectKey(project)]);
@@ -239,7 +283,7 @@ export class ClaudeConfigStore {
     return approved ?? false;
   }
 
-  private readPlugins(): PluginEntry[] {
+  private readPlugins(ctx: ClaudeReadContext = this.context()): PluginEntry[] {
     const installed = readJsonFile(this.io, this.paths.installedPlugins, (m) =>
       this.log.warn(`[claude] ${m}`),
     );
@@ -248,7 +292,7 @@ export class ClaudeConfigStore {
 
     // `enabledPlugins` is a settings key, merged along the whole chain.
     const enabled = new Map<string, boolean>();
-    for (const { values } of this.settingsChain()) {
+    for (const { values } of ctx.chain) {
       const map = asRecord(values.enabledPlugins);
       if (!map) continue;
       for (const [id, value] of Object.entries(map)) {
@@ -290,8 +334,11 @@ export class ClaudeConfigStore {
     return files;
   }
 
-  private readSkills(plugins: PluginEntry[]): SkillEntry[] {
-    const overrides = this.skillOverrides();
+  private readSkills(
+    plugins: PluginEntry[],
+    ctx: ClaudeReadContext = this.context(),
+  ): SkillEntry[] {
+    const overrides = this.skillOverrides(ctx);
     const out: SkillEntry[] = [];
 
     const collect = (dir: string | null, scope: SkillScope, pluginName?: string): void => {
@@ -324,9 +371,9 @@ export class ClaudeConfigStore {
   }
 
   /** The merged `skillOverrides` map across the whole settings chain. */
-  private skillOverrides(): Map<string, string> {
+  private skillOverrides(ctx: ClaudeReadContext): Map<string, string> {
     const merged = new Map<string, string>();
-    for (const { values } of this.settingsChain()) {
+    for (const { values } of ctx.chain) {
       const map = asRecord(values.skillOverrides);
       if (!map) continue;
       for (const [name, value] of Object.entries(map)) {
@@ -336,7 +383,7 @@ export class ClaudeConfigStore {
     return merged;
   }
 
-  private readToolPolicies(): ToolPolicyEntry[] {
+  private readToolPolicies(ctx: ClaudeReadContext = this.context()): ToolPolicyEntry[] {
     const out: ToolPolicyEntry[] = [];
     const seen = new Set<string>();
     const add = (pattern: string, decision: ToolPolicyDecision, scope: ToolPolicyScope): void => {
@@ -350,7 +397,7 @@ export class ClaudeConfigStore {
         ? "global"
         : "project";
 
-    for (const { file, values } of this.settingsChain()) {
+    for (const { file, values } of ctx.chain) {
       const permissions = asRecord(values.permissions);
       if (!permissions) continue;
       for (const decision of ["allow", "deny", "ask"] as const) {
@@ -409,7 +456,7 @@ export class ClaudeConfigStore {
   // -------------------------------------------------------------------------
 
   async addMcpServer(scope: McpServerScope, draft: McpServerEntryDraft): Promise<McpServerEntry> {
-    this.assertWritableMcpScope(scope);
+    this.assertWritableMcpScope(scope, draft.name);
     if (scope === "project") {
       this.writeProjectMcpJson((servers) => {
         servers[draft.name] = mcpServerJson(draft);
@@ -417,7 +464,7 @@ export class ClaudeConfigStore {
     } else {
       await runCliOrThrow(this.run, this.bin, this.mcpAddArgs(scope, draft), this.cliOptions());
     }
-    const written = this.readMcpServers(this.readPlugins()).find(
+    const written = this.currentMcpServers().find(
       (entry) => entry.scope === scope && entry.name === draft.name,
     );
     if (!written) {
@@ -433,8 +480,9 @@ export class ClaudeConfigStore {
     name: string,
     patch: McpServerEntryPatch,
   ): Promise<McpServerEntry> {
-    this.assertWritableMcpScope(scope);
-    const existing = this.readMcpServers(this.readPlugins()).find(
+    this.assertWritableMcpScope(scope, name);
+    if (patch.name !== undefined) this.assertWritableMcpScope(scope, patch.name);
+    const existing = this.currentMcpServers().find(
       (entry) => entry.scope === scope && entry.name === name,
     );
     if (!existing) throw new Error(`no ${scope}-scope MCP server named "${name}" for claude`);
@@ -464,7 +512,7 @@ export class ClaudeConfigStore {
       await this.run(this.bin, ["mcp", "remove", name, "-s", scope], this.cliOptions());
       await runCliOrThrow(this.run, this.bin, this.mcpAddArgs(scope, merged), this.cliOptions());
     }
-    const written = this.readMcpServers(this.readPlugins()).find(
+    const written = this.currentMcpServers().find(
       (entry) => entry.scope === scope && entry.name === merged.name,
     );
     if (!written) {
@@ -474,7 +522,7 @@ export class ClaudeConfigStore {
   }
 
   async removeMcpServer(scope: McpServerScope, name: string): Promise<{ ok: boolean }> {
-    this.assertWritableMcpScope(scope);
+    this.assertWritableMcpScope(scope, name);
     if (scope === "project") {
       this.writeProjectMcpJson((servers) => {
         delete servers[name];
@@ -487,13 +535,22 @@ export class ClaudeConfigStore {
         this.cliOptions(),
       );
     }
-    const still = this.readMcpServers(this.readPlugins()).some(
+    const still = this.currentMcpServers().some(
       (entry) => entry.scope === scope && entry.name === name,
     );
     return { ok: !still };
   }
 
-  private assertWritableMcpScope(scope: McpServerScope): void {
+  private assertWritableMcpScope(scope: McpServerScope, name?: string): void {
+    // [review] `user` and `local` reach the `claude` CLI, where the name is a
+    // bare positional *before* the `--` separator — so a name starting with
+    // `-` is read by the CLI's own option parser rather than as the name, and
+    // the command that runs is not the command capygen built. `project` scope
+    // is a JSON key in `.mcp.json` and is left alone, so a server registered
+    // outside capygen under an odd name is still removable from the UI.
+    if (name !== undefined && scope !== "project" && scope !== "plugin") {
+      assertCliPositional("MCP server", name);
+    }
     if (scope === "plugin") {
       throw new Error(
         "plugin-scope MCP servers belong to the plugin that ships them — " +
@@ -506,6 +563,7 @@ export class ClaudeConfigStore {
   }
 
   private mcpAddArgs(scope: McpServerScope, draft: McpServerEntryDraft): string[] {
+    assertCliPositional("MCP server", draft.name);
     const args = ["mcp", "add", "-s", scope];
     if (draft.transport !== "stdio") args.push("--transport", draft.transport);
     for (const [key, value] of Object.entries(draft.env ?? {})) args.push("-e", `${key}=${value}`);
@@ -624,7 +682,7 @@ export class ClaudeConfigStore {
       if (Object.keys(overrides).length > 0) root.skillOverrides = overrides;
       else delete root.skillOverrides;
     });
-    const written = this.readSkills(this.readPlugins()).find(
+    const written = this.currentSkills().find(
       (entry) => entry.name === name && (scope === undefined || entry.scope === scope),
     );
     if (!written) throw new Error(`capygen has no skill named "${name}" for claude`);
@@ -637,10 +695,12 @@ export class ClaudeConfigStore {
     }
     const dir = scope === "project" ? this.paths.projectSkillsDir : this.paths.userSkillsDir;
     if (!dir) throw new Error("a project-scope skill needs a project directory");
-    const file = path.join(dir, name, "SKILL.md");
+    // [review] `safeChildPath`, never a bare `path.join`: the name arrives from
+    // the IPC boundary and `FileIo.write` creates every parent it is given.
+    const file = safeChildPath(dir, name, "SKILL.md");
     if (this.io.exists(file)) throw new Error(`${file} already exists`);
     this.io.write(file, markdown.endsWith("\n") ? markdown : `${markdown}\n`);
-    const written = this.readSkills(this.readPlugins()).find(
+    const written = this.currentSkills().find(
       (entry) => entry.scope === scope && entry.path === file,
     );
     if (!written) throw new Error(`capygen wrote ${file} but could not read it back`);
@@ -653,22 +713,38 @@ export class ClaudeConfigStore {
 
   async installPlugin(marketplace: string, name: string): Promise<PluginEntry> {
     const id = name.includes("@") ? name : `${name}@${marketplace}`;
+    assertCliPositional("plugin", id);
     // `--yes` is required, not cosmetic: the CLI refuses a marketplace-declared
     // install command without it when stdout is not a TTY, which it never is
-    // here. The confirm-before-installing rule (CLAUDE.md, R27) is satisfied by
-    // the renderer's own dialog before this call is made.
-    await runCliOrThrow(this.run, this.bin, ["plugin", "install", id, "--yes"], this.cliOptions());
+    // here.
+    //
+    // [review] R27's two halves are both satisfied by the caller and by
+    // `showConsole`, not by `--yes`: `IntegrationsService.confirmPluginCommand`
+    // shows a native dialog quoting this exact command and refuses to reach
+    // here without a Yes (the gate lives in main, where a renderer cannot skip
+    // it), and `showConsole: true` puts the child's console window on screen
+    // while it runs. The previous comment here claimed a renderer dialog did
+    // this; no such dialog existed.
+    await runCliOrThrow(this.run, this.bin, ["plugin", "install", id, "--yes"], {
+      ...this.cliOptions(),
+      showConsole: true,
+    });
     const written = this.readPlugins().find((plugin) => plugin.name === id);
     if (!written) throw new Error(`capygen installed ${id} but could not read it back`);
     return written;
   }
 
   async uninstallPlugin(name: string): Promise<{ ok: boolean }> {
-    await runCliOrThrow(this.run, this.bin, ["plugin", "uninstall", name], this.cliOptions());
+    assertCliPositional("plugin", name);
+    await runCliOrThrow(this.run, this.bin, ["plugin", "uninstall", name], {
+      ...this.cliOptions(),
+      showConsole: true,
+    });
     return { ok: !this.readPlugins().some((plugin) => plugin.name === name) };
   }
 
   async setPluginEnabled(name: string, enabled: boolean): Promise<PluginEntry> {
+    assertCliPositional("plugin", name);
     await runCliOrThrow(
       this.run,
       this.bin,
@@ -740,6 +816,28 @@ export class ClaudeConfigStore {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * [review] A name that the `claude` CLI will see as a **bare positional**.
+ *
+ * `execFile` is already safe from the shell (array argv, no `shell: true`), so
+ * this is not about shell injection — it is about the CLI's *own* argument
+ * parser. `mcpAddArgs` puts the server name before the `--` separator, so a
+ * name of `--transport` or `-s` is consumed as an option there and the command
+ * that runs is not the command capygen composed: the scope, the transport, or
+ * the marketplace can silently differ from what the read-back then checks.
+ *
+ * Refusing a leading `-` is the whole fix; no real MCP server or plugin id
+ * starts with one, and the message says what to do instead.
+ */
+export function assertCliPositional(kind: string, name: string): void {
+  if (name.startsWith("-")) {
+    throw new Error(
+      `a ${kind} name cannot start with "-" ("${name}") — the \`claude\` CLI would read it ` +
+        "as one of its own options rather than as the name",
+    );
+  }
+}
 
 /** Claude's `mcpServers` map → `McpServerEntry[]`. */
 function toEntries(value: unknown, scope: McpServerScope, source: string): McpServerEntry[] {

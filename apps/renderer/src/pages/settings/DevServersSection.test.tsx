@@ -1,37 +1,35 @@
+/**
+ * [review] The old cases here asserted that two controls persisted a
+ * `localStorage` key — which they did, and which nothing in the app ever read
+ * (`DevServerService.detect` is unconditional). Testing that a dead control
+ * remembers its own dead value is worse than no test, so the section now says
+ * what the app actually does and this asserts exactly that: the note is there,
+ * and there is no control pretending to change behaviour.
+ */
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
 import { DevServersSection } from "./DevServersSection";
 
-afterEach(() => {
-  window.localStorage.clear();
-});
+function renderSection(): void {
+  render(
+    <MemoryRouter>
+      <DevServersSection />
+    </MemoryRouter>,
+  );
+}
 
 describe("DevServersSection", () => {
-  it("defaults to auto-detect on and 'Open it automatically'", () => {
-    render(<DevServersSection />);
-    expect(screen.getByTestId("toggle-auto-detect")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("select-browser-behavior")).toHaveValue("auto-open");
+  it("says the defaults are not configurable yet instead of offering dead controls", () => {
+    renderSection();
+    expect(screen.getByTestId("arrives-later-note")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-dev-servers")).toHaveTextContent(/what capygen does today/i);
+    expect(screen.queryByTestId("toggle-auto-detect")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("select-browser-behavior")).not.toBeInTheDocument();
   });
 
-  it("persists a toggle to localStorage and reflects it on remount", async () => {
-    const user = userEvent.setup();
-    const { unmount } = render(<DevServersSection />);
-    await user.click(screen.getByTestId("toggle-auto-detect"));
-    expect(screen.getByTestId("toggle-auto-detect")).toHaveAttribute("aria-checked", "false");
-    unmount();
-
-    render(<DevServersSection />);
-    expect(screen.getByTestId("toggle-auto-detect")).toHaveAttribute("aria-checked", "false");
-    expect(JSON.parse(window.localStorage.getItem("capygen:settings:devServers")!)).toMatchObject({
-      autoDetect: false,
-    });
-  });
-
-  it("changes browser behaviour", async () => {
-    const user = userEvent.setup();
-    render(<DevServersSection />);
-    await user.selectOptions(screen.getByTestId("select-browser-behavior"), "manual");
-    expect(screen.getByTestId("select-browser-behavior")).toHaveValue("manual");
+  it("writes nothing to localStorage", () => {
+    renderSection();
+    expect(window.localStorage.getItem("capygen:settings:devServers")).toBeNull();
   });
 });

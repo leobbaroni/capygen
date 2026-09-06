@@ -11,13 +11,15 @@ import type { Backend, ToolPolicyDecision, ToolPolicyScope } from "@capygen/shar
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  ArrivesLaterNote,
+  RowError,
   SectionError,
   SectionIntro,
   SectionLoading,
   SettingInput,
   SettingSelect,
 } from "@/components/settings/primitives";
-import { useIntegrations } from "@/components/settings/useIntegrations";
+import { useIntegrations, useRowActions } from "@/components/settings/useIntegrations";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { ipc } from "@/lib/ipc";
 
@@ -27,11 +29,31 @@ const DECISION_OPTIONS: { value: ToolPolicyDecision; label: string }[] = [
   { value: "deny", label: "Deny" },
   { value: "ask", label: "Ask" },
 ];
+/**
+ * [review] `session` is deliberately absent.
+ *
+ * Only a `claude` policy at `global`/`project` scope is written where a turn
+ * ever reads it: `IntegrationsService.setToolPolicy` sends exactly those to
+ * `ClaudeConfigStore`, which puts them in Claude's own
+ * `permissions.{allow,deny,ask}` arrays, so the CLI honours them too. Every
+ * other combination — a `session` rule, and anything at all for `codex` or
+ * `api` — becomes a row in capygen's SQLite `policies` table that **nothing
+ * consults**: grep `toolPolicies` outside this page and `SyncCoordinator` and
+ * there is no reader, and neither harness mentions it. Phase 9 owns the
+ * permission engine that will (PLAN: "a `codex`/`api` tool policy is capygen's
+ * own SQLite row enforced by capygen's permission cards"). Until then the
+ * editor is offered only where it is real, and the other tabs say so instead
+ * of looking authoritative.
+ */
 const SCOPE_OPTIONS: { value: ToolPolicyScope; label: string }[] = [
   { value: "global", label: "Global" },
   { value: "project", label: "Project" },
-  { value: "session", label: "Session" },
 ];
+
+/** Whether a policy written on this backend actually reaches a turn (see above). */
+export function policiesAreEnforced(backend: Backend): boolean {
+  return backend === "claude";
+}
 
 const CLAUDE_PERMISSION_MODES = [
   { mode: "default", blurb: "Ask before a risky tool call (file writes, shell commands, …)." },
@@ -81,7 +103,9 @@ function ClaudePermissionModesNote() {
         ))}
       </dl>
       <p className="mt-2 text-xs text-muted-foreground">
-        Set the default mode under Harnesses; the table below adds per-pattern exceptions on top.
+        Set the default mode under Harnesses; the table below writes per-pattern exceptions into
+        Claude&apos;s own <code className="font-mono">permissions</code> arrays, so the{" "}
+        <code className="font-mono">claude</code> CLI honours them too.
       </p>
     </div>
   );
@@ -89,21 +113,22 @@ function ClaudePermissionModesNote() {
 
 function ToolsBackendPanel({ backend }: { backend: Backend }) {
   const { data, loading, error, reload } = useIntegrations(backend);
+  // [review] Each row's own failure, kept next to the row: `updateDecision` and
+  // `remove` were bare `void` calls, so a store's refusal produced an unhandled
+  // rejection and a row that silently did not change.
+  const rows = useRowActions();
   const [pattern, setPattern] = useState("");
   const [decision, setDecision] = useState<ToolPolicyDecision>("ask");
   const [scope, setScope] = useState<ToolPolicyScope>("global");
-  const [busy, setBusy] = useState(false);
+  const enforced = policiesAreEnforced(backend);
 
   async function add(): Promise<void> {
     if (pattern.trim() === "") return;
-    setBusy(true);
-    try {
+    await rows.run("add", async () => {
       await ipc().invoke("integrations.tools.setPolicy", { backend, scope, pattern: pattern.trim(), decision });
       setPattern("");
       await reload();
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   async function updateDecision(
@@ -132,6 +157,17 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
 
   return (
     <div data-testid={`tools-panel-${backend}`} className="flex flex-col gap-3">
+      {!enforced ? (
+        <div data-testid="tools-not-enforced">
+          <ArrivesLaterNote phase="Phase 9" what={`${BACKEND_LABEL[backend]} tool policies`} />
+          <p className="mt-2 text-sm text-muted-foreground">
+            {BACKEND_LABEL[backend]} has no per-tool permission list of its own, so a rule here
+            would have to be enforced by capygen&apos;s own permission cards — which Phase 9 builds.
+            Rows below were stored by an earlier build and no turn consults them; you can remove
+            them.
+          </p>
+        </div>
+      ) : null}
       {policies.length === 0 ? (
         <p className="text-sm text-muted-foreground">No tool policies set — every tool follows the default mode.</p>
       ) : (
@@ -146,38 +182,64 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
               </tr>
             </thead>
             <tbody>
-              {policies.map((p) => (
-                <tr key={`${p.scope}:${p.pattern}`} data-testid={`tool-policy-row-${p.pattern}`} className="border-b border-border-weak last:border-b-0">
-                  <td className="py-2 pr-3 font-mono text-xs">{p.pattern}</td>
-                  <td className="py-2 pr-3">
-                    <Badge variant="outline">{p.scope}</Badge>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <SettingSelect
-                      value={p.decision}
-                      onChange={(v) => void updateDecision(p.pattern, p.scope, v as ToolPolicyDecision)}
-                      options={DECISION_OPTIONS}
-                      data-testid={`tool-policy-decision-${p.pattern}`}
-                      aria-label={`Decision for ${p.pattern}`}
-                    />
-                  </td>
-                  <td className="py-2 text-right">
-                    <Button
-                      size="icon-sm"
-                      variant="outline"
-                      data-testid={`tool-policy-remove-${p.pattern}`}
-                      onClick={() => void remove(p.pattern, p.scope)}
-                    >
-                      ×
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+              {policies.map((p) => {
+                const key = `${p.scope}:${p.pattern}`;
+                const rowEnforced = enforced && p.scope !== "session";
+                return (
+                  <tr key={key} data-testid={`tool-policy-row-${p.pattern}`} className="border-b border-border-weak last:border-b-0">
+                    <td className="py-2 pr-3 font-mono text-xs">
+                      {p.pattern}
+                      {rows.errorFor(key) ? (
+                        <RowError
+                          message={rows.errorFor(key) as string}
+                          testId={`tool-policy-error-${p.pattern}`}
+                        />
+                      ) : null}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline">{p.scope}</Badge>
+                        {!rowEnforced ? (
+                          <Badge variant="warning" data-testid={`tool-policy-unenforced-${p.pattern}`}>
+                            not enforced yet
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="py-2 pr-3">
+                      <SettingSelect
+                        value={p.decision}
+                        disabled={rows.busy(key)}
+                        onChange={(v) =>
+                          void rows.run(key, () =>
+                            updateDecision(p.pattern, p.scope, v as ToolPolicyDecision),
+                          )
+                        }
+                        options={DECISION_OPTIONS}
+                        data-testid={`tool-policy-decision-${p.pattern}`}
+                        aria-label={`Decision for ${p.pattern}`}
+                      />
+                    </td>
+                    <td className="py-2 text-right">
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        disabled={rows.busy(key)}
+                        data-testid={`tool-policy-remove-${p.pattern}`}
+                        onClick={() => void rows.run(key, () => remove(p.pattern, p.scope))}
+                      >
+                        ×
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
+      {enforced ? (
       <div className="flex items-end gap-2 border-t border-border-weak pt-3">
         <label className="flex flex-1 flex-col gap-1">
           <span className="text-xs text-muted-foreground">Pattern</span>
@@ -209,10 +271,19 @@ function ToolsBackendPanel({ backend }: { backend: Backend }) {
             aria-label="New policy scope"
           />
         </label>
-        <Button size="sm" disabled={busy || pattern.trim() === ""} data-testid="tool-policy-add" onClick={() => void add()}>
+        <Button
+          size="sm"
+          disabled={rows.busy("add") || pattern.trim() === ""}
+          data-testid="tool-policy-add"
+          onClick={() => void add()}
+        >
           Add
         </Button>
       </div>
+      ) : null}
+      {rows.errorFor("add") ? (
+        <RowError message={rows.errorFor("add") as string} testId="tool-policy-add-error" />
+      ) : null}
     </div>
   );
 }

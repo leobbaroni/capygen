@@ -32,6 +32,19 @@ export interface RunCliOptions {
   /** Extra variables layered on top of `cleanEnv` (the two backend homes). */
   overrides?: Record<string, string | undefined>;
   maxBuffer?: number;
+  /**
+   * Spawn with `windowsHide: false`, so a console window is on screen for as
+   * long as the command runs.
+   *
+   * [review] Rule 1 above ("a settings page that flashes a console on every
+   * refresh is a bug") is about *reads*. SPEC R27 asks the opposite of an
+   * install: "never run an install/upgrade/uninstall without the confirm
+   * dialog **and a visible console**". So the two plugin-writing commands set
+   * this and nothing else does — the confirm dialog names the command before
+   * it starts, and the window is proof to the user that it is the thing
+   * running.
+   */
+  showConsole?: boolean;
 }
 
 /** How a command is run; overridden in tests by a shim that records argv. */
@@ -55,7 +68,7 @@ export const nodeCliRunner: CliRunner = (command, args, options) =>
       command,
       args,
       {
-        windowsHide: true,
+        windowsHide: options.showConsole !== true,
         timeout: options.timeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
         maxBuffer: options.maxBuffer ?? DEFAULT_MAX_BUFFER,
         env: env as NodeJS.ProcessEnv,

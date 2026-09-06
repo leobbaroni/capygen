@@ -1663,6 +1663,11 @@ export const McpServerEntrySchema = z
     enabled: z.boolean().default(true),
     status: McpServerStatusSchema.optional(),
     tools: z.array(z.string()).optional(),
+    /** True when this row is only *visible* to `backend` because another
+     *  backend's config declares it (`ApiConfigStore.inheritedServers`) — the
+     *  store that owns it refuses every write, so the settings page offers no
+     *  Edit/Remove for one. */
+    inherited: z.boolean().optional(),
   })
   .passthrough();
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;

@@ -191,6 +191,70 @@ export function SectionError({ message }: { message: string }) {
   );
 }
 
+/**
+ * The message an inline row action failed with.
+ *
+ * [review] Every inline button in the hub used to be `onClick={() => void
+ * remove(entry)}` — an unhandled rejection, a row that did not change, and
+ * nothing on screen. A store refusing a write (a plugin-scope MCP server, an
+ * inherited `api` row, a Codex project scope) is a normal answer, not an
+ * impossible one, so it is rendered next to the control that asked.
+ */
+export function RowError({ message, testId }: { message: string; testId?: string }) {
+  return (
+    <p role="alert" data-testid={testId} className="text-xs text-destructive">
+      {message}
+    </p>
+  );
+}
+
+/**
+ * "synced 12s ago" + a Refresh button, for the sections whose truth lives in a
+ * backend's files (SPEC R29).
+ *
+ * [review] `useIntegrations.refreshFromBackend` and `integrations.list`'s
+ * `lastSync` both existed and neither was rendered anywhere, so a watcher that
+ * missed a change left the user with no way to ask again and no way to tell
+ * how old the list was — both of which Claude Code's own `/mcp` gives.
+ */
+export function SyncStatus({
+  lastSync,
+  onRefresh,
+  busy,
+  testId,
+}: {
+  lastSync: number | null | undefined;
+  onRefresh: () => void;
+  busy?: boolean;
+  testId?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2" data-testid={testId}>
+      <span data-testid={testId ? `${testId}-age` : undefined} className="text-xs text-muted-foreground">
+        {lastSync ? `Synced ${relativeTime(lastSync)}` : "Not synced yet"}
+      </span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onRefresh}
+        data-testid={testId ? `${testId}-button` : undefined}
+        className="rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {busy ? "Refreshing…" : "Refresh"}
+      </button>
+    </div>
+  );
+}
+
+/** Coarse on purpose: this line answers "is the list stale?", not "when exactly". */
+function relativeTime(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
+}
+
 /** A card wrapping one logical group of rows (a backend's Defaults, one MCP server, …). */
 export function SettingsCard({
   title,

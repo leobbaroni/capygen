@@ -130,4 +130,59 @@ describe("PluginsSection", () => {
     expect(screen.queryByTestId("plugin-toggle-codex-review")).not.toBeInTheDocument();
     expect(screen.queryByTestId("plugin-uninstall-codex-review")).not.toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // [review] Fixes from the Phase 6 review wave.
+  // -------------------------------------------------------------------------
+
+  it("says install and uninstall are confirmed first (SPEC R27)", async () => {
+    const user = userEvent.setup();
+    render(<PluginsSection />);
+    await screen.findByTestId("plugin-row-cockpit");
+    await user.click(screen.getByTestId("marketplaces-browse"));
+
+    expect(await screen.findByTestId("plugin-install-gate-note")).toHaveTextContent(
+      /confirm the exact/i,
+    );
+    expect(screen.getByTestId("plugin-install-button")).toHaveTextContent("Install…");
+  });
+
+  it("shows a failed Uninstall on the row instead of dropping it", async () => {
+    const user = userEvent.setup();
+    invoke.mockImplementation((channel: string, args: { backend?: string }) => {
+      if (channel === "integrations.list") {
+        return Promise.resolve({
+          mcpServers: [],
+          plugins: args.backend === "claude" ? CLAUDE_PLUGINS : CODEX_PLUGINS,
+          skills: [],
+          tools: [],
+          lastSync: null,
+        });
+      }
+      if (channel === "integrations.plugin.uninstall") {
+        return Promise.reject(new Error("`claude plugin uninstall cockpit` was not run"));
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<PluginsSection />);
+    await screen.findByTestId("plugin-row-cockpit");
+
+    await user.click(screen.getByTestId("plugin-uninstall-cockpit"));
+
+    expect(await screen.findByTestId("plugin-row-error-cockpit")).toHaveTextContent(
+      /was not run/,
+    );
+  });
+
+  it("Refresh asks the backend again", async () => {
+    const user = userEvent.setup();
+    render(<PluginsSection />);
+    await screen.findByTestId("plugin-row-cockpit");
+
+    await user.click(screen.getByTestId("plugins-sync-button"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("integrations.refresh", { backend: "claude" }),
+    );
+  });
 });

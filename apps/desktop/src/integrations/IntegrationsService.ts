@@ -25,6 +25,7 @@
  * one. A profile with no project at all simply has no project-scope rows,
  * which is the truth.
  */
+import path from "node:path";
 import type { CapygenStore } from "@capygen/db";
 import {
   API_MCP_SETTINGS_KEY,
@@ -47,6 +48,14 @@ import type {
   ToolPolicyEntry,
 } from "@capygen/shared";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
+import { defaultConfirm } from "../prereqs/electronDefaults.js";
+import type { ConfirmOptions } from "../prereqs/runGate.js";
+import {
+  pluginCancelled,
+  pluginCommand,
+  pluginConfirmOptions,
+  type PluginGateAction,
+} from "./installGate.js";
 import { SyncCoordinator, type BackendSyncSource, type WatcherLike } from "./SyncCoordinator.js";
 
 export interface IntegrationsDeps {
@@ -66,6 +75,13 @@ export interface IntegrationsDeps {
   probeMcpServer?: (entry: McpServerEntry, projectPath: string | null) => Promise<string[]>;
   /** Reveal a skill file; injected because it needs Electron's `shell`. */
   openPath?: (target: string) => Promise<void> | void;
+  /**
+   * The R27 gate for `plugin.install`/`plugin.uninstall`: resolves `true` only
+   * when the user clicked the affirmative button. Defaults to the same native
+   * `dialog.showMessageBox` the setup panel uses (`prereqs/electronDefaults`),
+   * so the gate exists with no wiring in `main.ts`; a test injects a fake.
+   */
+  confirmInstall?: (options: ConfirmOptions) => Promise<boolean>;
 }
 
 export class IntegrationsService {
@@ -293,6 +309,8 @@ export class IntegrationsService {
     args: InvokeArgs<"integrations.plugin.install">,
   ): Promise<InvokeResult<"integrations.plugin.install">> {
     if (args.backend !== "claude") throw new Error(pluginsAreClaudeOnly(args.backend));
+    const id = args.name.includes("@") ? args.name : `${args.name}@${args.marketplace}`;
+    await this.confirmPluginCommand("install", id);
     const entry = await this.claude().installPlugin(args.marketplace, args.name);
     await this.afterWrite(args.backend);
     return entry;
@@ -301,16 +319,36 @@ export class IntegrationsService {
   async pluginUninstall(
     args: InvokeArgs<"integrations.plugin.uninstall">,
   ): Promise<{ ok: boolean }> {
+    if (args.backend === "api") throw new Error(pluginsAreClaudeOnly(args.backend));
+    await this.confirmPluginCommand("uninstall", args.name);
     const result =
       args.backend === "claude"
         ? await this.claude().uninstallPlugin(args.name)
-        : args.backend === "codex"
-          ? this.codex().removePlugin(args.name)
-          : (() => {
-              throw new Error(pluginsAreClaudeOnly(args.backend));
-            })();
+        : this.codex().removePlugin(args.name);
     await this.afterWrite(args.backend);
     return result;
+  }
+
+  /**
+   * SPEC R27 / CLAUDE.md: nothing is installed or uninstalled before this
+   * resolves `true`. A dialog that throws reads the same as Cancel — "nothing
+   * ran" is always the safe outcome of a broken gate — and the refusal carries
+   * the exact command so the settings page can say what did not happen.
+   */
+  private async confirmPluginCommand(action: PluginGateAction, id: string): Promise<void> {
+    const confirm = this.deps.confirmInstall ?? defaultConfirm;
+    let approved: boolean;
+    try {
+      approved = await confirm(pluginConfirmOptions(action, id));
+    } catch (err) {
+      this.deps.log.warn(`[integrations] plugin ${action} confirm failed: ${describe(err)}`);
+      approved = false;
+    }
+    if (!approved) {
+      this.deps.log.info(`[integrations] cancelled: \`${pluginCommand(action, id)}\``);
+      throw new Error(pluginCancelled(action, id));
+    }
+    this.deps.log.info(`[integrations] confirmed: \`${pluginCommand(action, id)}\``);
   }
 
   async pluginSetEnabled(
@@ -369,10 +407,40 @@ export class IntegrationsService {
     return entry;
   }
 
+  /**
+   * Reveal a skill file.
+   *
+   * [review] The path is checked against the skill files capygen has actually
+   * read before it reaches the shell. `shell.openPath` launches whatever the
+   * OS associates with the extension, so forwarding an arbitrary caller string
+   * turns this channel into "run this program": the contract's schema is only
+   * `{ path: string.min(1) }`, and contextIsolation protects a *clean*
+   * renderer, not a compromised one. The allowlist is the current snapshot of
+   * both backends that have skill files — the same list the page just rendered
+   * the Open button from — so a legitimate click always matches.
+   */
   async skillOpen(args: InvokeArgs<"integrations.skill.open">): Promise<{ ok: boolean }> {
     if (!this.deps.openPath) throw new Error("integrations.skill.open: no shell is wired");
+    if (!this.isKnownSkillFile(args.path)) {
+      throw new Error(
+        `integrations.skill.open refuses "${args.path}": it is not one of the skill files ` +
+          "capygen lists (only a path from Settings ▸ Skills can be opened)",
+      );
+    }
     await this.deps.openPath(args.path);
     return { ok: true };
+  }
+
+  /** Case-insensitive path match against every skill the backends report. */
+  private isKnownSkillFile(candidate: string): boolean {
+    const wanted = normalizePath(candidate);
+    // `api` has no skill loader, so only these two ever produce a path.
+    for (const backend of ["claude", "codex"] as const) {
+      for (const skill of this.sync.snapshot(backend).skills) {
+        if (normalizePath(skill.path) === wanted) return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -429,6 +497,12 @@ export class IntegrationsService {
     const current = this.projectPath();
     if (this.watchedProject === undefined || this.watchedProject === current) return;
     this.watchedProject = current;
+    // [review] Synchronously, before the caller reads `sync.snapshot(...)`:
+    // `retarget()` clears the cache too, but only after awaiting every
+    // watcher's `close()`, and nothing awaits it here. Without this line a
+    // `list()` immediately after a project switch answered out of the previous
+    // project's cached snapshot for the rest of the TTL.
+    this.sync.invalidateAll();
     this.deps.log.info(`[integrations] project changed; re-pointing watchers at ${current ?? "(none)"}`);
     void this.sync.retarget().catch((err: unknown) => {
       this.deps.log.warn(`[integrations] retarget: ${describe(err)}`);
@@ -445,4 +519,9 @@ function pluginsAreClaudeOnly(backend: Backend): string {
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Windows paths compare case-insensitively and either slash is legal. */
+function normalizePath(value: string): string {
+  return path.resolve(value).replace(/\//g, "\\").toLowerCase();
 }

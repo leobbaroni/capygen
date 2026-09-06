@@ -241,6 +241,21 @@ export class SyncCoordinator {
   }
 
   /**
+   * Drop every backend's memo, **synchronously**.
+   *
+   * [review] `retarget()` also clears the cache, but only after it has awaited
+   * each watcher's `close()`, and `IntegrationsService.retargetIfProjectMoved`
+   * does not await it — so `integrations.list` read the previous project's
+   * `.mcp.json`/`.claude/skills` rows out of a still-fresh cache entry for up
+   * to `ttlMs` after the active project changed. Every project-scope row is
+   * wrong in that window, which is exactly the class of thing R29 says the
+   * files are the source of truth about.
+   */
+  invalidateAll(): void {
+    this.cache.clear();
+  }
+
+  /**
    * Close and re-open every watcher, picking up the sources' current
    * `watchTargets()`. Called when the active project changes: `.mcp.json` and
    * `.claude/settings.local.json` live in the project, so the set of files

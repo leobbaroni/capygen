@@ -122,4 +122,47 @@ describe("SkillsSection", () => {
 
     expect(await screen.findByTestId("skills-panel-api")).toHaveTextContent(/no skills/i);
   });
+
+  // -------------------------------------------------------------------------
+  // [review] Fixes from the Phase 6 review wave.
+  // -------------------------------------------------------------------------
+
+  it("shows a refused Open on the row instead of dropping the rejection", async () => {
+    const user = userEvent.setup();
+    invoke.mockImplementation((channel: string, args: { backend?: string }) => {
+      if (channel === "integrations.list") {
+        return Promise.resolve({
+          mcpServers: [],
+          plugins: [],
+          skills: args.backend === "claude" ? CLAUDE_SKILLS : [],
+          tools: [],
+          lastSync: null,
+        });
+      }
+      if (channel === "integrations.skill.open") {
+        return Promise.reject(new Error("not one of the skill files capygen lists"));
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<SkillsSection />);
+    await screen.findByTestId("skill-row-graphify");
+
+    await user.click(screen.getByTestId("skill-open-graphify"));
+
+    expect(await screen.findByTestId("skill-row-error-graphify")).toHaveTextContent(
+      /not one of the skill files/,
+    );
+  });
+
+  it("Refresh asks the backend again", async () => {
+    const user = userEvent.setup();
+    render(<SkillsSection />);
+    await screen.findByTestId("skill-row-graphify");
+
+    await user.click(screen.getByTestId("skills-sync-button"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("integrations.refresh", { backend: "claude" }),
+    );
+  });
 });

@@ -47,6 +47,7 @@ import type {
 import {
   nodeFileIo,
   readSkillFrontMatter,
+  safeChildPath,
   updateTextFile,
   type FileIo,
 } from "./files.js";
@@ -390,7 +391,9 @@ export class CodexConfigStore {
     }
     const dir = scope === "project" ? this.paths.projectSkillsDir : this.paths.userSkillsDir;
     if (!dir) throw new Error("a project-scope skill needs a project directory");
-    const file = path.join(dir, name, "SKILL.md");
+    // [review] Same confinement as `ClaudeConfigStore.createSkill`: the name is
+    // caller-supplied and `FileIo.write` mkdir -p's whatever parent it is given.
+    const file = safeChildPath(dir, name, "SKILL.md");
     if (this.io.exists(file)) throw new Error(`${file} already exists`);
     this.io.write(file, markdown.endsWith("\n") ? markdown : `${markdown}\n`);
     const written = this.readSkills(this.readPlugins(this.config())).find(

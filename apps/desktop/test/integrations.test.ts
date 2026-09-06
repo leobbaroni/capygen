@@ -38,6 +38,11 @@ let ipc: IpcContext;
 let claudeHome: string;
 let codexHome: string;
 let cliCalls: string[][];
+/** Every path `integrations.skill.open` actually handed to the shell. */
+let opened: string[];
+/** Every plugin confirm the R27 gate asked for, and the answer it was given. */
+let confirms: { detail: string }[];
+let confirmAnswer: boolean;
 /** Fired by the fake watcher to simulate an outside edit. */
 let fireWatch: ((backend: string) => void) | null;
 
@@ -95,6 +100,13 @@ function makeRunner(): CliRunner {
       write(settings, JSON.stringify(current, null, 2));
       return { code: 0, stdout: "", stderr: "" };
     }
+    if (args[0] === "plugin" && args[1] === "install") {
+      const file = path.join(home, "plugins", "installed_plugins.json");
+      const current = fs.existsSync(file) ? readJson(file) : { version: 2, plugins: {} };
+      (current.plugins as Record<string, unknown>)[args[2] as string] = [{ scope: "user" }];
+      write(file, JSON.stringify(current, null, 2));
+      return { code: 0, stdout: "", stderr: "" };
+    }
     if (args[0] === "plugin" && args[1] === "uninstall") {
       const file = path.join(home, "plugins", "installed_plugins.json");
       const current = fs.existsSync(file) ? readJson(file) : { version: 2, plugins: {} };
@@ -117,6 +129,9 @@ beforeEach(async () => {
   claudeHome = path.join(h.dir, "claude");
   codexHome = path.join(h.dir, "codex");
   cliCalls = [];
+  opened = [];
+  confirms = [];
+  confirmAnswer = true;
   const listeners: Record<string, (() => void)[]> = {};
   fireWatch = (backend) => {
     for (const fn of listeners[backend] ?? []) fn();
@@ -158,6 +173,13 @@ beforeEach(async () => {
       home: h.dir,
       run: makeRunner(),
       createWatcher,
+      openPath: (target) => {
+        opened.push(target);
+      },
+      confirmInstall: async (options) => {
+        confirms.push({ detail: options.detail });
+        return confirmAnswer;
+      },
       // No TTL: every call in these tests should see the file as it is now.
       ttlMs: 0,
       debounceMs: 5,
@@ -535,5 +557,89 @@ describe("integrations.mcp.test", () => {
       ok: true,
       status: "connected",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [review] Fixes from the Phase 6 review wave.
+// ---------------------------------------------------------------------------
+
+const SKILL_MD = ["---", "name: capy", "---", ""].join("\n");
+
+describe("integrations.skill.open only opens skills capygen lists", () => {
+  it("opens a real skill file", async () => {
+    const file = path.join(claudeHome, "skills", "capy", "SKILL.md");
+    write(file, SKILL_MD);
+    await call("integrations.list", { backend: "claude" });
+    expect(await call("integrations.skill.open", { path: file })).toEqual({ ok: true });
+    expect(opened).toEqual([file]);
+  });
+
+  it("refuses any other path, so the channel cannot launch a program", async () => {
+    write(path.join(claudeHome, "skills", "capy", "SKILL.md"), SKILL_MD);
+    await call("integrations.list", { backend: "claude" });
+    for (const target of [
+      String.raw`C:\Windows\System32\cmd.exe`,
+      path.join(claudeHome, "settings.json"),
+      path.join(claudeHome, "skills", "capy", "evil.bat"),
+    ]) {
+      await expect(call("integrations.skill.open", { path: target })).rejects.toThrow(
+        /not one of the skill files/,
+      );
+    }
+    expect(opened).toEqual([]);
+  });
+});
+
+describe("plugin install/uninstall is gated (SPEC R27)", () => {
+  function installedPlugins(): Record<string, unknown> {
+    const file = path.join(claudeHome, "plugins", "installed_plugins.json");
+    return fs.existsSync(file)
+      ? ((readJson(file).plugins as Record<string, unknown>) ?? {})
+      : {};
+  }
+
+  it("shows the exact command and installs only after a Yes", async () => {
+    await call("integrations.plugin.install", {
+      backend: "claude",
+      marketplace: "cockpit",
+      name: "thing",
+    });
+    expect(confirms).toHaveLength(1);
+    expect(confirms[0]?.detail).toContain("claude plugin install thing@cockpit --yes");
+    expect(Object.keys(installedPlugins())).toEqual(["thing@cockpit"]);
+  });
+
+  it("runs nothing at all when the dialog is cancelled", async () => {
+    confirmAnswer = false;
+    await expect(
+      call("integrations.plugin.install", {
+        backend: "claude",
+        marketplace: "cockpit",
+        name: "thing",
+      }),
+    ).rejects.toThrow(/was not run — you cancelled/);
+    expect(confirms).toHaveLength(1);
+    expect(cliCalls.filter((c) => c[1] === "plugin")).toEqual([]);
+    expect(installedPlugins()).toEqual({});
+  });
+
+  it("gates uninstall the same way", async () => {
+    write(
+      path.join(claudeHome, "plugins", "installed_plugins.json"),
+      JSON.stringify({ version: 2, plugins: { "cockpit@cockpit": [{ scope: "user" }] } }),
+    );
+    confirmAnswer = false;
+    await expect(
+      call("integrations.plugin.uninstall", { backend: "claude", name: "cockpit@cockpit" }),
+    ).rejects.toThrow(/was not run/);
+    expect(confirms[0]?.detail).toContain("claude plugin uninstall cockpit@cockpit");
+    expect(Object.keys(installedPlugins())).toEqual(["cockpit@cockpit"]);
+
+    confirmAnswer = true;
+    expect(
+      await call("integrations.plugin.uninstall", { backend: "claude", name: "cockpit@cockpit" }),
+    ).toEqual({ ok: true });
+    expect(installedPlugins()).toEqual({});
   });
 });

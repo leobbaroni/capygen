@@ -12,14 +12,16 @@ import type { Backend } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  RowError,
   SectionError,
   SectionIntro,
   SectionLoading,
   SettingInput,
   SettingSelect,
   SettingsCard,
+  SyncStatus,
 } from "@/components/settings/primitives";
-import { useIntegrations } from "@/components/settings/useIntegrations";
+import { useIntegrations, useRowActions } from "@/components/settings/useIntegrations";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { ipc } from "@/lib/ipc";
 
@@ -51,7 +53,10 @@ export function PluginsSection() {
 }
 
 function ClaudePluginsPanel() {
-  const { data, loading, error, reload } = useIntegrations("claude");
+  const { data, loading, error, reload, refreshFromBackend } = useIntegrations("claude");
+  // Enable/disable and Uninstall are per-row: their failures belong on the row
+  // (see `useRowActions`), not swallowed by a bare `void`.
+  const rows = useRowActions();
   const [marketplaces, setMarketplaces] = useState<{ name: string; source: string }[]>([]);
   const [installName, setInstallName] = useState("");
   const [installMarketplace, setInstallMarketplace] = useState("");
@@ -100,6 +105,17 @@ function ClaudePluginsPanel() {
 
   return (
     <div data-testid="plugins-panel-claude" className="flex flex-col gap-4">
+      <div className="flex items-center justify-end">
+        <SyncStatus
+          lastSync={data?.lastSync}
+          busy={rows.busy("refresh")}
+          onRefresh={() => void rows.run("refresh", refreshFromBackend)}
+          testId="plugins-sync"
+        />
+      </div>
+      {rows.errorFor("refresh") ? (
+        <RowError message={rows.errorFor("refresh") as string} testId="plugins-refresh-error" />
+      ) : null}
       <div>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Installed</p>
         {plugins.length === 0 ? (
@@ -118,16 +134,18 @@ function ClaudePluginsPanel() {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={rows.busy(p.name)}
                       data-testid={`plugin-toggle-${p.name}`}
-                      onClick={() => void toggle(p.name, !p.enabled)}
+                      onClick={() => void rows.run(p.name, () => toggle(p.name, !p.enabled))}
                     >
                       {p.enabled ? "Disable" : "Enable"}
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={rows.busy(p.name)}
                       data-testid={`plugin-uninstall-${p.name}`}
-                      onClick={() => void uninstall(p.name)}
+                      onClick={() => void rows.run(p.name, () => uninstall(p.name))}
                     >
                       Uninstall
                     </Button>
@@ -139,6 +157,9 @@ function ClaudePluginsPanel() {
                     {p.commands.length} command{p.commands.length === 1 ? "" : "s"} · {p.skills.length} skill
                     {p.skills.length === 1 ? "" : "s"}
                   </p>
+                ) : null}
+                {rows.errorFor(p.name) ? (
+                  <RowError message={rows.errorFor(p.name) as string} testId={`plugin-row-error-${p.name}`} />
                 ) : null}
               </SettingsCard>
             ))}
@@ -192,9 +213,14 @@ function ClaudePluginsPanel() {
                 data-testid="plugin-install-button"
                 onClick={() => void install()}
               >
-                {installBusy ? "Installing…" : "Install"}
+                {installBusy ? "Installing…" : "Install…"}
               </Button>
             </div>
+            <p data-testid="plugin-install-gate-note" className="text-xs text-muted-foreground">
+              Installing and uninstalling both confirm the exact{" "}
+              <code className="font-mono">claude plugin …</code> command in a dialog first, and run
+              it in a console window you can watch (SPEC R27) — nothing is installed silently.
+            </p>
             {installError ? (
               <p role="alert" data-testid="plugin-install-error" className="text-xs text-destructive">
                 {installError}

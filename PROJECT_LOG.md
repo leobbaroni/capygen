@@ -1017,3 +1017,38 @@ Not fixed, on purpose
   test` 34 tests — 0 failed. PLAN.md Phase 6 ticked with its deviations; COMPAT.md gained the
   credential-stub row and three Internal-seams rows; `docs/RUN.md` §4 gained the settings spec and
   §7 the three new environment seams.
+
+## 2026-09-06 — Phase 6 review fixes
+
+- Security. `createSkill` (both stores) now resolves the caller's name through
+  `safeChildPath`, which refuses a separator, `..`, a drive letter or a control character and
+  re-checks containment — a name off the IPC boundary used to reach `FileIo.write`, which
+  `mkdir -p`s whatever parent it is given. `integrations.skill.open` checks the path against the
+  skill files capygen actually lists before it reaches `shell.openPath`, so the channel can no
+  longer launch an arbitrary program. `assertCliPositional` refuses an MCP-server or plugin name
+  starting with `-`, which the `claude` CLI's own option parser would otherwise swallow.
+- R27. `integrations.plugin.install`/`.uninstall` are gated in **main** by a native confirm that
+  quotes the exact `claude plugin …` command (`integrations/installGate.ts`), and the two commands
+  run with `showConsole: true` (`windowsHide: false`). The engine comment claiming a renderer
+  dialog satisfied this was wrong: there was no such dialog.
+- Correctness/efficiency. `retargetIfProjectMoved` clears the sync cache synchronously, so
+  `integrations.list` right after a project switch can no longer answer with the previous
+  project's project-scope rows. `ClaudeConfigStore.read()` builds one `ClaudeReadContext` (settings
+  chain + parsed `.claude.json`) and threads it down instead of re-reading both per `.mcp.json`
+  server and per sub-read. `cachedCliProbe` is shared by `harness.list` and Diagnostics, so
+  `claude --version` is one child process, not two per page.
+- Settings UI honesty. Every inline row action reports its failure on the row (`useRowActions`);
+  rows no store will write (plugin scope, inherited, `sse`, claude.ai) are read-only with a
+  reason; scope options are derived from the backend and whether a project is open; clearing
+  Arguments sends `args: []` rather than silently restoring them; the MCP form gained an `env`
+  editor and an enabled toggle; MCP/Skills/Plugins gained a Refresh button and a "synced …" line;
+  Tools drops the `session` scope, badges unenforced rows and replaces the Codex/API editors with
+  a Phase 9 note (nothing reads those rows); Dev servers replaces two dead `localStorage` controls
+  with the same note treatment.
+- Deferred: the low-severity duplicate-heading finding (page `<h1>` + `SectionIntro` `<h2>`).
+  Removing the page heading leaves a section with no title at all while it loads, since ten
+  sections return `SectionLoading`/`SectionError` before their intro — not a trivial fix.
+- Gate: `corepack pnpm typecheck` clean (5 projects + `tests/tsconfig.json`); `corepack pnpm test`
+  99 files / 1296 passed, 4 skipped; `corepack pnpm build` clean; `corepack pnpm exec playwright
+  test` 34 tests — 24 passed, 10 skipped (Claude sign-in), 0 failed. COMPAT.md's headless-CLI
+  section records `showConsole` and `assertCliPositional`.

@@ -76,6 +76,44 @@ export const nodeFileIo: FileIo = {
   },
 };
 
+/** ASCII control characters — never part of a real folder name. */
+const CONTROL_CHARS = /[\u0000-\u001f]/;
+
+/**
+ * `<dir>/<segment>/<...rest>`, but only when `segment` really is one directory
+ * name directly under `dir`.
+ *
+ * [review] `createSkill` used to `path.join(dir, name, "SKILL.md")` with the
+ * name straight off the IPC boundary, and `nodeFileIo.write` `mkdir -p`s the
+ * parent before it writes — so a name of `..\..\AppData\Roaming\x` wrote
+ * caller-controlled markdown anywhere the process could reach. The schema
+ * (`integrations.skill.create`) only asks for a non-empty string, so the
+ * confinement has to be here, next to the write.
+ *
+ * Both halves are deliberate: the segment is checked *as text* (no separator,
+ * no `..`, no drive letter, no NTFS stream `:`), and the resolved path is then
+ * checked to still be inside `dir`, so a future caller that passes something
+ * this list did not anticipate still cannot escape.
+ */
+export function safeChildPath(dir: string, segment: string, ...rest: string[]): string {
+  const name = segment.trim();
+  if (name === "" || name === "." || name === "..") {
+    throw new Error(`"${segment}" is not a usable name`);
+  }
+  if (/[\\/]/.test(name) || name.includes(":") || CONTROL_CHARS.test(name)) {
+    throw new Error(
+      `"${segment}" cannot be used as a name — it must be a single folder name, ` +
+        "with no path separator, drive letter or control character",
+    );
+  }
+  const file = path.join(dir, name, ...rest);
+  const relative = path.relative(path.resolve(dir), path.resolve(file));
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`"${segment}" would write outside ${dir}`);
+  }
+  return file;
+}
+
 export function readJsonFile(
   io: FileIo,
   file: string,

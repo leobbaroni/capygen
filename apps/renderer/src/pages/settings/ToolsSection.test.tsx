@@ -115,4 +115,77 @@ describe("ToolsSection", () => {
     expect(screen.queryByTestId("claude-permission-modes")).not.toBeInTheDocument();
     expect(await screen.findByTestId("tools-panel-codex")).toHaveTextContent(/no tool policies/i);
   });
+
+  // -------------------------------------------------------------------------
+  // [review] Fixes from the Phase 6 review wave.
+  // -------------------------------------------------------------------------
+
+  it("says a Codex policy is not enforced yet and offers no Add form there", async () => {
+    const user = userEvent.setup();
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+    // Claude *is* enforced, so its form is there.
+    expect(screen.getByTestId("tool-policy-add")).toBeInTheDocument();
+    expect(screen.queryByTestId("tools-not-enforced")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("tools-tab-codex"));
+
+    expect(await screen.findByTestId("tools-not-enforced")).toHaveTextContent(/phase 9/i);
+    expect(screen.queryByTestId("tool-policy-add")).not.toBeInTheDocument();
+  });
+
+  it("never offers session scope, which no turn reads", async () => {
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+    const options = Array.from(
+      screen.getByTestId("tool-policy-input-scope").querySelectorAll("option"),
+    ).map((o) => o.getAttribute("value"));
+    expect(options).toEqual(["global", "project"]);
+  });
+
+  it("badges an existing session-scope row as not enforced", async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === "integrations.list") {
+        return Promise.resolve({
+          mcpServers: [],
+          plugins: [],
+          skills: [],
+          tools: [
+            { backend: "claude", pattern: "Bash(x)", decision: "ask", scope: "session" },
+          ] satisfies ToolPolicyEntry[],
+          lastSync: null,
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<ToolsSection />);
+    expect(await screen.findByTestId("tool-policy-unenforced-Bash(x)")).toBeInTheDocument();
+  });
+
+  it("shows a failed row action on the row instead of dropping it", async () => {
+    const user = userEvent.setup();
+    invoke.mockImplementation((channel: string, args: { backend?: string }) => {
+      if (channel === "integrations.list") {
+        return Promise.resolve({
+          mcpServers: [],
+          plugins: [],
+          skills: [],
+          tools: args.backend === "claude" ? CLAUDE_POLICIES : [],
+          lastSync: null,
+        });
+      }
+      if (channel === "integrations.tools.removePolicy") {
+        return Promise.reject(new Error("no settings file for the global policy scope"));
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<ToolsSection />);
+    await screen.findByTestId("tool-policy-row-Bash(rm *)");
+
+    await user.click(screen.getByTestId("tool-policy-remove-Bash(rm *)"));
+
+    expect(await screen.findByTestId("tool-policy-error-Bash(rm *)")).toHaveTextContent(
+      /no settings file/,
+    );
+  });
 });

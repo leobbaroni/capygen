@@ -216,10 +216,19 @@ directory, the isolation proof every test here depends on.
 
 ### Claude Code — CLI, headless (PLAN A9)
 
-Every invocation is `execFile` with `windowsHide: true`, `cleanEnv()`, and
-`CLAUDE_CONFIG_DIR` set **explicitly** to the store's own config dir — an
-isolated home stays isolated even when the parent process has the variable
-unset. A non-zero exit throws with the CLI's own stderr in the message.
+Every invocation is `execFile` with `cleanEnv()` and `CLAUDE_CONFIG_DIR` set
+**explicitly** to the store's own config dir — an isolated home stays isolated
+even when the parent process has the variable unset. A non-zero exit throws
+with the CLI's own stderr in the message.
+
+`windowsHide: true` for every **read** (a settings page must not flash a
+console on each refresh), and `windowsHide: false` — `RunCliOptions.showConsole`
+— for the two commands that **install or uninstall**, because SPEC R27 asks for
+"the confirm dialog *and* a visible console". A name that would be a bare
+positional is refused before the spawn if it starts with `-`
+(`assertCliPositional`): `execFile` is safe from the shell, but a name like
+`--transport` is read by the CLI's *own* option parser and the command that
+runs stops being the command capygen composed.
 
 | Command | Verified | Used by | If it changes |
 |---|---|---|---|
@@ -228,8 +237,8 @@ unset. A non-zero exit throws with the CLI's own stderr in the message.
 | `claude mcp list` | live | `liveMcpStatus()` — per-server status **and** the claude.ai cloud connectors that exist in no file at all | **no `--json` on 2.1.261** (`claude mcp list --help` offers only `-h`), so this parses text: `<name>: <target> - <glyph> <status>`, split on the first `": "` and the last `" - "` because a connector's name contains spaces (`claude.ai Higgsfield`). It can only *enrich*: an unrecognised line leaves the status undefined and the file-derived list stands |
 | `claude plugin list --json` | live | reconciling installed plugins against the file | array of `{id,version,scope,enabled,installPath,installedAt,lastUpdated}` |
 | `claude plugin marketplace list --json` | live | `integrations.plugin.marketplaces` | array of `{name,source,repo,installLocation}`; any failure falls back to `known_marketplaces.json` |
-| `claude plugin install <plugin>@<marketplace> --yes` | `--help`, 2.1.261 | `installPlugin` | **`--yes` is required, not cosmetic**: the CLI refuses a marketplace-declared install command when stdout is not a TTY, which it never is here. R27's confirm-before-installing is satisfied by the renderer's dialog *before* this call is made |
-| `claude plugin uninstall\|enable\|disable <plugin>` | `--help`; `enable`/`disable` exercised through the test shim | `uninstallPlugin`, `setPluginEnabled` | `-s <scope>` defaults to auto-detect and is deliberately not passed |
+| `claude plugin install <plugin>@<marketplace> --yes` | `--help`, 2.1.261 | `installPlugin` | **`--yes` is required, not cosmetic**: the CLI refuses a marketplace-declared install command when stdout is not a TTY, which it never is here. R27 is satisfied by `IntegrationsService.confirmPluginCommand` — a native dialog in **main** quoting this exact command, which no renderer can skip — plus `showConsole: true`. (Until the Phase 6 review this row claimed "the renderer's dialog"; there was no such dialog) |
+| `claude plugin uninstall\|enable\|disable <plugin>` | `--help`; `enable`/`disable` exercised through the test shim | `uninstallPlugin`, `setPluginEnabled` | `-s <scope>` defaults to auto-detect and is deliberately not passed. `uninstall` is gated and console-visible like `install`; `enable`/`disable` are not — they install nothing, and R27 names install/upgrade/uninstall |
 
 ### Codex — `~/.codex/config.toml` (`CODEX_HOME`)
 

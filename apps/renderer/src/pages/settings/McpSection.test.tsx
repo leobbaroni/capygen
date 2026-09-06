@@ -7,7 +7,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerEntry } from "@capygen/shared";
-import { McpSection } from "./McpSection";
+import { McpSection, envRecord, readOnlyReason, scopeOptionsFor } from "./McpSection";
 
 const invoke = vi.fn();
 vi.mock("@/lib/ipc", () => ({
@@ -35,6 +35,17 @@ const CLAUDE_SERVERS: McpServerEntry[] = [
     source: "live",
     enabled: true,
     status: "connected",
+  },
+  // [review] An `sse` entry used to get an Edit button whose form collapsed it
+  // to stdio with an empty command; saving rewrote the registration.
+  {
+    backend: "claude",
+    name: "legacy-sse",
+    transport: "sse",
+    url: "https://example.com/sse",
+    scope: "user",
+    source: "~/.claude.json",
+    enabled: true,
   },
 ];
 
@@ -193,5 +204,119 @@ describe("McpSection", () => {
         expect.objectContaining({ backend: "claude", scope: "user", name: "filesystem" }),
       ),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // [review] Fixes from the Phase 6 review wave.
+  // -------------------------------------------------------------------------
+
+  it("shows an sse entry read-only rather than an Edit form that would rewrite it as stdio", async () => {
+    render(<McpSection />);
+    const row = await screen.findByTestId("mcp-row-legacy-sse");
+    expect(within(row).getByText(/sse servers are shown read-only/i)).toBeInTheDocument();
+    expect(within(row).queryByTestId("mcp-edit-legacy-sse")).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("mcp-remove-legacy-sse")).not.toBeInTheDocument();
+  });
+
+  it("renders a failed inline action on the row instead of dropping it", async () => {
+    const user = userEvent.setup();
+    invoke.mockImplementation((channel: string, args: { backend: string }) => {
+      if (channel === "integrations.list") {
+        return Promise.resolve({
+          mcpServers: args.backend === "claude" ? CLAUDE_SERVERS : [],
+          plugins: [],
+          skills: [],
+          tools: [],
+          lastSync: null,
+        });
+      }
+      if (channel === "integrations.mcp.remove") {
+        return Promise.reject(new Error("plugin-scope MCP servers belong to the plugin"));
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<McpSection />);
+    await screen.findByTestId("mcp-row-filesystem");
+
+    await user.click(screen.getByTestId("mcp-remove-filesystem"));
+
+    expect(await screen.findByTestId("mcp-row-error-filesystem")).toHaveTextContent(
+      /belong to the plugin/,
+    );
+  });
+
+  it("Refresh asks the backend again", async () => {
+    const user = userEvent.setup();
+    render(<McpSection />);
+    await screen.findByTestId("mcp-row-filesystem");
+
+    await user.click(screen.getByTestId("mcp-sync-button"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("integrations.refresh", { backend: "claude" }),
+    );
+  });
+
+  it("sends args: [] when the Arguments field is cleared, and the env pairs", async () => {
+    const user = userEvent.setup();
+    render(<McpSection />);
+    await screen.findByTestId("mcp-row-filesystem");
+
+    await user.click(screen.getByTestId("mcp-edit-filesystem"));
+    const dialog = await screen.findByTestId("mcp-dialog");
+    await user.clear(within(dialog).getByTestId("mcp-input-args"));
+    await user.click(within(dialog).getByTestId("mcp-env-add"));
+    await user.type(within(dialog).getByTestId("mcp-env-key-0"), "API_KEY");
+    await user.type(within(dialog).getByTestId("mcp-env-value-0"), "s3cret");
+    await user.click(within(dialog).getByTestId("mcp-dialog-save"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "integrations.mcp.update",
+        expect.objectContaining({
+          // `[]`, not `undefined`: both stores merge with `patch.args ?? existing.args`.
+          patch: expect.objectContaining({ args: [], env: { API_KEY: "s3cret" } }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("scope options follow what the backend's store can actually write", () => {
+  it("offers only User for codex and api, and needs a project for Claude's other two", () => {
+    expect(scopeOptionsFor("codex", true).map((o) => o.value)).toEqual(["user"]);
+    expect(scopeOptionsFor("api", true).map((o) => o.value)).toEqual(["user"]);
+    expect(scopeOptionsFor("claude", false).map((o) => o.value)).toEqual(["user"]);
+    expect(scopeOptionsFor("claude", true).map((o) => o.value)).toEqual([
+      "user",
+      "project",
+      "local",
+    ]);
+  });
+});
+
+describe("readOnlyReason", () => {
+  it("names every row capygen's stores refuse to write", () => {
+    const base: McpServerEntry = {
+      backend: "api",
+      name: "x",
+      transport: "stdio",
+      scope: "user",
+      source: "s",
+      enabled: true,
+    };
+    expect(readOnlyReason(base)).toBeNull();
+    expect(readOnlyReason({ ...base, inherited: true })).toMatch(/inherited/i);
+    expect(readOnlyReason({ ...base, scope: "plugin" })).toMatch(/plugin/i);
+    expect(readOnlyReason({ ...base, transport: "sse" })).toMatch(/sse/i);
+    expect(readOnlyReason({ ...base, transport: "claudeai-proxy" })).toMatch(/claude\.ai/i);
+  });
+});
+
+describe("envRecord", () => {
+  it("drops blank keys and keeps the rest verbatim", () => {
+    expect(envRecord([{ key: " API_KEY ", value: "v" }, { key: "  ", value: "ignored" }])).toEqual({
+      API_KEY: "v",
+    });
   });
 });

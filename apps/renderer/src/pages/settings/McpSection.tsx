@@ -2,33 +2,77 @@
  * Settings ▸ MCP servers (Task B2 item 2, SPEC R28-R29): per-backend tabs,
  * a list with scope/source/status badges, an add/edit dialog for
  * `stdio`/`http` servers, a Test button (`integrations.mcp.test`) and remove.
- * A `claudeai-proxy` entry (claude.ai connectors) is read-only here — a note
- * says so instead of offering Edit/Remove for a server the app cannot manage.
+ *
+ * Rows the owning store refuses to write are read-only here rather than
+ * offered and then rejected: a `claudeai-proxy` entry (a claude.ai connector),
+ * a `plugin`-scope entry (it belongs to the plugin), an `api` row inherited
+ * from another backend, and an `sse` entry (this form cannot express one — see
+ * `toFormState`). Each says why.
  */
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { PlugZapIcon, TrashIcon } from "lucide-react";
 import type { Backend, McpServerEntry, McpServerScope, McpTransport } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
+  RowError,
   SectionError,
   SectionIntro,
   SectionLoading,
   SettingInput,
   SettingSelect,
+  SettingToggle,
   SettingsCard,
+  SyncStatus,
 } from "@/components/settings/primitives";
-import { useIntegrations } from "@/components/settings/useIntegrations";
+import { useIntegrations, useRowActions } from "@/components/settings/useIntegrations";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { ipc } from "@/lib/ipc";
+import { useAppStore } from "@/store/appStore";
 
 const BACKENDS: Backend[] = ["claude", "codex", "api"];
-const SCOPE_OPTIONS: { value: McpServerScope; label: string }[] = [
-  { value: "user", label: "User" },
-  { value: "project", label: "Project" },
-  { value: "local", label: "Local" },
-];
+
+/**
+ * [review] The scope select used to offer User/Project/Local on every tab, and
+ * only Save found out: `CodexConfigStore.assertUserScope` and
+ * `ApiConfigStore.assertOwnScope` both accept `user` and nothing else, and
+ * Claude's project/local scopes need an open project
+ * (`assertWritableMcpScope`). The options are derived from that instead.
+ */
+export function scopeOptionsFor(
+  backend: Backend,
+  hasProject: boolean,
+): { value: McpServerScope; label: string }[] {
+  const user = { value: "user" as const, label: "User" };
+  if (backend !== "claude") return [user];
+  if (!hasProject) return [user];
+  return [
+    user,
+    { value: "project", label: "Project (.mcp.json)" },
+    { value: "local", label: "Local (this project only)" },
+  ];
+}
+
+/** Why this row has no Edit/Remove, or null when it is capygen's to write. */
+export function readOnlyReason(entry: McpServerEntry): string | null {
+  if (entry.transport === "claudeai-proxy") {
+    return "Managed on claude.ai — connectors like this one are configured there, not in capygen.";
+  }
+  if (entry.inherited === true) {
+    return "Inherited from another backend — edit it on the backend whose config declares it.";
+  }
+  if (entry.scope === "plugin") {
+    return "Shipped by a plugin — disable the plugin instead of editing its files.";
+  }
+  if (entry.transport === "sse") {
+    // [review] The edit form has no SSE mode, and `toFormState` used to fall
+    // back to stdio: opening an sse server showed an empty Command box and
+    // saving rewrote the entry as stdio, destroying the registration.
+    return "SSE servers are shown read-only — capygen's editor cannot express one yet.";
+  }
+  return null;
+}
 
 export function McpSection() {
   const [tab, setTab] = useState<Backend>("claude");
@@ -56,12 +100,28 @@ export function McpSection() {
 }
 
 function McpBackendPanel({ backend }: { backend: Backend }) {
-  const { data, loading, error, reload } = useIntegrations(backend);
+  const { data, loading, error, reload, refreshFromBackend } = useIntegrations(backend);
+  const rows = useRowActions();
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; entry: McpServerEntry } | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; message: string }>>({});
+  // `integrations.list` reads project scope for the most-recently-touched
+  // project, which is the head of this same list (`projects.list` is
+  // `updated_at DESC`) — so "is there a project at all" is the right question.
+  const hasProject = useAppStore((s) => s.projects.length > 0);
+  const scopeOptions = useMemo(() => scopeOptionsFor(backend, hasProject), [backend, hasProject]);
 
   async function remove(entry: McpServerEntry): Promise<void> {
     await ipc().invoke("integrations.mcp.remove", { backend, scope: entry.scope, name: entry.name });
+    await reload();
+  }
+
+  async function setEnabled(entry: McpServerEntry, enabled: boolean): Promise<void> {
+    await ipc().invoke("integrations.mcp.update", {
+      backend,
+      scope: entry.scope,
+      name: entry.name,
+      patch: { enabled },
+    });
     await reload();
   }
 
@@ -84,17 +144,27 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
 
   return (
     <div data-testid={`mcp-panel-${backend}`} className="flex flex-col gap-3">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        <SyncStatus
+          lastSync={data?.lastSync}
+          busy={rows.busy("refresh")}
+          onRefresh={() => void rows.run("refresh", refreshFromBackend)}
+          testId="mcp-sync"
+        />
         <Button size="sm" data-testid="mcp-add-button" onClick={() => setDialog({ mode: "add" })}>
           Add server
         </Button>
       </div>
+      {rows.errorFor("refresh") ? (
+        <RowError message={rows.errorFor("refresh") as string} testId="mcp-refresh-error" />
+      ) : null}
       {servers.length === 0 ? (
         <p className="text-sm text-muted-foreground">No MCP servers registered for this backend yet.</p>
       ) : (
         servers.map((entry) => {
           const key = `${entry.scope}:${entry.name}`;
-          const managedElsewhere = entry.transport === "claudeai-proxy";
+          const readOnly = readOnlyReason(entry);
+          const rowError = rows.errorFor(key);
           return (
             <SettingsCard
               key={key}
@@ -107,17 +177,27 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
                   <Badge variant={entry.status === "connected" ? "success" : entry.status === "failed" ? "destructive" : "default"}>
                     {entry.status ?? "unknown"}
                   </Badge>
-                  {!managedElsewhere ? (
+                  {entry.transport !== "claudeai-proxy" ? (
+                    <Button
+                      size="icon-sm"
+                      variant="outline"
+                      title="Test connection"
+                      disabled={rows.busy(key)}
+                      data-testid={`mcp-test-${entry.name}`}
+                      onClick={() => void rows.run(key, () => test(entry))}
+                    >
+                      <PlugZapIcon className="size-3.5" />
+                    </Button>
+                  ) : null}
+                  {!readOnly ? (
                     <>
-                      <Button
-                        size="icon-sm"
-                        variant="outline"
-                        title="Test connection"
-                        data-testid={`mcp-test-${entry.name}`}
-                        onClick={() => void test(entry)}
-                      >
-                        <PlugZapIcon className="size-3.5" />
-                      </Button>
+                      <SettingToggle
+                        checked={entry.enabled}
+                        disabled={rows.busy(key)}
+                        onChange={(checked) => void rows.run(key, () => setEnabled(entry, checked))}
+                        data-testid={`mcp-enabled-${entry.name}`}
+                        aria-label={`Enable ${entry.name}`}
+                      />
                       <Button
                         size="sm"
                         variant="outline"
@@ -130,8 +210,9 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
                         size="icon-sm"
                         variant="outline"
                         title="Remove"
+                        disabled={rows.busy(key)}
                         data-testid={`mcp-remove-${entry.name}`}
-                        onClick={() => void remove(entry)}
+                        onClick={() => void rows.run(key, () => remove(entry))}
                       >
                         <TrashIcon className="size-3.5" />
                       </Button>
@@ -140,11 +221,8 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
                 </div>
               }
             >
-              {managedElsewhere ? (
-                <p className="text-xs text-muted-foreground">
-                  Managed on claude.ai — connectors like this one are configured there, not in capygen.
-                </p>
-              ) : null}
+              {readOnly ? <p className="text-xs text-muted-foreground">{readOnly}</p> : null}
+              {rowError ? <RowError message={rowError} testId={`mcp-row-error-${entry.name}`} /> : null}
               {testResult[key] ? (
                 <p
                   data-testid={`mcp-test-result-${entry.name}`}
@@ -160,6 +238,7 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
       {dialog ? (
         <McpDialog
           backend={backend}
+          scopeOptions={scopeOptions}
           initial={dialog.mode === "edit" ? dialog.entry : null}
           onClose={() => setDialog(null)}
           onSaved={async () => {
@@ -172,6 +251,11 @@ function McpBackendPanel({ backend }: { backend: Backend }) {
   );
 }
 
+interface EnvPair {
+  key: string;
+  value: string;
+}
+
 interface McpFormState {
   name: string;
   transport: McpTransport;
@@ -179,33 +263,51 @@ interface McpFormState {
   args: string;
   url: string;
   scope: McpServerScope;
+  env: EnvPair[];
 }
 
-function toFormState(entry: McpServerEntry | null): McpFormState {
+function toFormState(entry: McpServerEntry | null, scope: McpServerScope): McpFormState {
   return {
     name: entry?.name ?? "",
+    // Only the two transports this form can express reach it — `readOnlyReason`
+    // keeps every other kind out of the edit path entirely.
     transport: entry?.transport === "http" ? "http" : "stdio",
     command: entry?.command ?? "",
     args: entry?.args?.join(" ") ?? "",
     url: entry?.url ?? "",
-    scope: entry?.scope ?? "user",
+    scope: entry?.scope ?? scope,
+    env: Object.entries(entry?.env ?? {}).map(([key, value]) => ({ key, value })),
   };
 }
 
-/** Add/edit dialog — `stdio` and `http` only (Task B2 item 2's own scope; a
- *  `sse`/`claudeai-proxy` entry is never created from this form). */
+/** `env` pairs → the record the contract carries; blank keys are dropped. */
+export function envRecord(pairs: EnvPair[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of pairs) {
+    const key = pair.key.trim();
+    if (key === "") continue;
+    out[key] = pair.value;
+  }
+  return out;
+}
+
+/** Add/edit dialog — `stdio` and `http`. */
 function McpDialog({
   backend,
+  scopeOptions,
   initial,
   onClose,
   onSaved,
 }: {
   backend: Backend;
+  scopeOptions: { value: McpServerScope; label: string }[];
   initial: McpServerEntry | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [form, setForm] = useState<McpFormState>(() => toFormState(initial));
+  const [form, setForm] = useState<McpFormState>(() =>
+    toFormState(initial, scopeOptions[0]?.value ?? "user"),
+  );
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -222,6 +324,11 @@ function McpDialog({
     if (!valid) return;
     setSaving(true);
     setSubmitError(null);
+    const stdio = form.transport === "stdio";
+    // [review] `args: []`, never `undefined`, when the field is cleared: both
+    // stores merge with `patch.args ?? existing.args`, so an `undefined` here
+    // silently restored the arguments the user had just deleted.
+    const args = stdio ? (form.args.trim() === "" ? [] : form.args.trim().split(/\s+/)) : undefined;
     try {
       if (initial) {
         await ipc().invoke("integrations.mcp.update", {
@@ -231,9 +338,10 @@ function McpDialog({
           patch: {
             name: form.name.trim(),
             transport: form.transport,
-            command: form.transport === "stdio" ? form.command.trim() : undefined,
-            args: form.transport === "stdio" && form.args.trim() !== "" ? form.args.trim().split(/\s+/) : undefined,
+            command: stdio ? form.command.trim() : undefined,
+            args,
             url: form.transport === "http" ? form.url.trim() : undefined,
+            env: envRecord(form.env),
           },
         });
       } else {
@@ -243,9 +351,10 @@ function McpDialog({
           entry: {
             name: form.name.trim(),
             transport: form.transport,
-            command: form.transport === "stdio" ? form.command.trim() : undefined,
-            args: form.transport === "stdio" && form.args.trim() !== "" ? form.args.trim().split(/\s+/) : undefined,
+            command: stdio ? form.command.trim() : undefined,
+            args,
             url: form.transport === "http" ? form.url.trim() : undefined,
+            env: envRecord(form.env),
             source: "capygen",
           },
         });
@@ -264,7 +373,7 @@ function McpDialog({
         <DialogHeader>
           <DialogTitle>{initial ? `Edit ${initial.name}` : "Add MCP server"}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto">
           <Field label="Name" error={nameError} testId="mcp-field-name">
             <SettingInput
               value={form.name}
@@ -290,10 +399,17 @@ function McpDialog({
               <SettingSelect
                 value={form.scope}
                 onChange={(v) => setForm((f) => ({ ...f, scope: v as McpServerScope }))}
-                options={SCOPE_OPTIONS}
+                options={scopeOptions}
                 data-testid="mcp-select-scope"
                 aria-label="Scope"
               />
+              {scopeOptions.length === 1 ? (
+                <span className="text-xs text-muted-foreground">
+                  {backend === "claude"
+                    ? "Project and Local scope need an open project."
+                    : `The ${BACKEND_LABEL[backend]} backend keeps every MCP server in one user-scope config.`}
+                </span>
+              ) : null}
             </Field>
           ) : null}
           {form.transport === "stdio" ? (
@@ -328,6 +444,7 @@ function McpDialog({
               />
             </Field>
           )}
+          <EnvEditor pairs={form.env} onChange={(env) => setForm((f) => ({ ...f, env }))} />
           {submitError ? (
             <p role="alert" data-testid="mcp-submit-error" className="text-xs text-destructive">
               {submitError}
@@ -344,6 +461,69 @@ function McpDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * [review] SPEC R28 names ComfyUI and Higgsfield by example and both are
+ * configured with an API key in `env`; the form had no way to set one, so
+ * adding either meant dropping to `claude mcp add -e KEY=…`. Values are
+ * password inputs so a key is not shoulder-surfable, and they are only ever
+ * sent to `integrations.mcp.*`, which writes them into the backend's own
+ * config file.
+ */
+function EnvEditor({
+  pairs,
+  onChange,
+}: {
+  pairs: EnvPair[];
+  onChange: (pairs: EnvPair[]) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="mcp-field-env">
+      <span className="text-xs font-medium text-muted-foreground">Environment variables</span>
+      {pairs.map((pair, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <SettingInput
+            value={pair.key}
+            onChange={(v) => onChange(pairs.map((p, i) => (i === index ? { ...p, key: v } : p)))}
+            placeholder="API_KEY"
+            data-testid={`mcp-env-key-${index}`}
+            aria-label={`Environment variable ${index + 1} name`}
+          />
+          <input
+            type="password"
+            value={pair.value}
+            onChange={(e) =>
+              onChange(pairs.map((p, i) => (i === index ? { ...p, value: e.target.value } : p)))
+            }
+            placeholder="value"
+            data-testid={`mcp-env-value-${index}`}
+            aria-label={`Environment variable ${index + 1} value`}
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-foreground-tertiary focus:border-ring"
+          />
+          <Button
+            size="icon-sm"
+            variant="outline"
+            title="Remove variable"
+            data-testid={`mcp-env-remove-${index}`}
+            onClick={() => onChange(pairs.filter((_, i) => i !== index))}
+          >
+            <TrashIcon className="size-3.5" />
+          </Button>
+        </div>
+      ))}
+      <div>
+        <Button
+          size="sm"
+          variant="outline"
+          data-testid="mcp-env-add"
+          onClick={() => onChange([...pairs, { key: "", value: "" }])}
+        >
+          Add variable
+        </Button>
+      </div>
+    </div>
   );
 }
 

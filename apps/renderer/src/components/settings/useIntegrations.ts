@@ -59,3 +59,52 @@ export function useIntegrations(backend: Backend): UseIntegrationsResult {
 
   return { data, loading, error, reload, refreshFromBackend };
 }
+
+export interface UseRowActionsResult {
+  /** The last failure for this row's action, or null. */
+  errorFor: (key: string) => string | null;
+  /** Whether this row's action is still in flight. */
+  busy: (key: string) => boolean;
+  /** Run one row action, keeping its failure next to the row that asked. */
+  run: (key: string, action: () => Promise<unknown>) => Promise<void>;
+}
+
+/**
+ * [review] Inline row actions used to be fired as `void doIt(entry)` — a
+ * rejected IPC call then produced an unhandled rejection, an unchanged row and
+ * no message at all, which is exactly what a store refusing a write looks like
+ * from the user's side (a plugin-scope MCP server, an `api` row inherited from
+ * Claude, a Codex project scope). This keeps the failure attached to the key
+ * the caller chose, so it renders on the row rather than replacing the page.
+ */
+export function useRowActions(): UseRowActionsResult {
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busyKeys, setBusyKeys] = useState<Record<string, true>>({});
+
+  const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
+    setBusyKeys((prev) => ({ ...prev, [key]: true }));
+    setErrors((prev) => {
+      if (prev[key] === undefined) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      await action();
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setBusyKeys((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  }, []);
+
+  return {
+    errorFor: (key) => errors[key] ?? null,
+    busy: (key) => busyKeys[key] === true,
+    run,
+  };
+}
