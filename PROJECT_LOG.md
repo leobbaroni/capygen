@@ -268,6 +268,29 @@
   166 baseline: 3 shared, 4 db, 1 sessionRunner, plus the widget/elicitation samples folded into
   existing round-trip tests) · `pnpm build` clean.
 
+## 2026-09-06 — Phase 3 / B1: Codex harness over `codex app-server`
+
+- `packages/engine/src/codex/*`: JSON-RPC client over newline-delimited stdio (the framing the
+  Phase 1 spike proved), `CodexHarness` implementing `Harness`, binary resolution, an `[assumed]`
+  price table. Registry hook `createHarnessForBackend` in `packages/engine/src/index.ts`.
+- Notifications map to blocks: `agentMessage` → text, `reasoning` → thinking, `commandExecution`
+  → tool_call/bash, `fileChange` → tool_call/edit|write + one diff per change, `mcpToolCall` →
+  tool_call/mcp (+ a `widget` block for a `ui://` app result), `webSearch` → tool_call/web.
+  Approvals and `item/tool/requestUserInput` become permission and question cards.
+- 30 tests in `packages/engine/test/codexHarness.test.ts`, driven by a fake app-server; the text
+  turn and the approval round trip replay real recorded frames
+  (`test/fixtures/codex-frames.json`, lifted from `docs/spikes/codex.raw.json`).
+- Live proof: `corepack pnpm --dir packages/engine live:codex` → `LIVE PASS` (a "pong" turn and an
+  accepted command approval whose command really ran).
+- Two bugs the live run caught that no unit test could have: `require.resolve("@openai/codex-sdk")`
+  throws (`exports` has only an `import` condition), so the harness was silently spawning the
+  machine's *installed* Codex 0.139.0 instead of the bundled 0.153.4 — now a directory walk with a
+  regression test; and Codex's Windows sandbox rejects an 8.3 short path, so the live script
+  `realpathSync.native`s its temp cwd.
+- Not done: elicitation answers can't round-trip (`EngineEvent`/`Harness` have no elicitation
+  variant — `CodexHarness.answerElicitation` is the seam, requests are declined meanwhile), and
+  Codex sub-agent items (`collabAgentToolCall`, `subAgentActivity`) are unmapped (Phase 4).
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.

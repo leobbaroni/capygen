@@ -35,10 +35,39 @@ Verified on: Windows 10 Pro 19045 · Node 22.16 · Electron 44.2.0 (Node 24.20.0
 Sign-in: claude.ai OAuth (`init.apiKeySource: "none"`). No API key is read or stored by the Claude
 harness.
 
-## Codex — `codex app-server` / `@openai/codex-sdk`
+## Codex — `codex app-server` (`@openai/codex` 0.153.4)
 
-Not wired yet (Phase 3). Shapes and the current sign-in failure are recorded in
-`docs/spikes/codex-shapes.md` and `docs/spikes/engine.md` §5.
+Driven by `packages/engine/src/codex/*`. Verified live on 2026-09-06 against the
+**bundled** binary (`corepack pnpm --dir packages/engine live:codex` → `LIVE PASS`:
+a "pong" turn and an accepted command approval). The `@openai/codex-sdk` package
+is a dependency **only** so its vendored binary ships with the app — its own
+`Codex`/`Thread` API is never called (spike §1: no approval callback).
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| binary | `@openai/codex` **0.153.4**, vendored inside `@openai/codex-sdk` 0.153.4 | `codex/binary.ts` `resolveBundledCodex()` | the machine's own install (0.139.0 here) is the fallback and speaks a *different* protocol — the live run on it lost approvals entirely. Order: `binaryPath` → `CAPYGEN_CODEX_BIN` → bundled → `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` → PATH |
+| finding the vendored binary | walk up for `node_modules/@openai/codex-sdk/package.json`, then `@openai/codex` → `@openai/codex-<platform>` → `vendor/<triple>/bin/codex.exe` | same | `@openai/codex-sdk`'s `exports` has **only** an `import` condition, so `require.resolve` throws and `import.meta.resolve` is absent under vitest/esbuild-CJS. A regression test pins this (`test/codexHarness.test.ts` › `resolveCodexBinary`) |
+| `vendor/<triple>/codex-path` prepended to `PATH` | `dist/index.js:470,485-496` | `createStdioTransport` | Codex's search tools lose `rg.exe` |
+| framing | newline-delimited JSON, **no** `"jsonrpc"` member; server ids are their own space starting at 0 | `CodexAppServerClient` | spike §2; the schema bundle has no `jsonrpc` property |
+| `initialize` + `initialized` | `InitializeParams.ts` / `InitializeResponse.ts` | `CodexAppServerClient.start` | handshake; nothing else can be sent first |
+| `thread/start` `{cwd, model, approvalPolicy, sandbox, approvalsReviewer}` | `v2/ThreadStartParams.ts` | `CodexHarness.startThread` | **`approvalsReviewer: "user"` is passed explicitly** — this machine's `~/.codex/config.toml` says `auto_review`, under which capygen would never see an approval card |
+| `thread/resume` `{threadId, …, excludeTurns: true}` | verified 2026-09-05 (spike `appserver-c-resume`) | resume after a restart | without `excludeTurns` the server sends a `deprecationNotice`; a refused resume falls back to `thread/start` + an error block |
+| `turn/start` `{threadId, input: UserInput[], effort?}` → `{turn:{id}}` | `v2/UserInput.ts` | `CodexHarness.dispatch` | answers when the turn is *accepted*, not finished; a `{type:"skill"}` part is how `/skill` reaches the protocol |
+| `turn/interrupt` `{threadId, turnId}` | spike §5 | `chat.interrupt` | the harness still ends the turn after `interruptGraceMs` (5 s) |
+| `thread/compact/start`, `review/start`, `thread/settings/update` | `CODEX_METHODS` in `codex/protocol.ts` | `/compact`, `/review`, `/model` | slash commands are **not** a protocol concept (spike §2): each built-in maps onto one of these, everything else is prompt text |
+| `skills/list` `{cwds:[…]}`, `model/list`, `mcpServerStatus/list` | spike §2 (`appserver-e`) | slash menu (R14), model picker, Settings ▸ MCP (R28) | discovery only — a failure logs and leaves the built-ins, it never fails a turn |
+| notifications: `item/started`, `item/completed`, `item/agentMessage/delta`, `item/reasoning/{textDelta,summaryTextDelta}`, `item/commandExecution/outputDelta`, `item/fileChange/patchUpdated`, `turn/started`, `turn/completed`, `thread/tokenUsage/updated`, `error`, `warning` | `ServerNotification.ts` | `CodexHarness.onNotification` → blocks | an unmapped `item.type` logs and renders nothing; a renamed *notification* silently stops a block kind, which the fixture-replay tests would catch |
+| `turn/completed` is the turn boundary | spike `appserver-c`/`d1` | turn status + usage | a second one per turn would double-count usage |
+| `thread/tokenUsage/updated.tokenUsage.last` is **this turn**, `.total` the thread | `v2/ThreadTokenUsage.ts` | `usage` event (R23) | billing `total` would re-charge the whole thread every turn |
+| cost | **not reported by app-server** — estimated from `codex/pricing.ts`, every entry tagged `[assumed]` | usage meter | an unknown model costs **0**, never a guess |
+| server requests: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` → `{decision}` | `v2/CommandExecutionApprovalDecision.ts` | permission cards (R27/R32) | `allow`→`accept`, `allow`+`scope:session\|always`→`acceptForSession`, `deny`→`decline`; no open turn → `decline` |
+| server request `item/tool/requestUserInput` → `{answers:{[questionId]:{answers:[label]}}}` | `v2/ToolRequestUserInputParams.ts` | question cards (R32) | Codex's AskUserQuestion equivalent; `isOther` becomes the card's `allowOther` |
+| server request `mcpServer/elicitation/request` → `{action, content, _meta}` | `v2/McpServerElicitationRequestParams.ts` | elicitation card (R32) | **declined today**: `EngineEvent` has no elicitation variant, so nothing can carry the answer back. `CodexHarness.answerElicitation` is the seam |
+| server request `currentTime/read` → `{currentTimeAt}` | `ServerRequest.ts` | answered directly | every other server request is refused with `-32601` and Codex applies its own default |
+| MCP App widgets: `mcpToolCall.appContext.resourceUri` (`ui://…`) + `result._meta` kept verbatim | `v2/McpToolCallAppContext.ts`, `v2/McpToolCallResult.ts` | `widget` block (R31) | stripping `_meta` makes the widget unrenderable |
+
+Sign-in: ChatGPT OAuth (`account/read` → `{type:"chatgpt"}`). No API key is read or
+stored by the Codex harness. An `unauthorized` turn error renders "run `codex login`".
 
 ## Internal seams
 

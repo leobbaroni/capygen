@@ -1,0 +1,1065 @@
+{
+ "source": "docs/spikes/codex.raw.json (Phase 1 spike, codex 0.153.4). Server->client frames, verbatim. The recorder redacted token counts, so every tokenUsage number reads \"<redacted>\".",
+ "textTurn": [
+  {
+   "id": 1,
+   "result": {
+    "userAgent": "capygen-spike/0.153.4 (Windows 10.0.19045; x86_64) xterm-256color (capygen-spike; 0.1.0)",
+    "codexHome": "C:\\Users\\TugaPlayz\\.codex",
+    "platformFamily": "windows",
+    "platformOs": "windows"
+   }
+  },
+  {
+   "method": "remoteControl/status/changed",
+   "params": {
+    "status": "disabled",
+    "serverName": "DESKTOP-171NE0N",
+    "installationId": "1019bd23-8186-45c8-927e-c0c9440ed340",
+    "environmentId": null
+   },
+   "emittedAtMs": 1788647909540
+  },
+  {
+   "id": 2,
+   "result": {
+    "thread": {
+     "id": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+     "extra": null,
+     "sessionId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+     "forkedFromId": null,
+     "parentThreadId": null,
+     "preview": "",
+     "ephemeral": false,
+     "section": null,
+     "sectionEnteredAt": null,
+     "projectId": null,
+     "historyMode": "paginated",
+     "modelProvider": "openai",
+     "model": "gpt-5.5",
+     "reasoningEffort": "high",
+     "createdAt": 1788647909,
+     "updatedAt": 1788647909,
+     "recencyAt": 1788647909,
+     "status": {
+      "type": "idle"
+     },
+     "path": "C:\\Users\\TugaPlayz\\.codex\\sessions\\2026\\09\\05\\rollout-2026-09-05T23-38-29-01a073b9-28aa-7b52-9f24-c172f908c3f4.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "cliVersion": "0.153.4",
+     "source": "vscode",
+     "canAcceptDirectInput": true,
+     "threadSource": null,
+     "agentNickname": null,
+     "agentRole": null,
+     "gitInfo": null,
+     "name": null,
+     "turns": []
+    },
+    "model": "gpt-5.5",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+    "runtimeWorkspaceRoots": [
+     "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "never",
+    "approvalsReviewer": "user",
+    "sandbox": {
+     "type": "readOnly",
+     "networkAccess": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly"
+   }
+  },
+  {
+   "method": "thread/started",
+   "params": {
+    "thread": {
+     "id": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+     "extra": null,
+     "sessionId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+     "forkedFromId": null,
+     "parentThreadId": null,
+     "preview": "",
+     "ephemeral": false,
+     "section": null,
+     "sectionEnteredAt": null,
+     "projectId": null,
+     "historyMode": "paginated",
+     "modelProvider": "openai",
+     "model": "gpt-5.5",
+     "reasoningEffort": "high",
+     "createdAt": 1788647909,
+     "updatedAt": 1788647909,
+     "recencyAt": 1788647909,
+     "status": {
+      "type": "idle"
+     },
+     "path": "C:\\Users\\TugaPlayz\\.codex\\sessions\\2026\\09\\05\\rollout-2026-09-05T23-38-29-01a073b9-28aa-7b52-9f24-c172f908c3f4.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "cliVersion": "0.153.4",
+     "source": "vscode",
+     "canAcceptDirectInput": true,
+     "threadSource": null,
+     "agentNickname": null,
+     "agentRole": null,
+     "gitInfo": null,
+     "name": null,
+     "turns": []
+    }
+   },
+   "emittedAtMs": 1788647909744
+  },
+  {
+   "method": "mcpServer/startupStatus/updated",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "name": "codex_apps",
+    "status": "starting",
+    "error": null,
+    "failureReason": null
+   },
+   "emittedAtMs": 1788647909744
+  },
+  {
+   "method": "thread/settings/updated",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "threadSettings": {
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "approvalPolicy": "never",
+     "approvalsReviewer": "user",
+     "sandboxPolicy": {
+      "type": "readOnly",
+      "networkAccess": false
+     },
+     "activePermissionProfile": null,
+     "model": "gpt-5.5",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "effort": "low",
+     "summary": null,
+     "collaborationMode": {
+      "mode": "default",
+      "settings": {
+       "model": "gpt-5.5",
+       "reasoning_effort": "low",
+       "developer_instructions": null
+      }
+     },
+     "multiAgentMode": "explicitRequestOnly",
+     "personality": "pragmatic"
+    }
+   },
+   "emittedAtMs": 1788647909753
+  },
+  {
+   "id": 3,
+   "result": {
+    "turn": {
+     "id": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+     "items": [],
+     "itemsView": "notLoaded",
+     "status": "inProgress",
+     "error": null,
+     "startedAt": null,
+     "completedAt": null,
+     "durationMs": null
+    }
+   }
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "status": {
+     "type": "active",
+     "activeFlags": []
+    }
+   },
+   "emittedAtMs": 1788647909864
+  },
+  {
+   "method": "turn/started",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turn": {
+     "id": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+     "items": [],
+     "itemsView": "notLoaded",
+     "status": "inProgress",
+     "error": null,
+     "startedAt": 1788647909,
+     "completedAt": null,
+     "durationMs": null
+    }
+   },
+   "emittedAtMs": 1788647909864
+  },
+  {
+   "method": "mcpServer/startupStatus/updated",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "name": "codex_apps",
+    "status": "ready",
+    "error": null,
+    "failureReason": null
+   },
+   "emittedAtMs": 1788647910341
+  },
+  {
+   "method": "item/started",
+   "params": {
+    "item": {
+     "type": "userMessage",
+     "id": "01a073b9-2fe4-7031-bf7c-a4a338af440e",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "Reply with exactly the word pong.",
+       "text_elements": []
+      }
+     ]
+    },
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "startedAtMs": 1788647911396
+   },
+   "emittedAtMs": 1788647911396
+  },
+  {
+   "method": "item/completed",
+   "params": {
+    "item": {
+     "type": "userMessage",
+     "id": "01a073b9-2fe4-7031-bf7c-a4a338af440e",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "Reply with exactly the word pong.",
+       "text_elements": []
+      }
+     ]
+    },
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "completedAtMs": 1788647911396
+   },
+   "emittedAtMs": 1788647911404
+  },
+  {
+   "method": "item/started",
+   "params": {
+    "item": {
+     "type": "agentMessage",
+     "id": "msg_08490416e3883f0b016a9c99e8a68087d2a6566dda73fe5efb",
+     "text": "",
+     "phase": "final_answer",
+     "memoryCitation": null,
+     "delivery": null,
+     "questions": null
+    },
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "startedAtMs": 1788647912436
+   },
+   "emittedAtMs": 1788647912436
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "itemId": "msg_08490416e3883f0b016a9c99e8a68087d2a6566dda73fe5efb",
+    "delta": "pong"
+   },
+   "emittedAtMs": 1788647912458
+  },
+  {
+   "method": "item/completed",
+   "params": {
+    "item": {
+     "type": "agentMessage",
+     "id": "msg_08490416e3883f0b016a9c99e8a68087d2a6566dda73fe5efb",
+     "text": "pong",
+     "phase": "final_answer",
+     "memoryCitation": null,
+     "delivery": null,
+     "questions": null
+    },
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "completedAtMs": 1788647912538
+   },
+   "emittedAtMs": 1788647912546
+  },
+  {
+   "method": "thread/tokenUsage/updated",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turnId": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+    "tokenUsage": {
+     "total": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "last": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "modelContextWindow": 258400
+    }
+   },
+   "emittedAtMs": 1788647912580
+  },
+  {
+   "method": "account/rateLimits/updated",
+   "params": {
+    "rateLimits": {
+     "limitId": "codex",
+     "limitName": null,
+     "primary": {
+      "usedPercent": 3,
+      "windowDurationMins": 43200,
+      "resetsAt": 1791201798
+     },
+     "secondary": null,
+     "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": null
+     },
+     "individualLimit": null,
+     "spendControlReached": null,
+     "planType": "free",
+     "rateLimitReachedType": null
+    }
+   },
+   "emittedAtMs": 1788647912580
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "status": {
+     "type": "idle"
+    }
+   },
+   "emittedAtMs": 1788647912588
+  },
+  {
+   "method": "turn/completed",
+   "params": {
+    "threadId": "01a073b9-28aa-7b52-9f24-c172f908c3f4",
+    "turn": {
+     "id": "01a073b9-2972-7463-8c43-4c04d247f1c3",
+     "items": [
+      {
+       "type": "agentMessage",
+       "id": "msg_08490416e3883f0b016a9c99e8a68087d2a6566dda73fe5efb",
+       "text": "pong",
+       "phase": "final_answer",
+       "memoryCitation": null,
+       "delivery": null,
+       "questions": null
+      }
+     ],
+     "itemsView": "summary",
+     "status": "completed",
+     "error": null,
+     "startedAt": 1788647909,
+     "completedAt": 1788647912,
+     "durationMs": 2828
+    }
+   },
+   "emittedAtMs": 1788647912588
+  }
+ ],
+ "approvalTurn": [
+  {
+   "id": 1,
+   "result": {
+    "userAgent": "capygen-spike/0.153.4 (Windows 10.0.19045; x86_64) xterm-256color (capygen-spike; 0.1.0)",
+    "codexHome": "C:\\Users\\TugaPlayz\\.codex",
+    "platformFamily": "windows",
+    "platformOs": "windows"
+   }
+  },
+  {
+   "method": "remoteControl/status/changed",
+   "params": {
+    "status": "disabled",
+    "serverName": "DESKTOP-171NE0N",
+    "installationId": "1019bd23-8186-45c8-927e-c0c9440ed340",
+    "environmentId": null
+   },
+   "emittedAtMs": 1788647913018
+  },
+  {
+   "id": 2,
+   "result": {
+    "thread": {
+     "id": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+     "extra": null,
+     "sessionId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+     "forkedFromId": null,
+     "parentThreadId": null,
+     "preview": "",
+     "ephemeral": false,
+     "section": null,
+     "sectionEnteredAt": null,
+     "projectId": null,
+     "historyMode": "paginated",
+     "modelProvider": "openai",
+     "model": "gpt-5.5",
+     "reasoningEffort": "high",
+     "createdAt": 1788647913,
+     "updatedAt": 1788647913,
+     "recencyAt": 1788647913,
+     "status": {
+      "type": "idle"
+     },
+     "path": "C:\\Users\\TugaPlayz\\.codex\\sessions\\2026\\09\\05\\rollout-2026-09-05T23-38-33-01a073b9-3640-7533-b198-5d9fcb1fe43c.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "cliVersion": "0.153.4",
+     "source": "vscode",
+     "canAcceptDirectInput": true,
+     "threadSource": null,
+     "agentNickname": null,
+     "agentRole": null,
+     "gitInfo": null,
+     "name": null,
+     "turns": []
+    },
+    "model": "gpt-5.5",
+    "modelProvider": "openai",
+    "serviceTier": null,
+    "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+    "runtimeWorkspaceRoots": [
+     "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "untrusted",
+    "approvalsReviewer": "user",
+    "sandbox": {
+     "type": "workspaceWrite",
+     "writableRoots": [],
+     "networkAccess": false,
+     "excludeTmpdirEnvVar": false,
+     "excludeSlashTmp": false
+    },
+    "activePermissionProfile": null,
+    "reasoningEffort": "high",
+    "multiAgentMode": "explicitRequestOnly"
+   }
+  },
+  {
+   "method": "thread/started",
+   "params": {
+    "thread": {
+     "id": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+     "extra": null,
+     "sessionId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+     "forkedFromId": null,
+     "parentThreadId": null,
+     "preview": "",
+     "ephemeral": false,
+     "section": null,
+     "sectionEnteredAt": null,
+     "projectId": null,
+     "historyMode": "paginated",
+     "modelProvider": "openai",
+     "model": "gpt-5.5",
+     "reasoningEffort": "high",
+     "createdAt": 1788647913,
+     "updatedAt": 1788647913,
+     "recencyAt": 1788647913,
+     "status": {
+      "type": "idle"
+     },
+     "path": "C:\\Users\\TugaPlayz\\.codex\\sessions\\2026\\09\\05\\rollout-2026-09-05T23-38-33-01a073b9-3640-7533-b198-5d9fcb1fe43c.jsonl",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "cliVersion": "0.153.4",
+     "source": "vscode",
+     "canAcceptDirectInput": true,
+     "threadSource": null,
+     "agentNickname": null,
+     "agentRole": null,
+     "gitInfo": null,
+     "name": null,
+     "turns": []
+    }
+   },
+   "emittedAtMs": 1788647913220
+  },
+  {
+   "method": "mcpServer/startupStatus/updated",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "name": "codex_apps",
+    "status": "starting",
+    "error": null,
+    "failureReason": null
+   },
+   "emittedAtMs": 1788647913220
+  },
+  {
+   "method": "thread/settings/updated",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "threadSettings": {
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandboxPolicy": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+     },
+     "activePermissionProfile": null,
+     "model": "gpt-5.5",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "effort": "low",
+     "summary": null,
+     "collaborationMode": {
+      "mode": "default",
+      "settings": {
+       "model": "gpt-5.5",
+       "reasoning_effort": "low",
+       "developer_instructions": null
+      }
+     },
+     "multiAgentMode": "explicitRequestOnly",
+     "personality": "pragmatic"
+    }
+   },
+   "emittedAtMs": 1788647913229
+  },
+  {
+   "id": 3,
+   "result": {
+    "turn": {
+     "id": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+     "items": [],
+     "itemsView": "notLoaded",
+     "status": "inProgress",
+     "error": null,
+     "startedAt": null,
+     "completedAt": null,
+     "durationMs": null
+    }
+   }
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "status": {
+     "type": "active",
+     "activeFlags": []
+    }
+   },
+   "emittedAtMs": 1788647913331
+  },
+  {
+   "method": "turn/started",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turn": {
+     "id": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+     "items": [],
+     "itemsView": "notLoaded",
+     "status": "inProgress",
+     "error": null,
+     "startedAt": 1788647913,
+     "completedAt": null,
+     "durationMs": null
+    }
+   },
+   "emittedAtMs": 1788647913331
+  },
+  {
+   "method": "mcpServer/startupStatus/updated",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "name": "codex_apps",
+    "status": "ready",
+    "error": null,
+    "failureReason": null
+   },
+   "emittedAtMs": 1788647913693
+  },
+  {
+   "method": "item/started",
+   "params": {
+    "item": {
+     "type": "userMessage",
+     "id": "01a073b9-3cf8-76c0-8d88-d1d6df6f0b4f",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "Run the shell command `echo capy` and tell me its output.",
+       "text_elements": []
+      }
+     ]
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "startedAtMs": 1788647914744
+   },
+   "emittedAtMs": 1788647914744
+  },
+  {
+   "method": "item/completed",
+   "params": {
+    "item": {
+     "type": "userMessage",
+     "id": "01a073b9-3cf8-76c0-8d88-d1d6df6f0b4f",
+     "clientId": null,
+     "content": [
+      {
+       "type": "text",
+       "text": "Run the shell command `echo capy` and tell me its output.",
+       "text_elements": []
+      }
+     ]
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "completedAtMs": 1788647914744
+   },
+   "emittedAtMs": 1788647914752
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "status": {
+     "type": "active",
+     "activeFlags": [
+      "waitingOnApproval"
+     ]
+    }
+   },
+   "emittedAtMs": 1788647916950
+  },
+  {
+   "method": "item/started",
+   "params": {
+    "item": {
+     "type": "commandExecution",
+     "id": "call_rNFRg4MofTIznmywLYanhsBK",
+     "pluginId": null,
+     "scriptPath": null,
+     "command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'echo capy'",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "processId": null,
+     "source": "agent",
+     "status": "inProgress",
+     "commandActions": [
+      {
+       "type": "unknown",
+       "command": "echo capy"
+      }
+     ],
+     "aggregatedOutput": null,
+     "exitCode": null,
+     "durationMs": null
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "startedAtMs": 1788647916951
+   },
+   "emittedAtMs": 1788647916951
+  },
+  {
+   "method": "item/commandExecution/requestApproval",
+   "id": 0,
+   "params": {
+    "kind": "command",
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "call_rNFRg4MofTIznmywLYanhsBK",
+    "startedAtMs": 1788647916950,
+    "environmentId": "local",
+    "command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'echo capy'",
+    "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+    "commandActions": [
+     {
+      "type": "unknown",
+      "command": "echo capy"
+     }
+    ],
+    "proposedExecpolicyAmendment": [
+     "echo",
+     "capy"
+    ],
+    "availableDecisions": [
+     "accept",
+     {
+      "acceptWithExecpolicyAmendment": {
+       "execpolicy_amendment": [
+        "echo",
+        "capy"
+       ]
+      }
+     },
+     "cancel"
+    ]
+   }
+  },
+  {
+   "method": "serverRequest/resolved",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "requestId": 0
+   },
+   "emittedAtMs": 1788647916952
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "status": {
+     "type": "active",
+     "activeFlags": []
+    }
+   },
+   "emittedAtMs": 1788647916952
+  },
+  {
+   "method": "item/commandExecution/outputDelta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "call_rNFRg4MofTIznmywLYanhsBK",
+    "delta": "capy"
+   },
+   "emittedAtMs": 1788647953771
+  },
+  {
+   "method": "item/commandExecution/outputDelta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "call_rNFRg4MofTIznmywLYanhsBK",
+    "delta": "\r\n"
+   },
+   "emittedAtMs": 1788647953771
+  },
+  {
+   "method": "item/completed",
+   "params": {
+    "item": {
+     "type": "commandExecution",
+     "id": "call_rNFRg4MofTIznmywLYanhsBK",
+     "pluginId": null,
+     "scriptPath": null,
+     "command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'echo capy'",
+     "cwd": "C:\\Users\\TugaPlayz\\Desktop\\GITHUB\\capygen",
+     "processId": "37733",
+     "source": "unifiedExecStartup",
+     "status": "completed",
+     "commandActions": [
+      {
+       "type": "unknown",
+       "command": "echo capy"
+      }
+     ],
+     "aggregatedOutput": "capy\r\n",
+     "exitCode": 0,
+     "durationMs": 905
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "completedAtMs": 1788647953816
+   },
+   "emittedAtMs": 1788647953826
+  },
+  {
+   "method": "thread/tokenUsage/updated",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "tokenUsage": {
+     "total": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "last": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "modelContextWindow": 258400
+    }
+   },
+   "emittedAtMs": 1788647953843
+  },
+  {
+   "method": "account/rateLimits/updated",
+   "params": {
+    "rateLimits": {
+     "limitId": "codex",
+     "limitName": null,
+     "primary": {
+      "usedPercent": 3,
+      "windowDurationMins": 43200,
+      "resetsAt": 1791201798
+     },
+     "secondary": null,
+     "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": null
+     },
+     "individualLimit": null,
+     "spendControlReached": null,
+     "planType": "free",
+     "rateLimitReachedType": null
+    }
+   },
+   "emittedAtMs": 1788647953843
+  },
+  {
+   "method": "item/started",
+   "params": {
+    "item": {
+     "type": "agentMessage",
+     "id": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+     "text": "",
+     "phase": "final_answer",
+     "memoryCitation": null,
+     "delivery": null,
+     "questions": null
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "startedAtMs": 1788647954757
+   },
+   "emittedAtMs": 1788647954757
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "Output"
+   },
+   "emittedAtMs": 1788647954776
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": ":\n\n"
+   },
+   "emittedAtMs": 1788647954794
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "```"
+   },
+   "emittedAtMs": 1788647954813
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "text"
+   },
+   "emittedAtMs": 1788647954834
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "\n"
+   },
+   "emittedAtMs": 1788647954852
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "cap"
+   },
+   "emittedAtMs": 1788647954871
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "y"
+   },
+   "emittedAtMs": 1788647954891
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "\n"
+   },
+   "emittedAtMs": 1788647954894
+  },
+  {
+   "method": "item/agentMessage/delta",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "itemId": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+    "delta": "```"
+   },
+   "emittedAtMs": 1788647954911
+  },
+  {
+   "method": "item/completed",
+   "params": {
+    "item": {
+     "type": "agentMessage",
+     "id": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+     "text": "Output:\n\n```text\ncapy\n```",
+     "phase": "final_answer",
+     "memoryCitation": null,
+     "delivery": null,
+     "questions": null
+    },
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "completedAtMs": 1788647954996
+   },
+   "emittedAtMs": 1788647955004
+  },
+  {
+   "method": "thread/tokenUsage/updated",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turnId": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+    "tokenUsage": {
+     "total": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "last": {
+      "totalTokens": "<redacted>",
+      "inputTokens": "<redacted>",
+      "cachedInputTokens": "<redacted>",
+      "cacheWriteInputTokens": "<redacted>",
+      "outputTokens": "<redacted>",
+      "reasoningOutputTokens": "<redacted>"
+     },
+     "modelContextWindow": 258400
+    }
+   },
+   "emittedAtMs": 1788647955038
+  },
+  {
+   "method": "account/rateLimits/updated",
+   "params": {
+    "rateLimits": {
+     "limitId": "codex",
+     "limitName": null,
+     "primary": {
+      "usedPercent": 4,
+      "windowDurationMins": 43200,
+      "resetsAt": 1791201798
+     },
+     "secondary": null,
+     "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": null
+     },
+     "individualLimit": null,
+     "spendControlReached": null,
+     "planType": "free",
+     "rateLimitReachedType": null
+    }
+   },
+   "emittedAtMs": 1788647955038
+  },
+  {
+   "method": "thread/status/changed",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "status": {
+     "type": "idle"
+    }
+   },
+   "emittedAtMs": 1788647955046
+  },
+  {
+   "method": "turn/completed",
+   "params": {
+    "threadId": "01a073b9-3640-7533-b198-5d9fcb1fe43c",
+    "turn": {
+     "id": "01a073b9-3705-75f1-8e45-e1c8d11ac0a0",
+     "items": [
+      {
+       "type": "agentMessage",
+       "id": "msg_04f9a8fc73fd876d016a9c9a12f8b087d2b8e0e42c1ab117d7",
+       "text": "Output:\n\n```text\ncapy\n```",
+       "phase": "final_answer",
+       "memoryCitation": null,
+       "delivery": null,
+       "questions": null
+      }
+     ],
+     "itemsView": "summary",
+     "status": "completed",
+     "error": null,
+     "startedAt": 1788647913,
+     "completedAt": 1788647955,
+     "durationMs": 41809
+    }
+   },
+   "emittedAtMs": 1788647955046
+  }
+ ]
+}

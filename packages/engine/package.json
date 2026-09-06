@@ -11,6 +11,7 @@
   "scripts": {
     "spike": "tsx scripts/spike-engine.ts",
     "live:claude": "tsx scripts/live-claude.ts",
+    "live:codex": "tsx scripts/live-codex.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
