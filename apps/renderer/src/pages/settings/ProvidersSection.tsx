@@ -18,7 +18,21 @@ const PROVIDERS: { id: ApiProvider; label: string; hint: string }[] = [
   { id: "openrouter", label: "OpenRouter", hint: "Any OpenRouter-hosted model" },
 ];
 
-type HasState = "loading" | boolean;
+/**
+ * `stored` is a key in safeStorage; `environment` is the documented env var
+ * (`ANTHROPIC_API_KEY` & co.), which `harness.list` counts as a key too. The
+ * page used to probe only the store, so an env-supplied key rendered as
+ * "Not set" here while the composer's picker happily offered that provider's
+ * models — two surfaces disagreeing about the same fact.
+ */
+type KeySource = "stored" | "environment" | "none";
+type HasState = "loading" | KeySource;
+
+const ENV_VAR: Record<ApiProvider, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+};
 
 export function ProvidersSection() {
   const [has, setHas] = useState<Record<ApiProvider, HasState>>({
@@ -36,9 +50,9 @@ export function ProvidersSection() {
         // as "no key stored" rather than leaving the row spinning forever.
         try {
           const result = await ipc().invoke("secrets.has", { provider: id });
-          return [id, result.has] as const;
+          return [id, result.source] as const;
         } catch {
-          return [id, false] as const;
+          return [id, "none"] as const;
         }
       }),
     ).then((entries) => {
@@ -52,7 +66,7 @@ export function ProvidersSection() {
 
   async function refresh(provider: ApiProvider): Promise<void> {
     const result = await ipc().invoke("secrets.has", { provider });
-    setHas((prev) => ({ ...prev, [provider]: result.has }));
+    setHas((prev) => ({ ...prev, [provider]: result.source }));
   }
 
   return (
@@ -127,7 +141,7 @@ function ProviderRow({
           <p className="text-sm font-medium text-foreground">{label}</p>
           <p className="text-xs text-muted-foreground">{hint}</p>
         </div>
-        <StatusBadge state={state} />
+        <StatusBadge state={state} envVar={ENV_VAR[id]} />
       </div>
 
       {editing ? (
@@ -177,9 +191,9 @@ function ProviderRow({
             data-testid={`provider-${id}-set`}
             onClick={() => setEditing(true)}
           >
-            {state === true ? "Replace key" : "Set key"}
+            {state === "stored" ? "Replace key" : "Set key"}
           </Button>
-          {state === true ? (
+          {state === "stored" ? (
             <Button
               size="sm"
               variant="outline"
@@ -201,11 +215,23 @@ function ProviderRow({
   );
 }
 
-function StatusBadge({ state }: { state: HasState }) {
+function StatusBadge({ state, envVar }: { state: HasState; envVar: string }) {
   if (state === "loading") {
     return <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />;
   }
-  return state ? (
+  if (state === "environment") {
+    return (
+      <span
+        data-testid="provider-status-env"
+        className="flex shrink-0 items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs text-info"
+        title="capygen reads this key from the environment; setting one here overrides it."
+      >
+        <CheckCircle2Icon className="size-3" />
+        From {envVar}
+      </span>
+    );
+  }
+  return state === "stored" ? (
     <span
       data-testid="provider-status-set"
       className="flex shrink-0 items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs text-success"

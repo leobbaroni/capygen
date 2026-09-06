@@ -123,9 +123,18 @@ describe("the Anthropic request body (SPEC R24)", () => {
       },
     ]) as { role: string; content: Record<string, unknown>[] }[];
 
+    // The last block of each of the final two messages carries the R24 cache
+    // breakpoint (see `markMessageCacheBreakpoints`), which is why the last
+    // entry of each list has `cache_control` and the ones before it do not.
     expect(mapped[0]?.content).toEqual([
       { type: "thinking", thinking: "signed", signature: "sig" },
-      { type: "tool_use", id: "toolu_1", name: "bash", input: { command: "ls" } },
+      {
+        type: "tool_use",
+        id: "toolu_1",
+        name: "bash",
+        input: { command: "ls" },
+        cache_control: { type: "ephemeral" },
+      },
     ]);
     expect(mapped[1]?.content[0]).toEqual({
       type: "tool_result",
@@ -133,6 +142,19 @@ describe("the Anthropic request body (SPEC R24)", () => {
       content: "ok",
     });
     expect(mapped[1]?.content[1]?.is_error).toBe(true);
+    expect(mapped[1]?.content[1]?.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  it("puts a cache breakpoint on the last block of the final two messages only (R24)", () => {
+    const mapped = anthropicMessages([
+      { role: "user", content: [{ type: "text", text: "one" }] },
+      { role: "assistant", content: [{ type: "text", text: "two" }] },
+      { role: "user", content: [{ type: "text", text: "three" }] },
+    ]) as { content: Record<string, unknown>[] }[];
+
+    expect(mapped[0]?.content[0]?.cache_control).toBeUndefined();
+    expect(mapped[1]?.content[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(mapped[2]?.content[0]?.cache_control).toEqual({ type: "ephemeral" });
   });
 });
 

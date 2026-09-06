@@ -10,7 +10,7 @@
  */
 import type { CapygenStore } from "@capygen/db";
 import {
-  BUILTIN_SLASH_COMMANDS,
+  builtinSlashCommandsFor,
   type ApiProvider,
   type Block,
   type InvokeArgs,
@@ -20,6 +20,8 @@ import {
   type SlashCommand,
 } from "@capygen/shared";
 import { createSessionRunner } from "../engine/SessionRunner.js";
+import { API_ENV_KEYS } from "./harnessList.js";
+import type { McpPoolRegistry } from "./mcpPools.js";
 import type { WidgetHostHandlers } from "./widgets.js";
 import { emitBlock as persistBlock, textBlock } from "../engine/persist.js";
 import type {
@@ -92,6 +94,10 @@ export interface IpcContextDeps {
    * the three widget channels refuse loudly instead of pretending.
    */
   widgets?: WidgetHostHandlers;
+  /** Shared MCP client pools (R26); see `EngineDeps.pools`. */
+  pools?: McpPoolRegistry;
+  /** Overridden in tests; `secrets.has` reads the documented API-key env vars. */
+  env?: Record<string, string | undefined>;
 }
 
 export type IpcHandlers = {
@@ -113,6 +119,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     broadcast,
     log,
     ...(deps.widgets ? { widgets: deps.widgets } : {}),
+    ...(deps.pools ? { pools: deps.pools } : {}),
     // R21: the engine never reads a key from disk. This is the only bridge
     // between the stored ciphertext and an `api` harness, and it hands over a
     // value the renderer can never ask for (`secrets.has` returns a boolean).
@@ -274,13 +281,22 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Built-ins first, then whatever the session's backend reported in its own
-     * listing — for Claude that is `system/init.slash_commands`, which already
-     * contains the user's skills and every plugin command (R14). A backend name
-     * that collides with a built-in is dropped rather than duplicated.
+     * The built-ins **this backend can actually run**, then whatever the
+     * session's backend reported in its own listing — for Claude that is
+     * `system/init.slash_commands`, which already contains the user's skills
+     * and every plugin command (R14). A backend name that collides with a
+     * built-in is dropped rather than duplicated.
+     *
+     * The filter is not cosmetic. The whole seven-command list used to be
+     * offered to every session, and an argument-less command fires straight
+     * from the menu — so picking `/cost` in a Codex or `api` session posted the
+     * literal text "/cost" to the model and spent a real turn on it. The table
+     * lives in `@capygen/shared` (`BACKEND_BUILTIN_SLASH_COMMANDS`) next to the
+     * list itself, so a new built-in has to answer for all three backends.
      */
     "chat.listCommands": (args): SlashCommand[] => {
-      const commands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((c) => ({
+      const backend = args.sessionId ? backendOf(store, args.sessionId, args.agentId) : null;
+      const commands: SlashCommand[] = builtinSlashCommandsFor(backend).map((c) => ({
         name: c.name,
         description: c.description,
         source: "builtin" as const,
@@ -340,12 +356,24 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return { ok: true };
     },
 
+    /**
+     * An **empty** answer map is the card's Decline button, not a submission:
+     * the row is recorded as `cancelled` with `answers: null` so nothing ever
+     * renders a green "Submitted" with nothing in it (R32), and the harness
+     * denies the tool rather than handing the model a blank answer.
+     */
     "question.answer": (args) => {
+      const declined = Object.keys(args.answers).length === 0;
       const delivered = engine.answerQuestion(args.requestId, args.answers);
       if (!delivered) return { ok: false };
       const block = findBlockByRequestId(store, args.requestId, "question");
       if (!block || block.kind !== "question") return { ok: true };
-      emitBlock({ ...block, answers: args.answers, updatedAt: Date.now() });
+      emitBlock({
+        ...block,
+        answers: declined ? null : args.answers,
+        status: declined ? "cancelled" : "answered",
+        updatedAt: Date.now(),
+      });
       return { ok: true };
     },
 
@@ -416,7 +444,18 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       await secrets.set(args.provider, args.value);
       return { ok: true };
     },
-    "secrets.has": async (args) => ({ has: await secrets.has(args.provider) }),
+    /**
+     * `source` matters to the page: `harness.list` counts the documented env
+     * var as a key too, so reporting a bare `has: false` for an env-supplied
+     * key made Settings ▸ API keys say "Not set" while the composer happily
+     * offered that provider's models.
+     */
+    "secrets.has": async (args) => {
+      if (await secrets.has(args.provider)) return { has: true, source: "stored" as const };
+      const env = deps.env ?? process.env;
+      if (env[API_ENV_KEYS[args.provider]]) return { has: true, source: "environment" as const };
+      return { has: false, source: "none" as const };
+    },
     "secrets.delete": async (args) => {
       await secrets.delete(args.provider);
       return { ok: true };
@@ -465,6 +504,24 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     engine,
     dispose: () => engine.dispose(),
   };
+}
+
+/**
+ * The backend of the agent a message would reach — the one named, else the
+ * session's lead. Read from the row rather than from a live harness on
+ * purpose: the slash menu is fetched when a session opens, which is before any
+ * harness exists.
+ */
+function backendOf(
+  store: CapygenStore,
+  sessionId: string,
+  agentId?: string | null,
+): string | null {
+  const session = store.sessions.get(sessionId);
+  if (!session) return null;
+  const wanted = agentId ?? session.leadAgentId;
+  if (!wanted) return null;
+  return store.sessions.agent(wanted)?.backend ?? null;
 }
 
 /**

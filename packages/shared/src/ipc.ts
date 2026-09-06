@@ -206,9 +206,18 @@ export const INVOKE_CHANNELS = {
     z.object({ provider: ApiProviderSchema, value: z.string().min(1) }),
     OkSchema,
   ),
+  /**
+   * `source` says *where* the key came from, because "not set" was misleading:
+   * the harness list treats `ANTHROPIC_API_KEY` & co. as a key too, so the
+   * composer offered API models while Settings ▸ API keys said "Not set".
+   * `stored` = the safeStorage file, `environment` = the documented env var.
+   */
   "secrets.has": channel(
     z.object({ provider: ApiProviderSchema }),
-    z.object({ has: z.boolean() }),
+    z.object({
+      has: z.boolean(),
+      source: z.enum(["stored", "environment", "none"]).default("none"),
+    }),
   ),
   "secrets.delete": channel(z.object({ provider: ApiProviderSchema }), OkSchema),
 

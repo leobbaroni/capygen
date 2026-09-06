@@ -24,9 +24,38 @@ import {
   type ToolResult,
 } from "./types.js";
 
-/** Relative paths resolve against the session's project directory, never `process.cwd()`. */
+/**
+ * Resolve a model-supplied path **inside the session's project directory**.
+ *
+ * Relative paths resolve against the project directory, never `process.cwd()`,
+ * and an absolute path or a `..` walk that lands outside it is refused rather
+ * than followed (SPEC R27). It used to be followed: `read_file` would happily
+ * take `C:\Users\<user>\.ssh\id_rsa`, and `read` is an `allow` class in every
+ * permission mode — plan mode included — so a model steered by an untrusted
+ * tool result or a project file had unprompted read access to the whole disk.
+ *
+ * Reads stay ungated inside the project (an agent that must ask before reading
+ * a file it was pointed at is unusable, and Claude Code's plan mode reads too);
+ * the boundary is what makes that safe.
+ */
 export function resolvePath(cwd: string, target: string): string {
-  return path.isAbsolute(target) ? path.normalize(target) : path.resolve(cwd, target);
+  const resolved = path.isAbsolute(target)
+    ? path.normalize(target)
+    : path.resolve(cwd, target);
+  const root = path.resolve(cwd);
+  const relative = path.relative(root, resolved);
+  // `path.relative` returns an absolute path when the two are on different
+  // Windows drives, and a leading `..` when the target escapes upwards.
+  const outside =
+    relative !== "" &&
+    (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`));
+  if (outside) {
+    throw new ToolInputError(
+      `${resolved} is outside the project directory (${root}). ` +
+        "This runtime only reads and writes inside the project.",
+    );
+  }
+  return resolved;
 }
 
 /** `cat -n`-style numbering — the format every one of these models has seen. */

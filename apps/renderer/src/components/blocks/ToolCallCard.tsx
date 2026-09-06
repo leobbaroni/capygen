@@ -339,10 +339,14 @@ function CodePanel({
             onClick={toggle}
             className="normal-case text-info hover:underline"
           >
-            {expanded
-              ? "Show less"
-              : fetching
-                ? "Loading…"
+            {/* `fetching` first: the click that expands also starts the
+                fetch, so testing `expanded` first printed "Show less" over a
+                body that still showed the truncated text — a control that
+                read as broken until the round trip landed. */}
+            {fetching
+              ? "Loading…"
+              : expanded
+                ? "Show less"
                 : fullText !== undefined
                   ? `Show all ${fullText.length} characters`
                   : "Show full output"}
@@ -351,6 +355,9 @@ function CodePanel({
       </div>
       <pre className="max-h-80 overflow-auto rounded-md bg-code-bg px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-foreground">
         {shown || "(empty)"}
+        {expanded && fullText === undefined ? (
+          <span className="block pt-1 text-muted-foreground">… loading the rest</span>
+        ) : null}
       </pre>
     </div>
   );

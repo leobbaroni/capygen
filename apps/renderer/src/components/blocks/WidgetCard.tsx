@@ -40,7 +40,9 @@ export function WidgetCard({ block }: { block: WidgetBlock }) {
       data-tool={block.toolName}
       className="flex flex-col gap-2 rounded-lg border border-border bg-card/40 p-2"
     >
-      <Collapsible>
+      {/* `group` is what `group-data-[state=open]:rotate-90` on the chevron
+          below needs; without it the arrow never turned. */}
+      <Collapsible className="group">
         <CollapsibleTrigger
           data-testid="widget-header"
           className="flex w-full items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground"

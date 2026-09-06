@@ -93,6 +93,12 @@ export interface HarnessLogger {
 
 const NO_LOG: HarnessLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
+/** A pool borrowed from a shared registry; `release` is the harness giving it back. */
+export interface AcquiredPool {
+  pool: McpClientPool;
+  release: () => Promise<void> | void;
+}
+
 export const DEFAULT_MAX_TOOL_OUTPUT_CHARS = 64 * 1024;
 export const DEFAULT_MAX_TOKENS = 8_192;
 /**
@@ -122,6 +128,15 @@ export interface ApiHarnessDeps {
   mcpServers?: readonly McpServerConfig[];
   /** Test seam: a pool with a fake SDK. */
   mcpPool?: McpClientPool;
+  /**
+   * Hand back a pool for these servers instead of building one, and take it
+   * back on `dispose()`. The desktop passes a refcounted registry that the MCP
+   * Apps widget host uses too (`apps/desktop/src/ipc/mcpPools.ts`): without it
+   * an `api` session with a widget-capable server spawned that server twice
+   * and listed its tools twice — once for the agent's tool loop, once for
+   * widget resolution — which is precisely the duplication R26 exists to stop.
+   */
+  acquirePool?: (servers: readonly McpServerConfig[]) => Promise<AcquiredPool> | AcquiredPool;
   /** Set false to run with the built-in tools only. */
   useMcp?: boolean;
   tools?: BuiltinToolDeps;
@@ -171,6 +186,8 @@ export class ApiHarness implements Harness {
 
   private provider: Provider | null = null;
   private pool: McpClientPool | null = null;
+  /** Set when `pool` came from `deps.acquirePool` and must be given back. */
+  private borrowedPool: AcquiredPool | null = null;
   private tools: ToolDefinition[] | null = null;
   private toolSchemas: ToolSchema[] = [];
 
@@ -688,8 +705,13 @@ export class ApiHarness implements Harness {
       this.settle(turn, "interrupted");
     }
     const pool = this.pool;
+    const borrowed = this.borrowedPool;
     this.pool = null;
-    await pool?.close();
+    this.borrowedPool = null;
+    // A borrowed pool is the registry's to close, not ours: the widget host may
+    // still be serving a widget from the same connection.
+    if (borrowed) await borrowed.release();
+    else await pool?.close();
   }
 
   private releasePending(reason: string): void {
@@ -767,6 +789,12 @@ export class ApiHarness implements Harness {
         log: this.log,
       }));
     if (servers.length === 0) return null;
+    if (this.deps.acquirePool) {
+      const borrowed = await this.deps.acquirePool(servers);
+      this.borrowedPool = borrowed;
+      this.pool = borrowed.pool;
+      return this.pool;
+    }
     this.pool = new McpClientPool({
       servers,
       log: this.log as McpPoolLogger,

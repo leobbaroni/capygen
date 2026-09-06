@@ -186,9 +186,25 @@ interface ActiveTurn {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
-type PendingPermission = { kind: "permission"; resolve: (a: PermissionAnswer) => void };
-type PendingQuestion = { kind: "question"; resolve: (a: Record<string, string>) => void };
-type PendingElicitation = {
+/**
+ * Everything an outstanding server request needs to be *cancelled* rather than
+ * merely dropped: the block key so the card can be told the request died, a
+ * `cancelPatch` that writes that terminal state, and the resolver that lets the
+ * app-server's own JSON-RPC request finally get an answer. Before this, a turn
+ * that completed with an approval still open left the promise unresolved
+ * forever — the card stayed pending, `SessionRunner` forgot the request id, and
+ * codex app-server waited on a reply that could no longer come.
+ */
+type PendingBase = { key: string; cancelPatch: (why: string) => BlockPatch };
+type PendingPermission = PendingBase & {
+  kind: "permission";
+  resolve: (a: PermissionAnswer) => void;
+};
+type PendingQuestion = PendingBase & {
+  kind: "question";
+  resolve: (a: Record<string, string>) => void;
+};
+type PendingElicitation = PendingBase & {
   kind: "elicitation";
   resolve: (a: Record<string, unknown> | null) => void;
 };
@@ -610,10 +626,7 @@ export class CodexHarness implements Harness {
       return;
     }
     this.log.error(`[codex] ${message}`);
-    for (const [requestId, entry] of [...this.pending]) {
-      this.pending.delete(requestId);
-      resolvePending(entry, "the backend exited");
-    }
+    this.cancelPending("the backend exited");
     if (turn && !turn.settled) {
       if (turn.interrupted) {
         this.settle(turn, "interrupted");
@@ -982,7 +995,13 @@ export class CodexHarness implements Harness {
       suggestions: [],
     };
     const key = `permission:${params.approvalId ?? params.itemId}`;
-    const answer = await this.askPermission(key, requestId, request);
+    // R32: the card renders a command + cwd view, not the transport JSON — but
+    // it needs a header to do it with. Codex names neither, so the harness does
+    // (the reference's ApprovalCard calls this one "Command approval").
+    const answer = await this.askPermission(key, requestId, request, {
+      title: "Command approval",
+      description: "Codex wants to run this command.",
+    });
     return commandDecision(answer);
   }
 
@@ -1002,7 +1021,10 @@ export class CodexHarness implements Harness {
       ...(params.reason ? { reason: params.reason } : {}),
       suggestions: [],
     };
-    const answer = await this.askPermission(`permission:${params.itemId}`, requestId, request);
+    const answer = await this.askPermission(`permission:${params.itemId}`, requestId, request, {
+      title: "File change approval",
+      description: `Codex wants to change ${changes.length} file${changes.length === 1 ? "" : "s"}.`,
+    });
     return commandDecision(answer);
   }
 
@@ -1010,17 +1032,28 @@ export class CodexHarness implements Harness {
     key: string,
     requestId: string,
     request: PermissionRequest,
+    display: { title?: string; description?: string },
   ): Promise<PermissionAnswer> {
     const turn = this.active;
     if (!turn || turn.settled) {
       // Nobody can be asked, so nothing is approved (SPEC R27).
       return { behavior: "deny", message: "capygen has no active turn to ask in" };
     }
-    this.emitBlock(key, { kind: "permission", request, decision: null });
+    this.emitBlock(key, { kind: "permission", request, decision: null, ...display });
     this.emit({ type: "permission", requestId, key, request });
 
     const answer = await new Promise<PermissionAnswer>((resolve) => {
-      this.pending.set(requestId, { kind: "permission", resolve });
+      this.pending.set(requestId, {
+        kind: "permission",
+        key,
+        resolve,
+        cancelPatch: (why) => ({
+          kind: "permission",
+          request,
+          decision: { behavior: "deny", message: why, scope: "once", decidedAt: Date.now() },
+          ...display,
+        }),
+      });
     });
 
     const scope = scopeOf(answer);
@@ -1034,6 +1067,7 @@ export class CodexHarness implements Harness {
         scope,
         decidedAt: Date.now(),
       },
+      ...display,
     });
     return answer;
   }
@@ -1070,14 +1104,35 @@ export class CodexHarness implements Harness {
       questions,
       answers: null,
       allowOther,
+      status: "pending",
     });
     this.emit({ type: "question", requestId, key, questions });
 
     const answers = await new Promise<Record<string, string>>((resolve) => {
-      this.pending.set(requestId, { kind: "question", resolve });
+      this.pending.set(requestId, {
+        kind: "question",
+        key,
+        resolve,
+        cancelPatch: () => ({
+          kind: "question",
+          requestId,
+          questions,
+          answers: null,
+          allowOther,
+          status: "cancelled",
+        }),
+      });
     });
     this.questionIds.delete(requestId);
-    this.emitBlock(key, { kind: "question", requestId, questions, answers, allowOther });
+    const cancelled = Object.keys(answers).length === 0;
+    this.emitBlock(key, {
+      kind: "question",
+      requestId,
+      questions,
+      answers: cancelled ? null : answers,
+      allowOther,
+      status: cancelled ? "cancelled" : "answered",
+    });
 
     // `{questionId: {answers: [label]}}` — `ToolRequestUserInputAnswer` takes a
     // list; capygen's card produces one choice per question, so the list has at
@@ -1125,7 +1180,20 @@ export class CodexHarness implements Harness {
     });
 
     const answers = await new Promise<Record<string, unknown> | null>((resolve) => {
-      this.pending.set(requestId, { kind: "elicitation", resolve });
+      this.pending.set(requestId, {
+        kind: "elicitation",
+        key,
+        resolve,
+        cancelPatch: () => ({
+          kind: "elicitation",
+          requestId,
+          title: params.serverName,
+          ...(params.message ? { description: params.message } : {}),
+          schema: params.requestedSchema ?? null,
+          answers: null,
+          status: "cancelled",
+        }),
+      });
     });
 
     this.emitBlock(key, {
@@ -1205,10 +1273,7 @@ export class CodexHarness implements Harness {
     turn.interrupted = true;
 
     // Anything waiting on the user would otherwise hold the turn open forever.
-    for (const [requestId, entry] of [...this.pending]) {
-      this.pending.delete(requestId);
-      resolvePending(entry, "interrupted");
-    }
+    this.cancelPending("interrupted");
 
     if (this.threadId && turn.codexTurnId && this.client?.running) {
       try {
@@ -1229,10 +1294,7 @@ export class CodexHarness implements Harness {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    for (const [requestId, entry] of [...this.pending]) {
-      this.pending.delete(requestId);
-      resolvePending(entry, "closed");
-    }
+    this.cancelPending("closed");
     const turn = this.active;
     if (turn && !turn.settled) this.settle(turn, "interrupted");
     this.unsubscribe?.();
@@ -1246,6 +1308,25 @@ export class CodexHarness implements Harness {
   // -------------------------------------------------------------------------
   // helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Release every outstanding server request: the card gets its terminal state
+   * (denied / cancelled / declined — never an approval, SPEC R27) and the
+   * app-server gets the reply it is blocked on.
+   *
+   * Called from `settle()` too, which is the bug this exists for: a
+   * `turn/completed` that arrived while an approval was still open used to
+   * close the turn and leave the promise dangling, so the card stayed pending
+   * for the rest of the session and Codex waited forever for a decision.
+   */
+  private cancelPending(why: string): void {
+    for (const [requestId, entry] of [...this.pending]) {
+      this.pending.delete(requestId);
+      this.questionIds.delete(requestId);
+      this.emitBlock(entry.key, entry.cancelPatch(why));
+      resolvePending(entry, why);
+    }
+  }
 
   private emit(event: EngineEvent): void {
     this.active?.out.push(event);
@@ -1303,6 +1384,9 @@ export class CodexHarness implements Harness {
 
   private settle(turn: ActiveTurn, status: "done" | "error" | "interrupted", error?: string): void {
     if (turn.settled) return;
+    // Before the queue closes, not after: a request still waiting on the user
+    // has to be cancelled while its card update can still reach the transcript.
+    this.cancelPending(status === "interrupted" ? "interrupted" : "the turn ended");
     turn.settled = true;
     if (turn.timer) clearTimeout(turn.timer);
     turn.out.push({ type: "turn", status, ...(error ? { error } : {}) });

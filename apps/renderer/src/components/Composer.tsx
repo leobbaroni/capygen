@@ -23,15 +23,21 @@
  * Harness/model picker (SPEC item 5): lists `harnesses` (from `harness.list`)
  * next to the send button. An agent's backend is fixed for its lifetime
  * (`Harness`: "one harness instance per agent" — CONTEXT.md), so what the
- * picker *does* with a choice depends on whether an agent exists yet:
- *   - no `agent` (the New Session landing, before `startSession` has run):
- *     `onPickAgent` just remembers the choice, threaded into `sessions.create`
- *     as the lead agent's backend/model.
- *   - an `agent` (an open, ongoing session): only that backend's own models
- *     are offered, and picking one dispatches through the *existing* `/model`
- *     built-in (R14) rather than any live "swap backends" operation, because
- *     there isn't one — the caller's `onPickAgent` is expected to route this
- *     to `send("/model <id>")`.
+ * picker *does* with a choice depends on `lockBackend`, not on whether `agent`
+ * happens to be set:
+ *   - `lockBackend` false (the New Session landing, before `startSession` has
+ *     run): every available backend is offered however many times the user
+ *     changes their mind, and `onPickAgent` just remembers the choice, threaded
+ *     into `sessions.create` as the lead agent's backend/model.
+ *   - `lockBackend` true (an open, ongoing session): only that backend's own
+ *     models are offered, and picking one dispatches through the *existing*
+ *     `/model` built-in (R14) rather than any live "swap backends" operation,
+ *     because there isn't one — the caller's `onPickAgent` is expected to route
+ *     this to `send("/model <id>")`.
+ *
+ * Unavailable backends stay in the menu as disabled rows carrying
+ * `HarnessInfo.reason`, so an expired Codex token or a missing API key reads as
+ * a sentence the user can act on instead of an empty list.
  *
  * Attach is disabled until `chat.send` can carry a file
  * (packages/shared/src/ipc.ts): taking one, showing a chip and then dropping
@@ -86,6 +92,16 @@ export interface ComposerProps {
   /** The agent the picker is showing, or `null`/undefined before one exists
    *  (a brand-new session on the New Session landing). */
   agent?: AgentChoice | null;
+  /**
+   * Narrow the picker to `agent`'s own backend. True only where an agent
+   * genuinely exists (ChatPage): an agent's backend is fixed for its lifetime.
+   *
+   * Deliberately **not** derived from `agent != null`, which is what it used to
+   * be — the landing passes `agent` too, just to label the button, so picking
+   * "Codex" there locked the whole page to Codex with no way back to Claude
+   * short of navigating away, for a session that did not exist yet.
+   */
+  lockBackend?: boolean;
   /** A different backend/model was chosen — see the file header for what
    *  "picking" means with vs. without `agent`. */
   onPickAgent?: (choice: AgentChoice) => void;
@@ -103,6 +119,7 @@ export function Composer({
   commands = [],
   harnesses = [],
   agent = null,
+  lockBackend = false,
   onPickAgent,
   testId = "composer",
 }: ComposerProps) {
@@ -236,12 +253,20 @@ export function Composer({
   }
 
   // Harness/model picker (SPEC item 5). Only the backends `harness.list`
-  // reports available are offered; an `agent` narrows the list to its own
-  // backend (an agent cannot switch backends — see the file header).
-  const pickableHarnesses = harnesses.filter((h) => h.available && (!agent || h.backend === agent.backend));
+  // reports available can be *chosen*; `lockBackend` narrows that to the open
+  // agent's own backend (an agent cannot switch backends — see the header).
+  const locked = lockBackend && agent ? agent.backend : null;
+  const pickableHarnesses = harnesses.filter(
+    (h) => h.available && (!locked || h.backend === locked),
+  );
+  // Unavailable backends are shown, disabled, with the reason `harness.list`
+  // computed (`no Claude login found — run \`claude login\``, an expired Codex
+  // token, a missing API key). They used to be filtered out entirely, so a user
+  // whose token had expired saw "No models available" and no way to learn why.
+  const unavailableHarnesses = locked ? [] : harnesses.filter((h) => !h.available);
   const pickerLabel = agent
     ? `${BACKEND_LABEL[agent.backend]} · ${agent.model}`
-    : (harnesses.find((h) => h.available)?.label ?? "Choose model");
+    : "Choose model";
 
   function pick(backend: Backend, model: string): void {
     setAgentMenuOpen(false);
@@ -378,40 +403,56 @@ export function Composer({
                 data-testid={`${testId}-agent-menu`}
                 className="absolute right-0 bottom-full z-20 mb-1 max-h-72 min-w-52 overflow-y-auto rounded-lg border border-border bg-popover p-1 text-sm shadow-menu"
               >
-                {pickableHarnesses.length === 0 ? (
+                {pickableHarnesses.length === 0 && unavailableHarnesses.length === 0 ? (
                   <li className="px-2 py-1.5 text-xs text-muted-foreground">
                     No models available
                   </li>
-                ) : (
-                  pickableHarnesses.map((harness) => (
-                    <li key={harness.backend}>
-                      {!agent ? (
-                        <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">
-                          {harness.label}
-                        </div>
-                      ) : null}
-                      {harness.models.map((model) => {
-                        const isCurrent = agent?.backend === harness.backend && agent.model === model.id;
-                        return (
-                          <button
-                            key={model.id}
-                            type="button"
-                            role="option"
-                            aria-selected={isCurrent}
-                            data-testid={`${testId}-agent-option`}
-                            onClick={() => pick(harness.backend, model.id)}
-                            className={cn(
-                              "w-full rounded-md px-2 py-1.5 text-left text-foreground hover:bg-accent",
-                              isCurrent && "bg-accent",
-                            )}
-                          >
-                            {agent ? model.label : `${harness.label} — ${model.label}`}
-                          </button>
-                        );
-                      })}
-                    </li>
-                  ))
-                )}
+                ) : null}
+                {pickableHarnesses.map((harness) => (
+                  <li key={harness.backend}>
+                    {!locked ? (
+                      <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">
+                        {harness.label}
+                      </div>
+                    ) : null}
+                    {harness.models.map((model) => {
+                      const isCurrent =
+                        agent?.backend === harness.backend && agent.model === model.id;
+                      return (
+                        <button
+                          key={model.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isCurrent}
+                          data-testid={`${testId}-agent-option`}
+                          onClick={() => pick(harness.backend, model.id)}
+                          className={cn(
+                            "w-full rounded-md px-2 py-1.5 text-left text-foreground hover:bg-accent",
+                            isCurrent && "bg-accent",
+                          )}
+                        >
+                          {locked ? model.label : `${harness.label} — ${model.label}`}
+                        </button>
+                      );
+                    })}
+                  </li>
+                ))}
+                {unavailableHarnesses.map((harness) => (
+                  <li
+                    key={harness.backend}
+                    data-testid={`${testId}-agent-unavailable`}
+                    data-backend={harness.backend}
+                    className="px-2 py-1.5 opacity-60"
+                    title={harness.reason ?? "unavailable"}
+                  >
+                    <div className="text-xs font-medium text-muted-foreground">
+                      {harness.label}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {harness.reason ?? "unavailable"}
+                    </div>
+                  </li>
+                ))}
               </ul>
             ) : null}
           </div>

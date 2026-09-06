@@ -204,3 +204,71 @@ describe("Composer", () => {
     expect(screen.queryByTestId("slash-menu")).not.toBeInTheDocument();
   });
 });
+
+describe("the harness/model picker (SPEC item 5)", () => {
+  const HARNESSES = [
+    {
+      backend: "claude" as const,
+      label: "Claude Code",
+      available: true,
+      models: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }],
+      defaultModel: "claude-sonnet-5",
+    },
+    {
+      backend: "codex" as const,
+      label: "Codex",
+      available: true,
+      models: [{ id: "gpt-5.5", label: "GPT-5.5" }],
+      defaultModel: "gpt-5.5",
+    },
+    {
+      backend: "api" as const,
+      label: "API model",
+      available: false,
+      reason: "no API key stored — add one in Settings ▸ API keys",
+      models: [],
+      defaultModel: "",
+    },
+  ];
+
+  it("keeps every backend pickable on the landing, even after a choice", async () => {
+    const user = userEvent.setup();
+    // The landing passes `agent` only to label the button; without
+    // `lockBackend` a first pick used to hide every other backend for good.
+    renderComposer({ harnesses: HARNESSES, agent: { backend: "codex", model: "gpt-5.5" } });
+    await user.click(screen.getByTestId("composer-agent-picker"));
+    const labels = screen.getAllByTestId("composer-agent-option").map((b) => b.textContent);
+    expect(labels).toEqual(["Claude Code — Claude Sonnet 5", "Codex — GPT-5.5"]);
+  });
+
+  it("narrows to the agent's own backend once a session exists", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      harnesses: HARNESSES,
+      agent: { backend: "codex", model: "gpt-5.5" },
+      lockBackend: true,
+    });
+    await user.click(screen.getByTestId("composer-agent-picker"));
+    expect(screen.getAllByTestId("composer-agent-option").map((b) => b.textContent)).toEqual([
+      "GPT-5.5",
+    ]);
+  });
+
+  it("shows an unavailable backend's reason instead of dropping the row", async () => {
+    const user = userEvent.setup();
+    renderComposer({ harnesses: HARNESSES });
+    await user.click(screen.getByTestId("composer-agent-picker"));
+    const row = screen.getByTestId("composer-agent-unavailable");
+    expect(row).toHaveTextContent("API model");
+    expect(row).toHaveTextContent("no API key stored");
+  });
+
+  it("names the model it will actually use, never just a backend", () => {
+    renderComposer({ harnesses: HARNESSES, agent: { backend: "codex", model: "gpt-5.5" } });
+    expect(screen.getByTestId("composer-agent-picker")).toHaveTextContent("Codex · gpt-5.5");
+    // With nothing chosen it says so rather than naming a backend the session
+    // would not actually run on.
+    renderComposer({ harnesses: HARNESSES, testId: "composer2" });
+    expect(screen.getByTestId("composer2-agent-picker")).toHaveTextContent("Choose model");
+  });
+});

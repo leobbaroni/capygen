@@ -137,9 +137,15 @@ type PendingPermission = {
   kind: "permission";
   resolve: (a: PermissionAnswer) => void;
 };
+/**
+ * `null` is the *cancelled* sentinel, not an empty answer map. Resolving a
+ * torn-down question with `{}` used to look like a real submission all the way
+ * to the card (`{}` is truthy), so an interrupted AskUserQuestion rendered as a
+ * green "Submitted" with nothing in it — see `QuestionBlockSchema.status`.
+ */
 type PendingQuestion = {
   kind: "question";
-  resolve: (a: Record<string, string>) => void;
+  resolve: (a: Record<string, string> | null) => void;
 };
 
 export class ClaudeHarness implements Harness {
@@ -160,6 +166,11 @@ export class ClaudeHarness implements Harness {
   private readonly pending = new Map<string, PendingPermission | PendingQuestion>();
 
   private commands: SlashCommand[] = [];
+  /** The last `system/init` payload, so the list can be rebuilt when the
+   *  descriptions arrive from `supportedCommands()` (R14). */
+  private commandSource: { slash_commands?: unknown; skills?: unknown; plugins?: unknown } = {};
+  /** `{name, description, argumentHint, aliases}` from the SDK control request. */
+  private commandDetails: SdkSlashCommandDetail[] = [];
   private sdkSessionId: string | null = null;
   private resolvedModel: string | null = null;
   /** Latest cumulative `modelUsage`, so each turn reports its own delta. */
@@ -393,13 +404,32 @@ export class ClaudeHarness implements Harness {
     if (message.subtype === "init") {
       if (typeof message.session_id === "string") this.sdkSessionId = message.session_id;
       if (typeof message.model === "string") this.resolvedModel = message.model;
-      this.commands = buildCommands(message);
+      this.commandSource = {
+        slash_commands: message.slash_commands,
+        skills: message.skills,
+        plugins: message.plugins,
+      };
+      this.rebuildCommands();
       this.emit({
         type: "session",
         backendSessionId: this.sdkSessionId ?? "",
         ...(this.resolvedModel ? { model: this.resolvedModel } : {}),
         commands: this.commands,
       });
+      // `slash_commands` is a bare `string[]`; the descriptions and argument
+      // hints the slash menu needs only exist behind this control request
+      // (spike §8.1: 92 entries of `{name, description, argumentHint, aliases}`).
+      void this.refreshCommandDetails();
+      return;
+    }
+    // The CLI pushes the whole list again when it changes mid-session
+    // (`SDKCommandsChangedMessage`, sdk.d.ts:3420-3427) — replace, don't merge.
+    if (message.subtype === "commands_changed") {
+      const commands = readCommandDetails((message as { commands?: unknown }).commands);
+      if (commands.length > 0) {
+        this.commandDetails = commands;
+        this.rebuildCommands();
+      }
       return;
     }
     const turn = this.active;
@@ -434,6 +464,34 @@ export class ClaudeHarness implements Harness {
         status: subagentStatus(str(message.status) ?? "completed"),
         ...(summary ? { description: summary } : {}),
       });
+    }
+  }
+
+  private rebuildCommands(): void {
+    this.commands = enrichCommands(buildCommands(this.commandSource), this.commandDetails);
+  }
+
+  /**
+   * `Query.supportedCommands()` (`sdk.d.ts:2747`) — the only place the CLI
+   * publishes a command's description and `argumentHint`. Without it every
+   * Claude command was `description: ""`, which made the slash menu name-only
+   * and, worse, made the composer treat every argument-taking command as
+   * argument-less: selecting `/cockpit:pilot` ran it immediately with no
+   * argument (R14). Fire-and-forget — a backend that does not answer keeps the
+   * bare names it already has, and a turn never waits on it.
+   */
+  private async refreshCommandDetails(): Promise<void> {
+    const query = this.query as unknown as {
+      supportedCommands?: () => Promise<unknown>;
+    } | null;
+    if (typeof query?.supportedCommands !== "function") return;
+    try {
+      const commands = readCommandDetails(await query.supportedCommands());
+      if (commands.length === 0) return;
+      this.commandDetails = commands;
+      this.rebuildCommands();
+    } catch (err) {
+      this.log.warn("[claude] supportedCommands() failed; slash menu stays name-only", err);
     }
   }
 
@@ -644,7 +702,19 @@ export class ClaudeHarness implements Harness {
   private async onCanUseTool(
     toolName: string,
     input: Record<string, unknown>,
-    opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string },
+    // `title` / `displayName` / `description` are the CLI's own rendering of
+    // the prompt — what it lifts out of the tool's
+    // `_meta['anthropic/permissionDisplay']` (`sdk.d.ts:209-269`, spike §4).
+    // Passing them onto the block is what stops every real Claude permission
+    // card reading "Permission requested" over a raw JSON dump (R32).
+    opts: {
+      signal?: AbortSignal;
+      toolUseID?: string;
+      decisionReason?: string;
+      title?: string;
+      displayName?: string;
+      description?: string;
+    },
   ): Promise<PermissionResultLike> {
     const turn = this.active;
     if (!turn || turn.settled) {
@@ -657,15 +727,40 @@ export class ClaudeHarness implements Harness {
     if (toolName === "AskUserQuestion") {
       const questions = parseQuestions(input);
       const key = `question:${anchor}`;
-      this.emitBlock(key, { kind: "question", requestId, questions, answers: null });
+      this.emitBlock(key, {
+        kind: "question",
+        requestId,
+        questions,
+        answers: null,
+        status: "pending",
+      });
       this.emit({ type: "question", requestId, key, questions });
-      const answers = await new Promise<Record<string, string>>((resolve) => {
+      const answers = await new Promise<Record<string, string> | null>((resolve) => {
         this.pending.set(requestId, { kind: "question", resolve });
         opts.signal?.addEventListener("abort", () => {
-          if (this.pending.delete(requestId)) resolve({});
+          if (this.pending.delete(requestId)) resolve(null);
         });
       });
-      this.emitBlock(key, { kind: "question", requestId, questions, answers });
+      // Cancelled (interrupt, abort, quit): the card says so and the tool is
+      // denied. Answering it with `{}` would tell both the user and the model
+      // that a question nobody answered had been submitted.
+      if (answers === null) {
+        this.emitBlock(key, {
+          kind: "question",
+          requestId,
+          questions,
+          answers: null,
+          status: "cancelled",
+        });
+        return { behavior: "deny", message: "The question was cancelled in capygen." };
+      }
+      this.emitBlock(key, {
+        kind: "question",
+        requestId,
+        questions,
+        answers,
+        status: "answered",
+      });
       return { behavior: "allow", updatedInput: { ...input, answers } };
     }
 
@@ -677,7 +772,12 @@ export class ClaudeHarness implements Harness {
       suggestions: [],
     };
     const key = `permission:${anchor}`;
-    this.emitBlock(key, { kind: "permission", request, decision: null });
+    const display = {
+      ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.displayName ? { displayName: opts.displayName } : {}),
+      ...(opts.description ? { description: opts.description } : {}),
+    };
+    this.emitBlock(key, { kind: "permission", request, decision: null, ...display });
     this.emit({ type: "permission", requestId, key, request });
 
     const answer = await new Promise<PermissionAnswer>((resolve) => {
@@ -699,6 +799,7 @@ export class ClaudeHarness implements Harness {
         scope: "once",
         decidedAt: Date.now(),
       },
+      ...display,
     });
 
     if (answer.behavior === "allow") {
@@ -720,7 +821,9 @@ export class ClaudeHarness implements Harness {
     const entry = this.pending.get(requestId);
     if (!entry || entry.kind !== "question") return false;
     this.pending.delete(requestId);
-    entry.resolve(answers);
+    // An empty map is the card's Decline button, not an answer: resolve it as
+    // cancelled so the tool is denied rather than handed `{}` (R32).
+    entry.resolve(Object.keys(answers).length === 0 ? null : answers);
     return true;
   }
 
@@ -783,12 +886,7 @@ export class ClaudeHarness implements Harness {
     turn.interrupted = true;
 
     // Anything waiting on the user would otherwise hold the turn open forever.
-    for (const [requestId, entry] of [...this.pending]) {
-      this.pending.delete(requestId);
-      if (entry.kind === "permission") {
-        entry.resolve({ behavior: "deny", message: "interrupted" });
-      } else entry.resolve({});
-    }
+    this.cancelPending("interrupted");
 
     try {
       await this.query?.interrupt();
@@ -807,11 +905,7 @@ export class ClaudeHarness implements Harness {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    for (const [requestId, entry] of [...this.pending]) {
-      this.pending.delete(requestId);
-      if (entry.kind === "permission") entry.resolve({ behavior: "deny", message: "closed" });
-      else entry.resolve({});
-    }
+    this.cancelPending("closed");
     const turn = this.active;
     if (turn && !turn.settled) this.settle(turn, "interrupted");
     this.queryInput?.close();
@@ -840,6 +934,19 @@ export class ClaudeHarness implements Harness {
   // -------------------------------------------------------------------------
   // helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Release everything blocked on the user: a permission is denied (R27 — an
+   * unanswered request is never an approval) and a question is **cancelled**,
+   * which is not the same as answered with nothing.
+   */
+  private cancelPending(why: string): void {
+    for (const [requestId, entry] of [...this.pending]) {
+      this.pending.delete(requestId);
+      if (entry.kind === "permission") entry.resolve({ behavior: "deny", message: why });
+      else entry.resolve(null);
+    }
+  }
 
   private emit(event: EngineEvent): void {
     this.active?.out.push(event);
@@ -1099,6 +1206,63 @@ export function buildCommands(message: {
           ? "skill"
           : "backend";
     return { name: `/${name}`, description: "", source };
+  });
+}
+
+/** One entry of `Query.supportedCommands()` / `system/commands_changed`. */
+export interface SdkSlashCommandDetail {
+  name: string;
+  description: string;
+  argumentHint: string;
+  aliases: string[];
+}
+
+/** `SlashCommand[]` off the wire → the fields `enrichCommands` reads. */
+export function readCommandDetails(raw: unknown): SdkSlashCommandDetail[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SdkSlashCommandDetail[] = [];
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const name = str(item.name);
+    if (!name) continue;
+    out.push({
+      name,
+      description: typeof item.description === "string" ? item.description : "",
+      argumentHint: typeof item.argumentHint === "string" ? item.argumentHint : "",
+      aliases: Array.isArray(item.aliases)
+        ? item.aliases.filter((a): a is string => typeof a === "string")
+        : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * Fold the descriptions and argument hints from `supportedCommands()` onto the
+ * names `system/init` reported. `init` is what classifies a command as a
+ * plugin/skill/backend one (the detail list says nothing about origin), so the
+ * base list stays authoritative for `source` and only the human-facing fields
+ * are taken from the details — matched by name or by any of its aliases
+ * (`/cost` and `/stats` both resolve to `usage`, spike §8.1).
+ */
+export function enrichCommands(
+  base: SlashCommand[],
+  details: readonly SdkSlashCommandDetail[],
+): SlashCommand[] {
+  if (details.length === 0) return base;
+  const byName = new Map<string, SdkSlashCommandDetail>();
+  for (const detail of details) {
+    byName.set(`/${detail.name}`, detail);
+    for (const alias of detail.aliases) if (!byName.has(`/${alias}`)) byName.set(`/${alias}`, detail);
+  }
+  return base.map((command) => {
+    const detail = byName.get(command.name);
+    if (!detail) return command;
+    return {
+      ...command,
+      description: detail.description || command.description,
+      ...(detail.argumentHint ? { argumentHint: detail.argumentHint } : {}),
+    };
   });
 }
 

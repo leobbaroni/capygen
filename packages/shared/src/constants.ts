@@ -59,3 +59,38 @@ export const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
   { name: "/clear", description: "Start a fresh context in this session" },
   { name: "/cost", description: "Show tokens and cost so far" },
 ];
+
+/**
+ * Which of the built-ins above each backend can actually run (R14).
+ *
+ * The list used to be offered whole to every session, which meant a Codex or
+ * `api` agent was shown `/context`, `/effort`, `/help` and `/cost` — commands
+ * neither backend implements. Selecting one is not a no-op: an argument-less
+ * command fires straight from the menu, so `/cost` was posted to the backend as
+ * the literal user message "/cost" and spent a real turn on it.
+ *
+ *  - **claude** — the Claude Agent SDK forwards slash text to Claude Code,
+ *    whose own `slash_commands` include `clear, compact, context, effort,
+ *    model, usage` (`usage` has the aliases `cost`/`stats`) — verified in
+ *    `docs/spikes/claude-sdk-shapes.md` §8.1.
+ *  - **codex** — slash commands are not a protocol concept (spike §2);
+ *    `CodexHarness` implements `/compact`, `/model`, `/clear`, `/review` and
+ *    `/status` itself and publishes them through `listCommands()` with Codex's
+ *    own descriptions, so nothing is added on top of its own list here.
+ *  - **api** — `ApiHarness.capabilities().slashCommands === false`; there is no
+ *    command layer at all, only messages to a provider.
+ */
+export const BACKEND_BUILTIN_SLASH_COMMANDS: Record<string, readonly string[]> = {
+  claude: ["/compact", "/context", "/effort", "/model", "/help", "/clear", "/cost"],
+  codex: [],
+  api: [],
+};
+
+/** The built-ins `backend` can run; unknown backends get the whole list. */
+export function builtinSlashCommandsFor(backend: string | null | undefined): BuiltinSlashCommand[] {
+  if (!backend) return [...BUILTIN_SLASH_COMMANDS];
+  const allowed = BACKEND_BUILTIN_SLASH_COMMANDS[backend];
+  if (!allowed) return [...BUILTIN_SLASH_COMMANDS];
+  const names = new Set(allowed);
+  return BUILTIN_SLASH_COMMANDS.filter((c) => names.has(c.name));
+}

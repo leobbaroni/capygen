@@ -57,6 +57,7 @@ import {
 } from "./win/windowState.js";
 import { longPath, resolveInitialProjectDir } from "./win/projectArg.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
+import { createMcpPoolRegistry, type McpPoolRegistry } from "./ipc/mcpPools.js";
 import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
 import { createHarnessLister } from "./ipc/harnessList.js";
 import {
@@ -86,6 +87,7 @@ let store: CapygenStore | null = null;
 let log: Logger;
 let ipc: IpcContext | null = null;
 let widgets: WidgetHostHandlers | null = null;
+let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
 
 // ---------------------------------------------------------------------------
@@ -253,9 +255,21 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   const useStub = process.env[ENGINE_ENV] === "stub";
   if (useStub) log.warn(`[engine] ${ENGINE_ENV}=stub — running the offline echo engine`);
 
-  // The widget host owns one MCP client pool per project directory; it never
+  // One MCP client pool per distinct server list, shared between the widget
+  // host and the `api` harness and closed when the last of them lets go
+  // (SPEC R26 — they used to spawn every stdio server twice per session).
+  mcpPools = createMcpPoolRegistry({
+    log: {
+      info: (...a) => log.info(...(a as [string])),
+      warn: (...a) => log.warn(...(a as [string])),
+      error: (...a) => log.error(...(a as [string])),
+    },
+  });
+
+  // The widget host owns one bridge per project directory; it never
   // reads a resource for a session whose project we cannot name.
   widgets = createWidgetHost({
+    pools: mcpPools,
     log: { info: (...a) => log.info(...(a as [string])), warn: (...a) => log.warn(...(a as [string])) },
     projectPathFor: (sessionId) => {
       const session = activeStore.sessions.get(sessionId);
@@ -311,6 +325,7 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     broadcast,
     log,
     widgets,
+    pools: mcpPools,
     ...(useStub ? { makeEngine: createStubEngine } : {}),
     secrets: secretsStore,
     listHarnesses: createHarnessLister({
@@ -476,6 +491,12 @@ app.on("will-quit", (event) => {
       await ipc?.dispose();
     } catch (err) {
       log?.error("[main] engine shutdown error", err);
+    }
+    try {
+      // After both holders have let go; anything still open is closed here.
+      await mcpPools?.closeAll();
+    } catch (err) {
+      log?.error("[main] MCP pool shutdown error", err);
     }
     try {
       tray?.destroy();

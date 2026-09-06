@@ -143,7 +143,8 @@ describe("defineIpc", () => {
 
     const result = await ipc.invoke("secrets.has", { provider: "anthropic" });
 
-    expect(result).toEqual({ has: true });
+    // `source` says stored/environment/none; the *value* never comes back.
+    expect(result).toEqual({ has: true, source: "none" });
     expect(invoke).toHaveBeenCalledWith("secrets.has", { provider: "anthropic" });
   });
 });

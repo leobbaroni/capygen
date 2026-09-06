@@ -28,6 +28,9 @@ Verified on: Windows 10 Pro 19045 · Node 22.16 · Electron 44.2.0 (Node 24.20.0
 | `result.usage` is main-loop only | `sdk.d.ts:5032-5035` | fallback when `modelUsage` is empty (local slash commands) | — |
 | `Query.interrupt()` | `sdk.d.ts:2615`, streaming input only | `chat.interrupt` | the harness still ends the turn after `interruptGraceMs` (5 s) |
 | `system/init.slash_commands` / `.skills` / `.plugins` | `sdk.d.ts:5148-5208` | the slash menu (R14) | fallback: build the list from `~/.claude/commands`, `<repo>/.claude`, `installed_plugins.json` |
+| `Query.supportedCommands()` → `{name, description, argumentHint, aliases?}[]` | `sdk.d.ts:2747`, `:8288-8305`; 92 entries observed (spike §8.1) | the slash menu's **descriptions and argument hints** — `slash_commands` is a bare `string[]`, so without this every Claude command was name-only *and* argument-less, which made the composer fire `/cockpit:pilot` immediately instead of letting the argument be typed | fire-and-forget after `system/init`: a backend that does not answer keeps the bare names |
+| `system/commands_changed` → `{commands: SlashCommand[]}` | `sdk.d.ts:3420-3427` ("clients should REPLACE their cached list") | mid-session skill discovery replaces the menu | ignored if it stops arriving; the init-time list stands |
+| `canUseTool` options carry `title` / `displayName` / `description` | `sdk.d.ts:209-269`, spike §4 | stamped onto the `permission` block so the card has a real header (R32) instead of "Permission requested" over a JSON dump | the card falls back to a per-tool view (command+cwd, file list) and only then to the JSON |
 | slash commands are plain prompt text | spike §3 | `chat.send` passes the text through unchanged | — |
 | ESM-only package, loaded with a runtime `import()` | `package.json` `"type": "module"` | `packages/engine/src/claude/sdk.ts` | it is **external** to the esbuild bundle (`apps/desktop/scripts/build.ts`): the SDK finds its bundled `claude.exe` through `createRequire(import.meta.url)`, which an inlined copy could not do. Verified inside Electron 44 (`node=24.20.0`, `query=function`) |
 | SDK spawns the child with `windowsHide: true` | grep of `sdk.mjs` | no console flash on Windows | if it regresses, pass `Options.spawnClaudeCodeProcess` |
@@ -87,7 +90,7 @@ three endpoints, against a live 401 (an invalid key, no tokens spent) —
 | `@anthropic-ai/sdk` | `0.124.0` | `api/providers/anthropic.ts` | the adapter reads the stream through its own structural interface (`AnthropicClientLike`), so only `messages.create(body, {signal})` and the raw event names below are load-bearing |
 | `client.messages.create({…, stream:true})` → async iterable of raw events | verified live (401 reached the endpoint) | `AnthropicProvider.stream` | the one call the provider makes |
 | raw stream events read: `message_start`, `content_block_start/delta/stop`, `message_delta`, `error`; deltas `text_delta`, `thinking_delta`, `signature_delta`, `input_json_delta` | `resources/messages/messages.d.ts` `RawMessageStreamEvent` | `mapAnthropicStream` | an unknown event is ignored, not fatal; a *renamed* one silently drops that content — `test/apiProviders.test.ts` replays each shape |
-| `cache_control: {type:"ephemeral"}` on the **system** block and on the **last** tool | SPEC R24 | `buildAnthropicBody` | one breakpoint covers the whole prefix (system + tools); asserted on the real request body in `test/api.test.ts` |
+| `cache_control: {type:"ephemeral"}` on the **system** block, the **last** tool, and the last content block of each of the **final two messages** | SPEC R24; Anthropic allows 4 breakpoints and all 4 are used | `buildAnthropicBody`, `markMessageCacheBreakpoints` | the first two cover the fixed prefix (system + tools); the trailing pair is what stops the whole growing `messages` array being re-billed on every tool-loop round trip and every later turn. Asserted on the real request body in `test/api.test.ts` and `test/apiProviders.test.ts` |
 | `usage.input_tokens` **excludes** cached tokens; `cache_read_input_tokens` / `cache_creation_input_tokens` are separate | `messages.d.ts` `Usage` | `anthropicUsage` → the price table | if it became inclusive, input cost would be double-counted |
 | a replayed `thinking` block needs its `signature` | API contract | `anthropicMessages` drops unsigned ones | losing earlier visible reasoning beats losing the turn |
 | `openai` | `7.10.0` | `api/providers/openai.ts` (and OpenRouter) | as above: only `responses.create(body, {signal})` and the event names below matter |
@@ -101,6 +104,7 @@ three endpoints, against a live 401 (an invalid key, no tokens spent) —
 | `@modelcontextprotocol/sdk` | `1.30.0` | `mcp/client/**` | dual ESM/CJS build; loaded with a runtime `import()` so a session with no MCP servers never loads it |
 | `Client`, `StdioClientTransport`, `StreamableHTTPClientTransport`; `listTools()`, `callTool()`, `readResource()` | `dist/esm/client/*.d.ts`; verified against a real stdio server in `test/mcpClient.test.ts` | `McpClientPool` | the only four SDK members capygen touches |
 | `sse` transport | **not implemented** | `McpClientPool.open` throws a sentence | streamable HTTP is what the current CLIs use; an SSE-only server needs a URL change |
+| `Tool.annotations` is a **sibling** of `inputSchema`, not a member of it | `@modelcontextprotocol/sdk` 1.30.0 `types.d.ts:2381-2419` | `McpToolInfo.annotations` → `mcpPermissionClass`; `annotations.readOnlyHint === true` makes a server tool the `read` class instead of `execute` | read it from inside the schema (as this once did) and every read-only tool raises a permission card in `default` mode |
 | `tools/call` result passed through whole (`content`, `structuredContent`, `_meta`) | MCP spec | `McpClientPool.callTool`, `tools/mcpTools.ts` | R31's widget host finds `ui://` in `_meta`; normalising the result would leave it nothing |
 | MCP Apps `_meta` key `ui/resourceUri` (also nested `_meta.ui.resourceUri`), mime `text/html;profile=mcp-app` | `@modelcontextprotocol/ext-apps` `1.7.5` — `RESOURCE_URI_META_KEY` / `RESOURCE_MIME_TYPE` in `dist/src/server/index.js` | `widgetResourceUri` → the `widget` block (R31) | a renamed key means widget cards stop appearing; the tool card still renders |
 | MCP server config sources, read-only | `<project>/.mcp.json`, `~/.claude/settings.json` `mcpServers`, `~/.codex/config.toml` `[mcp_servers.*]` | `mcp/client/config.ts` | precedence agent > project > Claude > Codex; capygen never writes these (Phase 6 owns editing) |
@@ -148,7 +152,16 @@ Evidence for every row: `docs/spikes/mcp-apps.md` (run 2026-09-06). The widget *
 | project `.mcp.json` + `.claude/settings.local.json` `enableAllProjectMcpServers` | `tests/e2e/widget.spec.ts` | one registration that both the CLI and capygen's own client read | the widget e2e stops seeing the fixture server |
 | claude.ai connectors (Higgsfield included) declare **no** `ui://` resource | spike §c, `balance` and `generate_image{get_cost:true}` | the fallback rich card is the normal rendering for that whole class | if one ever does, it is still unreadable without the connector's OAuth |
 
-### Codex app-server as a widget host (schema-verified, not yet wired)
+### Codex app-server as a widget host
+
+A Codex `mcpToolCall` states its `ui://` outright, so `CodexHarness` emits the
+`widget` block itself. Fetching the document is `SessionRunner`'s
+`resolveHarnessWidget`, which calls the same `widgets.open()` the Claude path
+uses — capygen's own MCP client against the same server config, per A13. (It
+used to be reachable only from `maybeOpenWidget`, gated on a tool name starting
+with `mcp__`, which no Codex tool_call ever is: every Codex widget stayed on a
+loading spinner.) The two app-server methods below remain the fallback if that
+client cannot reach a Codex-hosted server.
 
 | Item | Pinned / verified | Used by | If it changes |
 |---|---|---|---|
@@ -176,4 +189,7 @@ Evidence for every row: `docs/spikes/mcp-apps.md` (run 2026-09-06). The widget *
 | `CAPYGEN_DEV_URL` | load the renderer from Vite |
 | `createHarnessForBackend(backend, deps)` | `packages/engine/src/index.ts` — the whole registry. `SessionRunner` calls it once per agent; `deps.api.keys` is the desktop's `safeStorage` bridge and `deps.api.loadHistory` the SQLite replay (`apps/desktop/src/engine/history.ts`) |
 | `Harness.answerElicitation?` | optional on purpose: only a backend that relays MCP `elicitation/create` emits the matching event (Codex today). A missing method reads as "not delivered", the same answer a stale request gets |
+| `BACKEND_BUILTIN_SLASH_COMMANDS` | `packages/shared/src/constants.ts` — which of the seven app built-ins each backend can run (R14). Claude: all seven; Codex and `api`: none, because Codex publishes its own `/compact`,`/model`,`/clear`,`/review`,`/status` and `api` has no command layer. `chat.listCommands` filters on it; offering the rest meant a menu click posted `/cost` to the model as literal text |
+| `McpPoolRegistry` | `apps/desktop/src/ipc/mcpPools.ts` — one `McpClientPool` per distinct resolved server list, reference-counted, shared by `ApiHarness` (`deps.acquirePool`) and the widget host (`WidgetHostDeps.pools`). Without it both built their own pool for the same project and every stdio server was spawned twice per session (R26) |
+| `secrets.has` → `{has, source}` | `source` is `stored` \| `environment` \| `none`. `harness.list` counts `ANTHROPIC_API_KEY` & co. as a key, so a bare boolean made Settings ▸ API keys say "Not set" for a provider the composer was offering |
 | `BACKEND_BLOCK_PARITY` | `packages/shared/src/blockParity.ts` — which block kinds each backend can emit, and a written reason for each it cannot. Two suites read it (`apps/desktop/test/blockParity.test.ts`, `apps/renderer/src/components/blocks/blockParity.test.tsx`), so a new block kind fails both until the table answers for all three backends |

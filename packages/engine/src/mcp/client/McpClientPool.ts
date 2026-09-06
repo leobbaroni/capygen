@@ -119,6 +119,7 @@ export class McpClientPool {
         name?: unknown;
         description?: unknown;
         inputSchema?: unknown;
+        annotations?: unknown;
         _meta?: unknown;
       }[];
     };
@@ -134,6 +135,10 @@ export class McpClientPool {
         inputSchema: isRecord(tool.inputSchema)
           ? tool.inputSchema
           : { type: "object", properties: {} },
+        // `annotations` is where `readOnlyHint` actually lives (MCP spec); the
+        // permission class is decided from it, so dropping it here meant every
+        // server tool was gated as `execute`.
+        annotations: isRecord(tool.annotations) ? tool.annotations : undefined,
         meta: isRecord(tool._meta) ? tool._meta : undefined,
       });
     }

@@ -9,6 +9,7 @@
 import type { CapygenStore } from "@capygen/db";
 import type { KeyProvider } from "@capygen/engine";
 import type { EventChannel, EventInput, SlashCommand } from "@capygen/shared";
+import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
 
 export type Broadcast = <E extends EventChannel>(event: E, payload: EventInput<E>) => void;
@@ -38,6 +39,14 @@ export interface EngineDeps {
    * engine, in which case the harness falls back to the documented env vars.
    */
   keys?: KeyProvider;
+  /**
+   * The shared, reference-counted MCP client pools (SPEC R26,
+   * `apps/desktop/src/ipc/mcpPools.ts`). The `api` harness borrows from this
+   * instead of opening its own connections, so it and the widget host reach a
+   * project's servers through one pool rather than spawning every stdio server
+   * twice per session. Absent in tests and in the stub engine.
+   */
+  pools?: McpPoolRegistry;
 }
 
 export interface EngineSendArgs {

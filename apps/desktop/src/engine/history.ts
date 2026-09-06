@@ -127,15 +127,21 @@ export function loadApiHistory(
             name: block.name,
             input: block.input,
           });
+          // `denied` counts: the denial message *is* the result, and replaying
+          // it as "the turn ended before this tool finished" would tell the
+          // model the call was merely interrupted — a good reason to retry the
+          // exact command the user just refused.
           const raw =
-            block.status === "success" || block.status === "error"
+            block.status === "success" ||
+            block.status === "error" ||
+            block.status === "denied"
               ? clamp(textOf(block.output))
               : "";
           results.push({
             type: "tool_result",
             toolUseId: block.toolUseId,
             content: raw || "[no result: the turn ended before this tool finished]",
-            ...(block.status === "error" ? { isError: true } : {}),
+            ...(block.status === "error" || block.status === "denied" ? { isError: true } : {}),
           });
           break;
         }

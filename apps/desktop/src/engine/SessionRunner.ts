@@ -59,6 +59,30 @@ interface ActiveTurn {
   turnId: string;
   harness: Harness;
   blocks: Map<string, BlockSlot>;
+  /**
+   * toolCallId → who is resolving that call's widget.
+   *
+   * `"harness"` means the backend emitted its own `widget` block for the call
+   * (Codex reads the `ui://` straight off `mcpToolCall.appContext`; the `api`
+   * harness off the tool's `_meta`), so the runner must not run a second,
+   * independent detection against the same MCP server — and must never delete
+   * a slot the harness has already written a row into.
+   * `"runner"` means nobody claimed it and the runner is asking the widget
+   * host itself, which is what the Claude backend needs: its stream carries no
+   * tool `_meta` at all (docs/spikes/mcp-apps.md §b2).
+   */
+  widgetOwner: Map<string, "harness" | "runner">;
+  /** toolCallIds whose `ui://` document is already being fetched. */
+  widgetOpening: Set<string>;
+  /**
+   * toolCallIds whose widget row has reached a settled `htmlStatus`. The two
+   * resolution paths (harness-announced and host-detected) race by a microtask
+   * or two, so a late `pending` patch must not reopen a card that is already
+   * showing its document.
+   */
+  widgetResolved: Set<string>;
+  /** toolCallId → the harness block key of its tool_call row. */
+  toolCallKeys: Map<string, string>;
 }
 
 /** The key both `harnesses` and `active` are stored under. */
@@ -100,6 +124,9 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         api: {
           log,
           ...(deps.keys ? { keys: deps.keys } : {}),
+          ...(deps.pools
+            ? { acquirePool: (servers) => deps.pools!.acquire(servers) }
+            : {}),
           loadHistory: (session, forAgent) => loadApiHistory(store, session, forAgent),
         },
       }));
@@ -200,15 +227,23 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * than the card appearing late — and then `ready`/`unavailable` once the
    * document has been read.
    */
-  function maybeOpenWidget(turn: ActiveTurn, patch: BlockPatch): void {
+  function maybeOpenWidget(turn: ActiveTurn, key: string, patch: BlockPatch): void {
     const widgets = deps.widgets;
     if (!widgets || patch.kind !== "tool_call") return;
     if (patch.status !== "success" && patch.status !== "error") return;
-    if (!patch.name.startsWith("mcp__") || patch.toolUseId === undefined) return;
+    if (patch.toolUseId === undefined) return;
+    // `family` rather than the `mcp__` prefix: Codex names an MCP tool_call
+    // after the raw tool (`generate_image`), so a name test skipped every
+    // Codex-originated widget and left it loading forever.
+    const isMcp = patch.family === "mcp" || patch.name.startsWith("mcp__");
+    if (!isMcp) return;
     const toolCallId = patch.toolUseId;
-    // One widget per tool call, however many times its row is rewritten.
+    turn.toolCallKeys.set(toolCallId, key);
+    // One widget per tool call, however many times its row is rewritten — and
+    // none at all when the harness is resolving its own.
+    if (turn.widgetOwner.has(toolCallId)) return;
+    turn.widgetOwner.set(toolCallId, "runner");
     const widgetKey = `widget:${toolCallId}`;
-    if (turn.blocks.has(widgetKey)) return;
     turn.blocks.set(widgetKey, {
       id: newId("block"),
       index: store.blocks.nextIndex(turn.turnId),
@@ -227,10 +262,17 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     };
     void (async (): Promise<void> => {
       const target = await widgets.detect(call);
+      // The harness's own `widget` event lands on the very next iteration of
+      // the consume loop, i.e. while this await is outstanding. If it claimed
+      // the call, its row is already persisted and this slot is now *its*
+      // slot: leave both alone.
+      if (turn.widgetOwner.get(toolCallId) === "harness") return;
       if (!target?.resourceUri) {
         // No widget after all — drop the slot again so the index it reserved
-        // is not left as a hole in the transcript.
+        // is not left as a hole in the transcript. Safe because nothing has
+        // been written to it: the first `writeBlock` is below.
         turn.blocks.delete(widgetKey);
+        turn.widgetOwner.delete(toolCallId);
         return;
       }
       const blockId = turn.blocks.get(widgetKey)?.id;
@@ -247,6 +289,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         toolResult,
         meta: null,
       });
+      turn.widgetOpening.add(toolCallId);
       const { patch: resolved } = await widgets.open({
         ...call,
         ...target,
@@ -255,19 +298,98 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         toolResult,
       });
       writeBlock(turn, widgetKey, resolved);
+      markToolCallRendered(turn, toolCallId, resolved);
       log.info(`[engine] widget ${target.serverName}/${target.toolName} for block ${blockId}`);
     })().catch((err: unknown) => {
-      turn.blocks.delete(widgetKey);
+      if (turn.widgetOwner.get(toolCallId) === "runner") {
+        turn.blocks.delete(widgetKey);
+        turn.widgetOwner.delete(toolCallId);
+      }
       log.warn(`[engine] widget resolution failed for ${patch.name}`, err);
     });
+  }
+
+  /**
+   * A `widget` block the *harness* emitted (Codex, `api`). It carries the
+   * `ui://` URI already, so no detection is needed — but nothing was fetching
+   * the document either, which is why a Codex MCP App rendered as a card that
+   * span forever with `html: null`. This is the only other caller of
+   * `widgets.open()`.
+   */
+  function resolveHarnessWidget(turn: ActiveTurn, key: string, patch: BlockPatch): void {
+    if (patch.kind !== "widget") return;
+    const toolCallId = patch.toolCallId;
+    turn.widgetOwner.set(toolCallId, "harness");
+    // The runner may have resolved this same widget a microtask earlier;
+    // writing the harness's `pending` patch over it would put the card back
+    // into its loading state for good.
+    if (turn.widgetResolved.has(toolCallId) && patch.htmlStatus === "pending") return;
+    writeBlock(turn, key, patch);
+    const widgets = deps.widgets;
+    if (!widgets) return;
+    if (patch.htmlStatus !== "pending" || patch.html !== null) return;
+    if (turn.widgetOpening.has(toolCallId)) return;
+    turn.widgetOpening.add(toolCallId);
+
+    const blockId = turn.blocks.get(key)?.id;
+    if (!blockId) return;
+    const agentId = store.turns.get(turn.turnId)?.agentId ?? "";
+    void (async (): Promise<void> => {
+      const { patch: resolved } = await widgets.open({
+        sessionId: turn.sessionId,
+        agentId,
+        blockId,
+        toolCallId,
+        serverName: patch.serverName,
+        toolName: patch.toolName,
+        resourceUri: patch.resourceUri,
+        toolInput: patch.toolInput,
+        toolResult: patch.toolResult ?? null,
+        ...(patch.meta !== null && patch.meta !== undefined ? { resultMeta: patch.meta } : {}),
+      });
+      writeBlock(turn, key, resolved);
+      markToolCallRendered(turn, toolCallId, resolved);
+    })().catch((err: unknown) => {
+      // Never leave the card spinning: say the widget is unavailable and keep
+      // the ordinary tool-call card, which is R31's own fallback.
+      writeBlock(turn, key, { ...patch, htmlStatus: "unavailable" });
+      log.warn(`[engine] widget resolution failed for ${patch.serverName}/${patch.toolName}`, err);
+    });
+  }
+
+  /**
+   * R31: "Non-App tool results keep the tool-call card" — an App result does
+   * not, or the same payload renders twice (the collapsible tool row and the
+   * widget under it). The flag goes on only once the widget's HTML actually
+   * resolved to `ready`, so an unavailable widget still leaves the tool card
+   * standing rather than hiding the result altogether.
+   */
+  function markToolCallRendered(turn: ActiveTurn, toolCallId: string, resolved: BlockPatch): void {
+    if (resolved.kind !== "widget") return;
+    if (resolved.htmlStatus !== "pending") turn.widgetResolved.add(toolCallId);
+    if (resolved.htmlStatus !== "ready") return;
+    const toolKey = turn.toolCallKeys.get(toolCallId);
+    if (!toolKey) return;
+    const slot = turn.blocks.get(toolKey);
+    if (!slot) return;
+    const existing = store.blocks.get(slot.id);
+    if (!existing || existing.kind !== "tool_call" || existing.hasWidget) return;
+    // Strip the envelope `writeBlock` re-applies; what is left is the patch.
+    const { id, turnId, sessionId, index, createdAt, updatedAt, ...rest } = existing;
+    void id, turnId, sessionId, index, createdAt, updatedAt;
+    writeBlock(turn, toolKey, { ...rest, hasWidget: true });
   }
 
   async function consume(turn: ActiveTurn, events: AsyncIterable<EngineEvent>): Promise<void> {
     for await (const event of events) {
       switch (event.type) {
         case "block": {
+          if (event.patch.kind === "widget") {
+            resolveHarnessWidget(turn, event.key, event.patch);
+            break;
+          }
           writeBlock(turn, event.key, event.patch);
-          maybeOpenWidget(turn, event.patch);
+          maybeOpenWidget(turn, event.key, event.patch);
           break;
         }
         case "permission": {
@@ -395,6 +517,10 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         turnId: args.turnId,
         harness,
         blocks: new Map(),
+        widgetOwner: new Map(),
+        widgetOpening: new Set(),
+        widgetResolved: new Set(),
+        toolCallKeys: new Map(),
       };
       active.set(key, turn);
       events = harness.send({ turnId: args.turnId, text: args.text });

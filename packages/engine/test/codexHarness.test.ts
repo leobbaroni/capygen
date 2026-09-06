@@ -336,6 +336,35 @@ describe("CodexHarness — command approval (recorded frames)", () => {
     }
   });
 
+  it("declines an approval left open when turn/completed settles the turn", async () => {
+    // The bug: `onTurnCompleted` closed the turn without touching `pending`,
+    // so the promise `askCommandApproval` was waiting on never resolved. The
+    // card stayed pending forever, `SessionRunner` forgot the request id, and
+    // codex app-server never got a `{decision}` reply for that command.
+    const { server, harness } = rig(APPROVAL_THREAD, APPROVAL_TURN);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "run it" }));
+    await server.waitForRequest("turn/start");
+    const answered = server.ask(
+      "item/commandExecution/requestApproval",
+      approvalRequest!.params,
+    );
+    await vi.waitFor(() => expect(turn.events.some((e) => e.type === "permission")).toBe(true));
+
+    // The turn ends while the approval is still on screen.
+    server.notify("turn/completed", {
+      threadId: (APPROVAL_THREAD as { thread: { id: string } }).thread.id,
+      turn: { id: "turn_1", status: "completed", items: [] },
+    });
+
+    expect(await answered).toEqual({ decision: "decline" });
+    await turn.done;
+    // …and the card says so rather than spinning.
+    expect(latest(turn.events, "permission")).toMatchObject({
+      decision: { behavior: "deny" },
+    });
+    await harness.dispose();
+  });
+
   it("denies rather than guesses when no turn is open to ask in", async () => {
     const { server, harness } = rig(APPROVAL_THREAD, APPROVAL_TURN);
     const turn = drain(harness.send({ turnId: "trn_1", text: "hi" }));

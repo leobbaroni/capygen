@@ -204,6 +204,13 @@ function fakeSdk(calls: FakeCalls, options: { failFor?: string } = {}): McpSdk {
             inputSchema: { type: "object", properties: { q: { type: "string" } } },
             _meta: { [MCP_APPS_RESOURCE_URI_META_KEY]: "ui://x/view.html" },
           },
+          {
+            name: "lookup",
+            description: "read-only lookup",
+            inputSchema: { type: "object", properties: {} },
+            // Top-level sibling of inputSchema, as the MCP spec defines it.
+            annotations: { readOnlyHint: true },
+          },
           { name: "" },
         ],
       };
@@ -265,7 +272,7 @@ describe("McpClientPool", () => {
       log: SILENT,
     });
     const tools = await pool.listTools("my server");
-    expect(tools).toHaveLength(1); // the nameless entry is dropped
+    expect(tools).toHaveLength(2); // the nameless entry is dropped
     expect(tools[0]?.qualifiedName).toBe("mcp__my_server__search");
     expect(qualifyToolName("my server", "search")).toBe("mcp__my_server__search");
     expect(widgetResourceUri(tools[0]?.meta)).toBe("ui://x/view.html");
@@ -293,7 +300,7 @@ describe("McpClientPool", () => {
       log: SILENT,
     });
     const tools = await pool.listAllTools();
-    expect(tools.map((t) => t.serverName)).toEqual(["beta"]);
+    expect([...new Set(tools.map((t) => t.serverName))]).toEqual(["beta"]);
     expect(pool.failureReason("alpha")).toContain("cannot start a");
     expect(pool.failureReason("beta")).toBeUndefined();
     await pool.close();
@@ -358,6 +365,21 @@ describe("MCP tools as local tools", () => {
     expect(result?.content).toBe("hi");
     // `_meta` survives on `raw` for the widget host (R31).
     expect((result?.raw as { _meta?: unknown })._meta).toEqual({ keep: 1 });
+    await pool.close();
+  });
+
+  it("honours a server's top-level annotations.readOnlyHint (R26: no needless card)", async () => {
+    const pool = new McpClientPool({
+      servers: [STDIO],
+      sdk: fakeSdk({ connects: [], listTools: 0 }),
+      log: SILENT,
+    });
+    const tools = await mcpToolDefinitions(pool);
+    const lookup = tools.find((t) => t.name === "mcp__alpha__lookup");
+    // `annotations` is a sibling of `inputSchema`, not a member of it; reading
+    // it from inside the schema meant this was always "execute", so every
+    // read-only server tool blocked the turn on a permission card.
+    expect(lookup?.permissionClass).toBe("read");
     await pool.close();
   });
 

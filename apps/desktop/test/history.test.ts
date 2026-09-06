@@ -129,6 +129,33 @@ describe("loadApiHistory", () => {
     ]);
   });
 
+  it("replays a denied tool call as its denial, not as an unfinished one", () => {
+    const u = turn("user", "done");
+    put(u, { kind: "text", text: "delete it" });
+    const a = turn("agent", "done", agentId);
+    put(a, {
+      kind: "tool_call",
+      name: "bash",
+      input: { command: "rm -rf ." },
+      output: "The user denied this tool call.",
+      status: "denied",
+      toolUseId: "call_d",
+    });
+
+    const [, , results] = load();
+    // "the turn ended before this tool finished" reads to the model as an
+    // interruption — a plausible reason to retry the exact command the user
+    // just refused. The denial has to survive the replay.
+    expect(results!.content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "call_d",
+        content: "The user denied this tool call.",
+        isError: true,
+      },
+    ]);
+  });
+
   it("replays another agent's reply as attributed user text, never as its own", () => {
     const a = turn("agent", "done", otherAgentId);
     put(a, { kind: "text", text: "I looked at it" });

@@ -305,6 +305,14 @@ export const ToolCallBlockSchema = z.object({
    * whichever harness/handler decides a value is worth the extra table).
    */
   outputRef: z.string().optional(),
+  /**
+   * The result carried an MCP App UI and a `widget` block rendered it (R31:
+   * "Non-App tool results keep the tool-call card" — an App result does not).
+   * Set by the session runner only once the widget's HTML actually resolved to
+   * `ready`, so a widget that turns out to be unavailable still leaves the
+   * ordinary tool card standing rather than hiding the result entirely.
+   */
+  hasWidget: z.boolean().optional(),
 });
 
 export const DiffBlockSchema = z.object({
@@ -398,6 +406,16 @@ export const QuestionBlockSchema = z.object({
   allowOther: z.boolean().optional(),
   /** The free-text answer, when the user picked "Other" instead of an option. */
   otherText: z.string().nullable().optional(),
+  /**
+   * `cancelled` when the request was torn down without an answer — the turn was
+   * interrupted, or the app quit while the card was open (R32). Without it an
+   * interrupted question resolved with an empty answer map, and `{}` is truthy,
+   * so the card flipped to a green "Submitted" with an empty list: capygen
+   * telling the user their answer went through when they had just cancelled.
+   * Left optional (no default) so every existing row and fixture keeps its
+   * exact shape; absent means "pending or answered", read off `answers`.
+   */
+  status: z.enum(["pending", "answered", "cancelled"]).optional(),
 });
 
 /** `_meta`/tool-call linkage every MCP-hosted widget carries (R31). */

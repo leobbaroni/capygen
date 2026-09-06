@@ -462,6 +462,118 @@ function bang(): never {
   throw new Error("routing endpoint down");
 }
 
+describe("ClaudeHarness — a cancelled question is not a submitted one", () => {
+  it("interrupt leaves the card cancelled with no answers, and denies the tool", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "ask me" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    const input = {
+      questions: [
+        { question: "Which?", multiSelect: false, options: [{ label: "A" }, { label: "B" }] },
+      ],
+    };
+    const asked = fake.options().canUseTool?.("AskUserQuestion", input, {
+      signal: new AbortController().signal,
+      toolUseID: "toolu_q",
+      requestId: "req-1",
+    } as never);
+    await vi.waitFor(() => expect(turn.events.some((e) => e.type === "question")).toBe(true));
+
+    // The user presses Stop while the card is open.
+    await harness.interrupt();
+
+    // `{}` used to come back here, which the card read as a submission and
+    // rendered as a green "Submitted" with an empty list.
+    expect(await asked).toMatchObject({ behavior: "deny" });
+    await vi.waitFor(() =>
+      expect(blocks(turn.events, "question").at(-1)?.patch.status).toBe("cancelled"),
+    );
+    expect(blocks(turn.events, "question").at(-1)?.patch.answers).toBeNull();
+    await harness.dispose();
+  });
+
+  it("treats an empty answer map from the card's Decline button as cancelled", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "ask me" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    const asked = fake.options().canUseTool?.(
+      "AskUserQuestion",
+      { questions: [{ question: "Which?", multiSelect: false, options: [{ label: "A" }] }] },
+      { signal: new AbortController().signal, toolUseID: "toolu_q", requestId: "r" } as never,
+    );
+    await vi.waitFor(() => expect(turn.events.some((e) => e.type === "question")).toBe(true));
+    const question = turn.events.find(
+      (e): e is Extract<EngineEvent, { type: "question" }> => e.type === "question",
+    )!;
+    expect(harness.answerQuestion(question.requestId, {})).toBe(true);
+    expect(await asked).toMatchObject({ behavior: "deny" });
+    await vi.waitFor(() =>
+      expect(blocks(turn.events, "question").at(-1)?.patch.status).toBe("cancelled"),
+    );
+    await harness.dispose();
+  });
+});
+
+describe("ClaudeHarness — slash command details (R14)", () => {
+  it("folds supportedCommands() descriptions and argument hints onto init's names", async () => {
+    const fake = makeFakeSdk();
+    // `init.slash_commands` is a bare string[]; this control request is where
+    // the description and argumentHint live (spike §8.1).
+    fake.supportedCommands = [
+      { name: "cockpit:pilot", description: "(Cockpit) Pilot", argumentHint: "<what next>" },
+      { name: "usage", description: "Show tokens and cost", argumentHint: "", aliases: ["cost"] },
+    ];
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "hi" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.out.push(
+      initMessage({
+        slash_commands: ["cockpit:pilot", "cost", "context"],
+        skills: [],
+        plugins: [{ name: "cockpit" }],
+      }),
+    );
+
+    await vi.waitFor(() => {
+      const pilot = harness.listCommands().find((c) => c.name === "/cockpit:pilot");
+      expect(pilot?.description).toBe("(Cockpit) Pilot");
+    });
+    const commands = harness.listCommands();
+    // An argumentHint is what stops the composer firing the command with no
+    // argument the moment it is selected.
+    expect(commands.find((c) => c.name === "/cockpit:pilot")?.argumentHint).toBe("<what next>");
+    // `/cost` is an alias of `usage`, so it inherits that entry's description.
+    expect(commands.find((c) => c.name === "/cost")?.description).toBe("Show tokens and cost");
+    // Nothing said about `/context`: it keeps the bare name rather than lying.
+    expect(commands.find((c) => c.name === "/context")?.description).toBe("");
+    expect(fake.supportedCommandCalls).toBe(1);
+    await harness.dispose();
+    await turn.done;
+  });
+
+  it("replaces the list when the CLI pushes system/commands_changed", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "hi" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.out.push(initMessage({ slash_commands: ["context"], skills: [], plugins: [] }));
+    await vi.waitFor(() => expect(harness.listCommands()).toHaveLength(1));
+    fake.out.push({
+      type: "system",
+      subtype: "commands_changed",
+      commands: [{ name: "context", description: "Show current context usage", argumentHint: "" }],
+    } as never);
+    await vi.waitFor(() =>
+      expect(harness.listCommands()[0]?.description).toBe("Show current context usage"),
+    );
+    await harness.dispose();
+    await turn.done;
+  });
+});
+
 describe("ClaudeHarness — failure and interruption", () => {
   it("ends the turn as interrupted and calls the SDK's interrupt", async () => {
     const fake = makeFakeSdk();

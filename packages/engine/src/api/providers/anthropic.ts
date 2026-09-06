@@ -1,19 +1,31 @@
 /**
  * The Anthropic provider: Messages API, streaming, tools, prompt caching.
  *
- * **SPEC R24 lives here.** Two `cache_control: {type:"ephemeral"}` markers are
- * written into every request body:
+ * **SPEC R24 lives here.** All four `cache_control: {type:"ephemeral"}`
+ * breakpoints Anthropic allows are written into every request body:
  *
- *   1. on the single system text block, and
- *   2. on the **last** tool definition.
+ *   1. on the single system text block,
+ *   2. on the **last** tool definition,
+ *   3. on the last content block of the **last** message, and
+ *   4. on the last content block of the message before it.
  *
  * Anthropic caches a *prefix*, and a breakpoint caches everything up to and
  * including the block it is on — so a marker on the last tool covers the whole
  * `tools` array plus the system prompt in front of it. Marking every tool would
- * spend breakpoints (there are four) for no extra coverage. Both the prompt
+ * spend breakpoints for no extra coverage. Both the prompt
  * (`buildSystemPrompt`, built once per session) and the tool array (stable
  * order, `builtinTools`) are byte-identical across the turns of a session,
  * which is the only reason the cache ever hits.
+ *
+ * The two **message** breakpoints are the ones that make a long session
+ * affordable, and they were missing: with breakpoints only on system+tools the
+ * cached prefix stopped where the conversation started, so every byte of
+ * `messages` was re-billed at the full input rate on every request — on each
+ * of the up to 24 tool-loop round trips inside a single turn, and again on
+ * every later turn of the session (`ApiHarness.messages` only grows). The
+ * trailing pair is Anthropic's documented conversation pattern: the last
+ * breakpoint *writes* the cache covering the whole history, and the one behind
+ * it *reads* what the previous request wrote.
  *
  * The client is reached through `AnthropicClientLike` rather than the SDK's own
  * types. The SDK types the stream through generated unions whose members change
@@ -110,7 +122,28 @@ export function anthropicMessages(messages: readonly ChatMessage[]): unknown[] {
     }
     if (content.length > 0) out.push({ role: message.role, content });
   }
-  return out;
+  return markMessageCacheBreakpoints(out);
+}
+
+/** How many trailing messages carry a cache breakpoint (see the file header). */
+export const MESSAGE_CACHE_BREAKPOINTS = 2;
+
+/**
+ * Put a `cache_control` marker on the last content block of each of the final
+ * {@link MESSAGE_CACHE_BREAKPOINTS} messages. Exported so the request-capture
+ * test can assert it on the real body rather than on an intention.
+ */
+export function markMessageCacheBreakpoints(messages: unknown[]): unknown[] {
+  const start = Math.max(0, messages.length - MESSAGE_CACHE_BREAKPOINTS);
+  for (let i = start; i < messages.length; i += 1) {
+    const message = messages[i] as { content?: unknown[] } | undefined;
+    const content = message?.content;
+    if (!Array.isArray(content) || content.length === 0) continue;
+    const last = content[content.length - 1];
+    if (!isRecord(last)) continue;
+    content[content.length - 1] = { ...last, cache_control: CACHE_CONTROL_EPHEMERAL };
+  }
+  return messages;
 }
 
 export function buildAnthropicBody(request: ProviderRequest): Record<string, unknown> {

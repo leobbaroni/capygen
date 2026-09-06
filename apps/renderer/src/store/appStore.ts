@@ -25,6 +25,7 @@ import {
   type Agent,
   type AgentDraft,
   type Block,
+  type ElicitationBlock,
   type HarnessInfo,
   type PermissionBlock,
   type Project,
@@ -140,21 +141,42 @@ export function usageEventsForTurn(state: AppState, turnId: string): UsageEvent[
 }
 
 /**
- * The oldest unanswered permission/question block in the open session, or
- * null. There is at most one live request at a time in practice (the
- * backend blocks on the answer before continuing), so "oldest" only matters
- * for picking a stable one while more than one is technically unresolved.
+ * The oldest block in the open session that is genuinely still waiting on the
+ * user, or null.
+ *
+ * All three of R32's interaction kinds count, elicitation included — it was
+ * missing, so a Codex MCP server blocked on an elicitation form left the mascot
+ * reading "thinking" while the turn was in fact waiting on a click.
+ *
+ * A request in `staleRequests` is skipped: the user answered it after nothing
+ * was listening any more, so the row keeps `decision: null` forever. Without
+ * the check, one stale card pinned the mascot to "waiting" for the rest of the
+ * session — through every later turn — because `waiting` outranks everything
+ * but `listening` in `deriveMascotState`.
+ *
+ * There is at most one live request at a time in practice (the backend blocks
+ * on the answer before continuing), so "oldest" only matters for picking a
+ * stable one while more than one is technically unresolved — which is also
+ * what `PermissionCard` uses it for, to arm its keyboard shortcut on exactly
+ * one card.
  */
 export function pendingInteractionBlock(
   state: AppState,
-): PermissionBlock | QuestionBlock | null {
-  let found: PermissionBlock | QuestionBlock | null = null;
+): PermissionBlock | QuestionBlock | ElicitationBlock | null {
+  let found: PermissionBlock | QuestionBlock | ElicitationBlock | null = null;
+  const stale = new Set(state.staleRequests);
   for (const block of Object.values(state.blocks)) {
+    let candidate: PermissionBlock | QuestionBlock | ElicitationBlock | null = null;
     if (block.kind === "permission" && block.decision === null) {
-      if (!found || block.createdAt < found.createdAt) found = block;
+      if (!stale.has(block.request.requestId)) candidate = block;
     } else if (block.kind === "question" && block.answers === null) {
-      if (!found || block.createdAt < found.createdAt) found = block;
+      // `status: "cancelled"` is a settled question, not a waiting one.
+      if (block.status !== "cancelled" && !stale.has(block.requestId)) candidate = block;
+    } else if (block.kind === "elicitation" && block.status === "pending") {
+      // Elicitation is answered by block id, so that is what `markStale` files.
+      if (!stale.has(block.id) && !stale.has(block.requestId)) candidate = block;
     }
+    if (candidate && (!found || candidate.createdAt < found.createdAt)) found = candidate;
   }
   return found;
 }

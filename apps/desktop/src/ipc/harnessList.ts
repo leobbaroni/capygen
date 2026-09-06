@@ -96,7 +96,7 @@ const API_MODELS: Record<ApiProvider, { id: string; label: string }[]> = {
 };
 
 /** Env vars that stand in for a stored key, per provider (`api/keys.ts`). */
-const API_ENV_KEYS: Record<ApiProvider, string> = {
+export const API_ENV_KEYS: Record<ApiProvider, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",

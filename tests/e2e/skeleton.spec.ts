@@ -227,9 +227,11 @@ test.describe("live Claude walking skeleton", () => {
       // The mascot says the session is waiting on the user (CONTEXT.md §Mascot).
       await expect(page.getByTestId("mascot")).toHaveAttribute("data-state", "waiting");
 
-      const blue = card.getByRole("button", { name: /blue/i }).first();
+      // A single-select question renders real radios now (the reference's own
+      // contract), so the option is a radio, not a button.
+      const blue = card.getByRole("radio", { name: /blue/i }).first();
       await expect(blue).toBeVisible();
-      await blue.click();
+      await blue.check();
       await card.getByTestId("block-question-submit").click();
 
       // The block flips to answered, and the answer is what we picked.

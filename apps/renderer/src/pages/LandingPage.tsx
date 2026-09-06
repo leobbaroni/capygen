@@ -11,7 +11,7 @@
  * Submitting creates the session and navigates to it, then sends the text —
  * SPEC R5: submitting the composer creates a session and starts the first turn.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Folder, GitBranch } from "lucide-react";
 import { DEFAULT_HEADING, type Project } from "@capygen/shared";
@@ -35,10 +35,27 @@ export function LandingPage() {
 
   const [selected, setSelected] = useState<Project | null>(null);
   const project = selected ?? projects[0] ?? null;
-  // SPEC item 5's harness picker: nothing chosen yet reads as "use the
-  // default backend/model" (Settings ▸ General) — `startSession` only gets a
-  // `leadAgent` override once the user has actually picked one.
+  // SPEC item 5's harness picker. Seeded from the first *available* backend as
+  // soon as `harness.list` answers, and not touched again once the user picks.
+  //
+  // Leaving it null was a lie the picker told: the button labelled itself with
+  // the first available harness, but a session created without opening the
+  // picker sent `agents: []`, and `sessions.create`'s fallback is hardcoded to
+  // `claude`. On a machine where Codex is signed in and Claude is not, the
+  // button said "Codex" and the turn ran — and failed — on Claude.
   const [leadAgent, setLeadAgent] = useState<AgentChoice | null>(null);
+  const [picked, setPicked] = useState(false);
+  useEffect(() => {
+    if (picked) return;
+    const first = harnesses.find((h) => h.available);
+    if (!first || !first.defaultModel) return;
+    setLeadAgent({ backend: first.backend, model: first.defaultModel });
+  }, [harnesses, picked]);
+
+  function chooseAgent(choice: AgentChoice): void {
+    setPicked(true);
+    setLeadAgent(choice);
+  }
 
   async function handleSubmit(text: string): Promise<void> {
     // No project yet: ask for one first. The picker is the shell's native
@@ -86,7 +103,7 @@ export function LandingPage() {
           commands={commands}
           harnesses={harnesses}
           agent={leadAgent}
-          onPickAgent={setLeadAgent}
+          onPickAgent={chooseAgent}
           tray={
             <>
               {/* Host chip: capygen is local-only (no host/sandbox picker per

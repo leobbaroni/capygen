@@ -354,6 +354,65 @@ describe("settings, commands, version", () => {
     expect(commands.find((c) => c.name === "/compact")?.argumentHint).toBeUndefined();
   });
 
+  it("offers a backend only the built-ins it can actually run (R14)", async () => {
+    const project = (await call("projects.pick", {})) as { id: string };
+    const claude = (await call("sessions.create", {
+      projectId: project.id,
+      agents: [{ name: "capy", backend: "claude", model: "claude-sonnet-5", role: "lead" }],
+    })) as { session: { id: string } };
+    const codex = (await call("sessions.create", {
+      projectId: project.id,
+      agents: [{ name: "codex", backend: "codex", model: "gpt-5.5", role: "lead" }],
+    })) as { session: { id: string } };
+    const api = (await call("sessions.create", {
+      projectId: project.id,
+      agents: [{ name: "api", backend: "api", model: "claude-opus-4-5", role: "lead" }],
+    })) as { session: { id: string } };
+
+    const names = async (sessionId: string): Promise<string[]> =>
+      ((await call("chat.listCommands", { sessionId })) as { name: string }[]).map((c) => c.name);
+
+    // Claude Code implements all seven (spike §8.1).
+    expect(await names(claude.session.id)).toEqual(
+      expect.arrayContaining(["/compact", "/context", "/cost", "/help"]),
+    );
+    // Codex publishes its own /compact,/model,/clear,/review,/status; the four
+    // it cannot run would otherwise have been sent to the model as literal
+    // text and spent a real turn.
+    for (const forbidden of ["/context", "/effort", "/help", "/cost"]) {
+      expect(await names(codex.session.id)).not.toContain(forbidden);
+      expect(await names(api.session.id)).not.toContain(forbidden);
+    }
+    // The `api` backend has no command layer at all.
+    expect(await names(api.session.id)).toEqual([]);
+  });
+
+  it("records an empty question answer as cancelled, not as a submission", async () => {
+    const { sessionId } = await newSession();
+    const turn = store.turns.create({ sessionId, role: "agent", status: "streaming" });
+    const block = store.blocks.upsert({
+      id: "blk_q",
+      turnId: turn.id,
+      sessionId,
+      index: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      kind: "question",
+      requestId: "req_q",
+      questions: [{ question: "Which?", multiSelect: false, options: [{ label: "A" }] }],
+      answers: null,
+    });
+    expect(block.kind).toBe("question");
+    // The stub engine answers nothing, so drive the handler with an engine
+    // that says the answer was delivered — the row-writing half is what this
+    // pins, and `answers: {}` must never land as a submission.
+    const handler = ipc.handlers["question.answer"] as (a: unknown) => unknown;
+    ipc.engine.answerQuestion = () => true;
+    await handler({ requestId: "req_q", answers: {} });
+    const after = store.blocks.get("blk_q");
+    expect(after).toMatchObject({ kind: "question", answers: null, status: "cancelled" });
+  });
+
   it("reports the runtime the shell is on", async () => {
     expect(await call("app.version", {})).toMatchObject({
       name: "capygen",

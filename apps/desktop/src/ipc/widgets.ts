@@ -45,6 +45,7 @@ import {
   type WidgetResolution,
   type WidgetState,
 } from "@capygen/engine";
+import type { McpPoolRegistry } from "./mcpPools.js";
 
 /** The privileged scheme widget documents are served from. */
 export const WIDGET_SCHEME = "capygen-widget";
@@ -106,6 +107,14 @@ export interface WidgetHostDeps {
    * reads the same server configuration the CLIs use and connects lazily.
    */
   createAccess?(projectPath: string): Promise<WidgetMcpAccess>;
+  /**
+   * The shared, reference-counted MCP pool registry (R26). When present the
+   * default access borrows from it instead of opening its own connections, so
+   * an `api` agent and the widget host reach one project's servers through one
+   * pool. Absent (tests, a profile with no MCP client) each falls back to its
+   * own pool, which is what both did before.
+   */
+  pools?: McpPoolRegistry;
   /** `shell.openExternal`, or a stand-in in tests. */
   openExternal?: (url: string) => Promise<void> | void;
   /** Writes a file the widget asked the host to save; returns whether it did. */
@@ -174,8 +183,16 @@ interface ProjectHost {
 async function defaultAccess(
   projectPath: string,
   log: WidgetHostLog,
+  pools: McpPoolRegistry | undefined,
 ): Promise<{ access: WidgetMcpAccess; close: () => Promise<void> }> {
   const servers = await loadMcpServers({ projectPath, log });
+  // Shared with `ApiHarness` when both resolve the same server list, so a
+  // project's stdio servers are spawned and listed once per session, not twice
+  // (SPEC R26 — `apps/desktop/src/ipc/mcpPools.ts`).
+  if (pools) {
+    const lease = pools.acquire(servers);
+    return { access: createPoolWidgetAccess({ pool: lease.pool }), close: lease.release };
+  }
   const pool = new McpClientPool({
     servers,
     env: cleanEnv(),
@@ -215,7 +232,7 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
           close: async () => {},
         };
       }
-      const { access, close } = await defaultAccess(projectPath, log);
+      const { access, close } = await defaultAccess(projectPath, log, deps.pools);
       return {
         access,
         bridge: new WidgetHostBridge({

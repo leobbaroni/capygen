@@ -15,6 +15,13 @@
  * changes until the plan is accepted", and a mode that could be clicked out of
  * one tool call at a time would not keep it. The denial message tells the model
  * to present its plan instead, which is what Claude Code's plan mode does.
+ *
+ * `read` stays `allow` in every mode, plan included — a planner that has to be
+ * clicked through every file it opens is not a planner, and Claude Code's own
+ * plan mode reads freely too. What makes that safe is the *boundary*, not the
+ * gate: `resolvePath` (`./fs.ts`) refuses any path outside the session's
+ * project directory, so an `allow`ed read cannot reach `~/.ssh` or another
+ * project's `.env` however the model was talked into asking for it.
  */
 import type { PermissionMode } from "@capygen/shared";
 import { askUserQuestionTool } from "./ask.js";

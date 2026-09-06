@@ -106,6 +106,25 @@ describe("read_file", () => {
       path.normalize(path.join(root, "src", "a.ts")),
     );
   });
+
+  it("refuses a path outside the project directory, absolute or via ..", () => {
+    // `read` is an `allow` class in every permission mode, plan included, so
+    // the boundary is the only thing between a model and ~/.ssh (R27).
+    for (const target of [
+      path.join(os.homedir(), ".ssh", "id_rsa"),
+      path.join("..", "..", "other-project", ".env"),
+    ]) {
+      expect(() => resolvePath(root, target)).toThrow(/outside the project directory/);
+    }
+    expect(resolvePath(root, ".")).toBe(path.resolve(root));
+  });
+
+  it("reports an out-of-project read as a tool error, not a crash", async () => {
+    const outside = path.join(os.homedir(), ".ssh", "id_rsa");
+    await expect(readFileTool.run({ path: outside }, ctx())).rejects.toThrow(
+      /outside the project directory/,
+    );
+  });
 });
 
 describe("write_file and edit_file", () => {
@@ -378,6 +397,106 @@ describe("web_fetch", () => {
     });
     const result = await tool.run({ url: "https://example.com/big", max_bytes: 2_000 }, ctx());
     expect(result.content).toContain("truncated at 2000 bytes");
+  });
+
+  it("refuses a redirect that downgrades to http (SSRF: the scheme is re-checked per hop)", async () => {
+    const seen: string[] = [];
+    const tool = createWebFetchTool({
+      fetch: (async (url: string) => {
+        seen.push(url);
+        return {
+          ok: false,
+          status: 302,
+          statusText: "Found",
+          url,
+          headers: {
+            get: (n: string) =>
+              n.toLowerCase() === "location"
+                ? "http://169.254.169.254/latest/meta-data/"
+                : null,
+          },
+          text: async () => "",
+        };
+      }) as never,
+    });
+    const result = await tool.run({ url: "https://attacker.example/go" }, ctx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("only allows https");
+    // The metadata endpoint was never requested.
+    expect(seen).toEqual(["https://attacker.example/go"]);
+  });
+
+  it("refuses an https redirect to a loopback/private address", async () => {
+    const tool = createWebFetchTool({
+      fetch: (async (url: string) => ({
+        ok: false,
+        status: 307,
+        statusText: "Temporary Redirect",
+        url,
+        headers: {
+          get: (n: string) => (n.toLowerCase() === "location" ? "https://127.0.0.1/admin" : null),
+        },
+        text: async () => "",
+      })) as never,
+    });
+    const result = await tool.run({ url: "https://example.com/go" }, ctx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("loopback/private address");
+  });
+
+  it("refuses a private address on the first hop too", async () => {
+    let called = false;
+    const tool = createWebFetchTool({
+      fetch: (async () => {
+        called = true;
+        throw new Error("should not be reached");
+      }) as never,
+    });
+    for (const url of [
+      "https://localhost/x",
+      "https://127.0.0.1/x",
+      "https://10.1.2.3/x",
+      "https://192.168.0.1/x",
+      "https://169.254.169.254/x",
+    ]) {
+      const result = await tool.run({ url }, ctx());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("loopback/private address");
+    }
+    expect(called).toBe(false);
+  });
+
+  it("follows an https → https redirect and returns the final body", async () => {
+    const seen: string[] = [];
+    const tool = createWebFetchTool({
+      fetch: (async (url: string) => {
+        seen.push(url);
+        if (url.endsWith("/go")) {
+          return {
+            ok: false,
+            status: 302,
+            statusText: "Found",
+            url,
+            headers: {
+              get: (n: string) => (n.toLowerCase() === "location" ? "/final" : null),
+            },
+            text: async () => "",
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          url,
+          headers: { get: (n: string) => (n.toLowerCase() === "location" ? null : "text/plain") },
+          text: async () => "arrived",
+        };
+      }) as never,
+    });
+    const result = await tool.run({ url: "https://example.com/go" }, ctx());
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("arrived");
+    expect(seen).toEqual(["https://example.com/go", "https://example.com/final"]);
   });
 
   it("surfaces a non-2xx status as an error", async () => {

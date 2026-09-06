@@ -41,6 +41,14 @@ export interface McpToolInfo {
   serverName: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /**
+   * The tool's `annotations`, verbatim. A **sibling** of `inputSchema` on the
+   * `Tool` object, not a member of it (`@modelcontextprotocol/sdk` 1.30.0
+   * `types.d.ts:2381-2419`) — `mcpPermissionClass` used to look for it inside
+   * the schema, where it never is, so `readOnlyHint` never fired and every
+   * read-only server tool raised a permission card.
+   */
+  annotations?: Record<string, unknown> | undefined;
   /** The tool's `_meta`, verbatim — the MCP Apps widget host reads `ui://` from it. */
   meta?: Record<string, unknown> | undefined;
 }

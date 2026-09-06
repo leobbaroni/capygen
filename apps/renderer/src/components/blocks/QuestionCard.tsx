@@ -9,6 +9,21 @@
  * fit ("Vite / Next / Remix", when the answer is Astro) is unanswerable and the
  * turn stays blocked on `canUseTool` until the session is interrupted.
  *
+ * Three things the reference form does that this now does too:
+ *
+ *  - **Radio vs. checkbox.** The reference "renders radio inputs (single-select)
+ *    or checkboxes (multi-select)". Both branches used to render the same
+ *    outline buttons, so nothing on screen said whether a second choice would
+ *    add to the first or replace it.
+ *  - **Decline.** The reference wires `onReject` to `submitBinary("decline")`.
+ *    With `allowOther === false` and no acceptable option — a shape
+ *    `QuestionSchema` explicitly anticipates for a Codex user-input field that
+ *    forbids free text — a Submit-only card is a dead end whose only exit is
+ *    interrupting the turn.
+ *  - **State keyed by index, not by question text.** Two identically-worded
+ *    questions in one payload used to share one selection, collide as React
+ *    keys, and submit a single merged entry.
+ *
  * capygen's `question.answer` contract stores one string per question
  * (`Record<question, string>`) — there is no `string[]` slot for a
  * multi-select answer, so a multi-select question's selected labels are
@@ -28,26 +43,44 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
   // Absent → "yes" (see domain.ts's own comment on `allowOther`): every
   // harness that predates this field still gets the Other row it always had.
   const allowOther = block.allowOther !== false;
-  // question text → selected option labels (order preserved for the joined answer).
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  // question text → the free-text answer, when the user picked "Other".
-  const [custom, setCustom] = useState<Record<string, string>>({});
-  const [customOn, setCustomOn] = useState<Record<string, boolean>>({});
+  // Index → selected option labels (order preserved for the joined answer).
+  const [selections, setSelections] = useState<Record<number, string[]>>({});
+  // Index → the free-text answer, when the user picked "Other".
+  const [custom, setCustom] = useState<Record<number, string>>({});
+  const [customOn, setCustomOn] = useState<Record<number, boolean>>({});
 
-  if (block.answers) {
+  // `{}` is truthy, which is how an interrupted question used to render as a
+  // green "Submitted" with an empty list. A settled question has at least one
+  // answer; anything else is pending, cancelled, or stale.
+  const answered = block.answers && Object.keys(block.answers).length > 0;
+
+  if (answered) {
     return (
       <Alert data-testid="block-question" data-state="responded" variant="success">
         <CheckIcon className="size-4 text-success" />
         <AlertTitle>Submitted</AlertTitle>
         <AlertDescription>
           <ul className="flex flex-col gap-0.5">
-            {Object.entries(block.answers).map(([question, answer]) => (
+            {Object.entries(block.answers ?? {}).map(([question, answer]) => (
               <li key={question} className="flex flex-wrap items-baseline gap-x-1.5">
                 <span className="text-muted-foreground">{question}</span>
                 <span className="font-medium text-foreground">{answer}</span>
               </li>
             ))}
           </ul>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (block.status === "cancelled") {
+    return (
+      <Alert data-testid="block-question" data-state="cancelled" variant="default">
+        <CircleSlashIcon className="size-4 text-muted-foreground" />
+        <AlertTitle>Cancelled</AlertTitle>
+        <AlertDescription>
+          The turn ended before this question was answered, so nothing was sent to the
+          agent.
         </AlertDescription>
       </Alert>
     );
@@ -66,44 +99,53 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
     );
   }
 
-  function toggle(question: string, label: string, multiSelect: boolean): void {
+  function toggle(index: number, label: string, multiSelect: boolean): void {
     setSelections((prev) => {
-      const current = prev[question] ?? [];
+      const current = prev[index] ?? [];
       if (multiSelect) {
         const next = current.includes(label)
           ? current.filter((l) => l !== label)
           : [...current, label];
-        return { ...prev, [question]: next };
+        return { ...prev, [index]: next };
       }
-      return { ...prev, [question]: current.includes(label) ? [] : [label] };
+      return { ...prev, [index]: current.includes(label) ? [] : [label] };
     });
     // A single-select question has one answer: picking an option drops "Other".
-    if (!multiSelect) setCustomOn((prev) => ({ ...prev, [question]: false }));
+    if (!multiSelect) setCustomOn((prev) => ({ ...prev, [index]: false }));
   }
 
-  function toggleCustom(question: string, multiSelect: boolean): void {
+  function toggleCustom(index: number, multiSelect: boolean): void {
     setCustomOn((prev) => {
-      const on = !prev[question];
-      if (on && !multiSelect) setSelections((s) => ({ ...s, [question]: [] }));
-      return { ...prev, [question]: on };
+      const on = !prev[index];
+      if (on && !multiSelect) setSelections((s) => ({ ...s, [index]: [] }));
+      return { ...prev, [index]: on };
     });
   }
 
   /** Every label chosen for a question, the free-text one included. */
-  function answerFor(question: string): string[] {
-    const picked = selections[question] ?? [];
-    const typed = customOn[question] ? (custom[question] ?? "").trim() : "";
+  function answerFor(index: number): string[] {
+    const picked = selections[index] ?? [];
+    const typed = customOn[index] ? (custom[index] ?? "").trim() : "";
     return typed === "" ? picked : [...picked, typed];
   }
 
-  const allAnswered = block.questions.every((q) => answerFor(q.question).length > 0);
+  const allAnswered = block.questions.every((_, i) => answerFor(i).length > 0);
 
   function submit(): void {
     const answers: Record<string, string> = {};
-    for (const q of block.questions) {
-      answers[q.question] = answerFor(q.question).join(", ");
-    }
+    block.questions.forEach((q, i) => {
+      answers[q.question] = answerFor(i).join(", ");
+    });
     void answerQuestion(block.requestId, answers);
+  }
+
+  /**
+   * Decline: the same channel Submit uses, with no answers. The harness reads
+   * an empty map as "cancelled" and denies the tool rather than handing the
+   * model a blank answer (`CodexHarness.askUserInput`, `ClaudeHarness`).
+   */
+  function decline(): void {
+    void answerQuestion(block.requestId, {});
   }
 
   return (
@@ -111,11 +153,12 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
       <MessageCircleQuestionIcon className="size-4 text-info" />
       <AlertTitle>Claude has questions</AlertTitle>
       <AlertDescription>
-        {block.questions.map((q) => {
-          const selected = selections[q.question] ?? [];
-          const otherOn = customOn[q.question] ?? false;
+        {block.questions.map((q, index) => {
+          const selected = selections[index] ?? [];
+          const otherOn = customOn[index] ?? false;
+          const groupName = `${block.id}-q${index}`;
           return (
-            <div key={q.question} className="flex flex-col gap-1.5">
+            <div key={groupName} className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2 text-sm text-foreground">
                 <span>{q.question}</span>
                 {q.header ? (
@@ -123,49 +166,64 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
                     {q.header}
                   </span>
                 ) : null}
+                <span className="text-xs text-muted-foreground">
+                  {q.multiSelect ? "choose any" : "choose one"}
+                </span>
               </div>
-              <div className="flex flex-wrap gap-1.5" data-testid="block-question-options">
+              <div
+                className="flex flex-col gap-1"
+                data-testid="block-question-options"
+                role={q.multiSelect ? "group" : "radiogroup"}
+                aria-label={q.question}
+              >
                 {q.options.map((opt) => (
-                  <Button
+                  <label
                     key={opt.label}
-                    type="button"
-                    size="sm"
-                    variant={selected.includes(opt.label) ? "default" : "outline"}
-                    onClick={() => toggle(q.question, opt.label, q.multiSelect)}
                     className={cn(
-                      "h-auto flex-col items-start gap-0 py-1.5 text-left",
-                      selected.includes(opt.label) && "ring-2 ring-ring",
+                      "flex cursor-pointer items-start gap-2 rounded-md border border-border px-2 py-1.5 text-sm hover:bg-accent",
+                      selected.includes(opt.label) && "border-ring bg-accent",
                     )}
                   >
-                    <span>{opt.label}</span>
-                    {opt.description ? (
-                      <span className="max-w-56 truncate text-xs font-normal opacity-70">
-                        {opt.description}
-                      </span>
-                    ) : null}
-                  </Button>
+                    <input
+                      type={q.multiSelect ? "checkbox" : "radio"}
+                      name={groupName}
+                      className="mt-0.5"
+                      checked={selected.includes(opt.label)}
+                      onChange={() => toggle(index, opt.label, q.multiSelect)}
+                    />
+                    <span className="flex flex-col">
+                      <span className="text-foreground">{opt.label}</span>
+                      {opt.description ? (
+                        <span className="text-xs text-muted-foreground">{opt.description}</span>
+                      ) : null}
+                    </span>
+                  </label>
                 ))}
                 {allowOther ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={otherOn ? "default" : "outline"}
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm hover:bg-accent",
+                      otherOn && "border-ring bg-accent",
+                    )}
                     data-testid="block-question-other"
-                    aria-pressed={otherOn}
-                    onClick={() => toggleCustom(q.question, q.multiSelect)}
-                    className={cn(otherOn && "ring-2 ring-ring")}
                   >
-                    Other…
-                  </Button>
+                    <input
+                      type={q.multiSelect ? "checkbox" : "radio"}
+                      name={groupName}
+                      checked={otherOn}
+                      onChange={() => toggleCustom(index, q.multiSelect)}
+                    />
+                    <span className="text-foreground">Other…</span>
+                  </label>
                 ) : null}
               </div>
               {allowOther && otherOn ? (
                 <input
                   type="text"
                   autoFocus
-                  value={custom[q.question] ?? ""}
+                  value={custom[index] ?? ""}
                   onChange={(e) =>
-                    setCustom((prev) => ({ ...prev, [q.question]: e.target.value }))
+                    setCustom((prev) => ({ ...prev, [index]: e.target.value }))
                   }
                   placeholder="Type something"
                   aria-label={`Other answer for: ${q.question}`}
@@ -176,7 +234,7 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
             </div>
           );
         })}
-        <div className="pt-1">
+        <div className="flex gap-2 pt-1">
           <Button
             size="sm"
             data-testid="block-question-submit"
@@ -185,6 +243,15 @@ export function QuestionCard({ block }: { block: QuestionBlock }) {
           >
             <CheckIcon className="size-3.5" />
             Submit
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="block-question-decline"
+            onClick={decline}
+          >
+            <CircleSlashIcon className="size-3.5" />
+            Decline
           </Button>
         </div>
       </AlertDescription>

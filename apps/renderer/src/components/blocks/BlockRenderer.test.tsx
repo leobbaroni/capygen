@@ -4,7 +4,7 @@
  * of the app (and the e2e suite) keys off. Interactive cards (permission,
  * question) also exercise the click → store-action wiring.
  */
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -384,8 +384,16 @@ describe("PermissionCard (R32/R28)", () => {
     };
   }
 
+  /** The card arms its keyboard shortcut only for the oldest *pending* block
+   *  in the store, so a card under test has to actually be in the store. */
+  function renderPending(block: PermissionBlock, ...others: PermissionBlock[]) {
+    const blocks = Object.fromEntries([block, ...others].map((b) => [b.id, b]));
+    useAppStore.setState({ blocks });
+    return renderBlock(block);
+  }
+
   it("shows a title/description from _meta permissionDisplay and the tool input", () => {
-    renderBlock(
+    renderPending(
       pendingBlock({
         title: "Run a shell command",
         description: "capygen wants to run this in your project.",
@@ -394,7 +402,25 @@ describe("PermissionCard (R32/R28)", () => {
     const card = screen.getByTestId("block-permission");
     expect(card).toHaveTextContent("Run a shell command");
     expect(card).toHaveTextContent("capygen wants to run this in your project.");
-    expect(card).toHaveTextContent("command: ls");
+    // A shell approval renders the command itself, not the transport JSON.
+    expect(screen.getByTestId("block-permission-command")).toHaveTextContent("ls");
+    expect(card).not.toHaveTextContent('"command"');
+  });
+
+  it("renders an apply_patch approval as the files it touches, not a JSON array", () => {
+    renderPending(
+      pendingBlock({
+        request: {
+          requestId: "req-1",
+          toolName: "apply_patch",
+          input: { changes: [{ path: "src/a.ts", kind: "update" }] },
+          suggestions: [],
+        },
+      }),
+    );
+    const changes = screen.getByTestId("block-permission-changes");
+    expect(changes).toHaveTextContent("src/a.ts");
+    expect(screen.getByTestId("block-permission")).not.toHaveTextContent('"changes"');
   });
 
   it("allows for the session through the middle button", async () => {
@@ -435,7 +461,7 @@ describe("PermissionCard (R32/R28)", () => {
   it("Enter allows the pending request (R32 keyboard shortcut)", () => {
     const answerPermission = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ answerPermission });
-    renderBlock(pendingBlock());
+    renderPending(pendingBlock());
     fireEvent.keyDown(window, { key: "Enter" });
     expect(answerPermission).toHaveBeenCalledWith("req-1", "allow");
   });
@@ -443,9 +469,25 @@ describe("PermissionCard (R32/R28)", () => {
   it("Escape denies the pending request (R32 keyboard shortcut)", () => {
     const answerPermission = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ answerPermission });
-    renderBlock(pendingBlock());
+    renderPending(pendingBlock());
     fireEvent.keyDown(window, { key: "Escape" });
     expect(answerPermission).toHaveBeenCalledWith("req-1", "deny");
+  });
+
+  it("arms the shortcut on only the oldest pending card (R27: no bulk approval)", () => {
+    const answerPermission = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerPermission });
+    const older = pendingBlock({ id: "perm-0", createdAt: 1 });
+    const newer = pendingBlock({
+      id: "perm-1",
+      createdAt: 2,
+      request: { requestId: "req-2", toolName: "Bash", input: { command: "rm" }, suggestions: [] },
+    });
+    // Render the *newer* card while both are pending: one Enter must not
+    // approve it, because the older card owns the shortcut.
+    renderPending(newer, older);
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(answerPermission).not.toHaveBeenCalled();
   });
 
   it("does not steal Enter/Escape while a text field has focus", async () => {
@@ -462,7 +504,8 @@ describe("PermissionCard (R32/R28)", () => {
   it("stops listening for shortcuts once the request is answered", () => {
     const answerPermission = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ answerPermission });
-    const { rerender } = renderBlock(pendingBlock());
+    const { rerender } = renderPending(pendingBlock());
+    useAppStore.setState({ blocks: {} });
     rerender(
       <BlockRenderer
         block={pendingBlock({ decision: { behavior: "allow", scope: "once", decidedAt: 1 } })}
@@ -500,6 +543,90 @@ describe("QuestionCard allowOther (R32)", () => {
     };
     renderBlock(block);
     expect(screen.getByTestId("block-question-other")).toBeInTheDocument();
+  });
+});
+
+describe("QuestionCard states and controls (R32)", () => {
+  function question(overrides: Partial<QuestionBlock> = {}): QuestionBlock {
+    return {
+      ...base,
+      id: "q-1",
+      kind: "question",
+      requestId: "req-q1",
+      questions: [
+        { question: "Pick one", multiSelect: false, options: [{ label: "A" }, { label: "B" }] },
+      ],
+      answers: null,
+      ...overrides,
+    };
+  }
+
+  it("never reads an empty answer map as a submission", () => {
+    // `{}` is truthy, which is how an interrupted question used to render as
+    // a green "Submitted" with an empty list.
+    renderBlock(question({ answers: {}, status: "cancelled" }));
+    const card = screen.getByTestId("block-question");
+    expect(card).toHaveAttribute("data-state", "cancelled");
+    expect(card).not.toHaveTextContent("Submitted");
+  });
+
+  it("says a question was cancelled when the turn ended without an answer", () => {
+    renderBlock(question({ status: "cancelled" }));
+    expect(screen.getByTestId("block-question")).toHaveAttribute("data-state", "cancelled");
+  });
+
+  it("uses radios for single-select and checkboxes for multi-select", () => {
+    renderBlock(question());
+    expect(
+      within(screen.getByTestId("block-question-options")).getAllByRole("radio"),
+    ).toHaveLength(3); // two options plus the Other row
+    cleanup();
+    renderBlock(
+      question({
+        id: "q-multi",
+        questions: [
+          { question: "Pick any", multiSelect: true, options: [{ label: "A" }, { label: "B" }] },
+        ],
+      }),
+    );
+    expect(
+      within(screen.getByTestId("block-question-options")).getAllByRole("checkbox"),
+    ).toHaveLength(3);
+  });
+
+  it("declines through the same channel, with no answers", async () => {
+    const user = userEvent.setup();
+    const answerQuestion = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerQuestion });
+    // With `allowOther: false` and no acceptable option, Decline is the only
+    // exit that is not "interrupt the whole turn".
+    renderBlock(question({ allowOther: false }));
+    await user.click(screen.getByTestId("block-question-decline"));
+    expect(answerQuestion).toHaveBeenCalledWith("req-q1", {});
+  });
+
+  it("keeps two identically-worded questions apart", async () => {
+    const user = userEvent.setup();
+    const answerQuestion = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerQuestion });
+    renderBlock(
+      question({
+        id: "q-dup",
+        allowOther: false,
+        questions: [
+          { question: "Which file?", multiSelect: false, options: [{ label: "A" }] },
+          { question: "Which file?", multiSelect: false, options: [{ label: "B" }] },
+        ],
+      }),
+    );
+    const groups = screen.getAllByTestId("block-question-options");
+    // Selecting in the first must not select in the second: the state used to
+    // be keyed by the question *text*, so both shared one entry.
+    await user.click(within(groups[0]!).getByRole("radio", { name: /A/ }));
+    expect(screen.getByTestId("block-question-submit")).toBeDisabled();
+    await user.click(within(groups[1]!).getByRole("radio", { name: /B/ }));
+    await user.click(screen.getByTestId("block-question-submit"));
+    expect(answerQuestion).toHaveBeenCalledWith("req-q1", { "Which file?": "B" });
   });
 });
 

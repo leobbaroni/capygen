@@ -52,6 +52,74 @@
 - R28–R32 added: manage plugins/skills/MCP servers (ComfyUI, Higgsfield, connectors)/tools from the app for every backend; two-way sync with Claude/Codex config files (backend files are the source of truth); one global Settings hub separate from per-backend config; MCP App widgets (ext-apps `ui://` resources) rendered in the transcript like Claude Code desktop; structured interaction cards (AskUserQuestion, permissions, elicitation, Codex approvals). PLAN Phases 3 and 6 extended; A13/A14 added.
 - User completed `codex login`; Codex spike re-run: codex-auth, sdk-runStreamed-pong, sdk-resumeThread, appserver-thread-turn-stream, appserver-thread-resume, appserver-command-approval (item/commandExecution/requestApproval → accept), appserver-discovery all PASS; sdk-command-approval PARTIAL by design. Phase 1 ✅ (engine.md table to be refreshed by the next spike run; Sonnet owns that file in the running Phase 2 workflow).
 
+## 2026-09-06 — Phase 3 / D: review fixes
+
+Fixed the verified findings from the Phase 3 adversarial review wave. Gate after:
+`pnpm typecheck` clean · `pnpm test` **537 passed** · `pnpm build` clean ·
+`pnpm e2e` **11 passed + 1 skipped** (the api-key one).
+
+Correctness
+- `CodexHarness.settle()` now cancels every outstanding server request before it closes the
+  turn. A `turn/completed` that arrived while an approval was open used to leave the promise
+  dangling: the card span forever, the runner forgot the request id, and codex app-server
+  waited for a `{decision}` that could never come.
+- `SessionRunner` learned who owns a widget. A harness that emits its own `widget` block
+  (Codex, `api`) has its `ui://` document fetched by `resolveHarnessWidget` — previously only
+  `maybeOpenWidget` called `widgets.open()`, gated on a tool name starting with `mcp__`, which
+  no Codex tool_call ever is, so every Codex MCP App stayed on a loading spinner. The runner no
+  longer runs a second detection (or a second MCP connection) for a call the harness claimed,
+  and never deletes a slot a persisted row is sitting in.
+- `history.ts` replays a `denied` tool call as its denial, not as "the turn ended before this
+  tool finished" — which read to the model as an interruption worth retrying.
+
+Security
+- `web_fetch` follows redirects by hand (`redirect: "manual"`) and re-validates every hop.
+  `redirect: "follow"` let an https URL 302 to `http://169.254.169.254/…` and hand the body to
+  the model. Loopback/private/link-local literals are refused on every hop, first included.
+- `resolvePath` confines the `api` backend's file tools to the project directory. `read` is an
+  `allow` class in every permission mode, plan included, so an absolute path was unprompted
+  full-disk read access; the boundary is what makes the ungated read safe.
+
+UX parity (R32/R14/R31)
+- A cancelled `AskUserQuestion` is `status: "cancelled"` with `answers: null` and denies the
+  tool. It used to resolve with `{}`, which is truthy, so interrupting a question showed a green
+  "Submitted" with an empty list.
+- `QuestionCard`: radios vs. checkboxes off `multiSelect`, a Decline button (the only exit from
+  an `allowOther: false` card with no acceptable option), and state keyed by index rather than
+  by the question's own text.
+- `PermissionCard`: one card at a time owns the Enter/Escape shortcut (`pendingInteractionBlock`)
+  — every pending card used to arm its own window listener, so one Enter approved them all — and
+  the body is per tool (command + cwd, the file list) instead of the transport JSON. Claude and
+  Codex now stamp `title`/`description` on the block.
+- The slash menu reads `Query.supportedCommands()` and `system/commands_changed`, so commands
+  carry their real descriptions **and** `argumentHint` (without one the composer fired
+  `/cockpit:pilot` immediately with no argument).
+- `chat.listCommands` offers a backend only the built-ins it can run
+  (`BACKEND_BUILTIN_SLASH_COMMANDS`); `/cost` in a Codex or `api` session used to be posted to
+  the model as literal text and spend a turn.
+- The landing seeds its lead agent from the first *available* harness, and the picker no longer
+  locks to one backend before a session exists (`lockBackend`). Unavailable backends stay in the
+  menu as disabled rows carrying `HarnessInfo.reason`.
+- `pendingInteractionBlock` counts elicitation and skips `staleRequests`; one stale card used to
+  pin the mascot to "waiting" for the rest of the session.
+- A tool_call whose widget rendered is flagged `hasWidget` and its card is skipped, so an MCP App
+  result is not shown twice (`e2e-out/widget.png`).
+
+Efficiency
+- Anthropic requests now use all four cache breakpoints: the last content block of each of the
+  final two messages joins system + tools, so the growing `messages` array is not re-billed on
+  every tool-loop round trip.
+- `McpToolInfo.annotations` is captured and read where the MCP spec puts it (a sibling of
+  `inputSchema`), so `readOnlyHint` finally fires and a read-only server tool stops raising a card.
+- One reference-counted `McpClientPool` per resolved server list, shared by the `api` harness and
+  the widget host (`apps/desktop/src/ipc/mcpPools.ts`) — they used to spawn every stdio server twice.
+
+Not fixed, on purpose
+- `sessions.create`'s `agents: []` fallback still names `claude`. The renderer now always supplies
+  the lead agent when any backend is available, so the path is unreachable from the UI; making the
+  main process probe harnesses inside a synchronous handler would put a `codex app-server` spawn
+  in front of session creation.
+
 ## Open / next (superseded — see the entry for Task B1 below)
 - ~~Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and

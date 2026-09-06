@@ -31,7 +31,12 @@ export function BlockRenderer({ block, isUser }: { block: Block; isUser: boolean
     case "thinking":
       return <ThinkingCard block={block} />;
     case "tool_call":
-      return <ToolCallCard block={block} />;
+      // SPEC R31: "Non-App tool results keep the tool-call card" — an App
+      // result does not. `hasWidget` is only set once the widget rendered
+      // (`SessionRunner.markToolCallRendered`), so an unavailable widget still
+      // leaves this card standing; without the check the same MCP payload
+      // appeared twice, in the collapsible row and again inside the widget.
+      return block.hasWidget ? null : <ToolCallCard block={block} />;
     case "diff":
       return <DiffCard block={block} />;
     case "permission":

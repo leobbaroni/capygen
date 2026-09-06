@@ -32,10 +32,22 @@ import {
   type ToolResult,
 } from "./types.js";
 
-/** A server may promise a tool has no side effects; otherwise assume it does. */
+/**
+ * A server may promise a tool has no side effects; otherwise assume it does.
+ *
+ * `annotations` is a **top-level field of the `Tool` object**, a sibling of
+ * `inputSchema` (`@modelcontextprotocol/sdk` 1.30.0 `types.d.ts:2381-2419`).
+ * Reading it from inside `inputSchema` — as this did — meant `readOnlyHint`
+ * was never seen and every MCP tool, search and lookup included, raised a
+ * permission card in `default` mode.
+ */
 export function mcpPermissionClass(tool: McpToolInfo): PermissionClass {
-  const schema = tool.inputSchema as { annotations?: unknown };
-  const annotations = isRecord(schema.annotations) ? schema.annotations : undefined;
+  const annotations = isRecord(tool.annotations)
+    ? tool.annotations
+    : // Tolerated fallback: a server that nested its annotations in the schema.
+      isRecord((tool.inputSchema as { annotations?: unknown }).annotations)
+      ? ((tool.inputSchema as { annotations: Record<string, unknown> }).annotations)
+      : undefined;
   if (annotations?.readOnlyHint === true) return "read";
   return "execute";
 }

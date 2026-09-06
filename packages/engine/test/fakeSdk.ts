@@ -24,6 +24,15 @@ export interface FakeSdk {
   /** Messages pushed here are delivered to the harness in order. */
   out: AsyncQueue<SDKMessage>;
   interrupts: number;
+  /**
+   * What `Query.supportedCommands()` answers — the only place the CLI
+   * publishes a command's description and `argumentHint` (sdk.d.ts:2747).
+   * `null` stands in for a backend that does not implement the control
+   * request at all.
+   */
+  supportedCommands: unknown[] | null;
+  /** How many times the harness asked for that list. */
+  supportedCommandCalls: number;
   options(): ClaudeOptions;
   /** End the backend stream (process exit). */
   end(): void;
@@ -35,6 +44,8 @@ export function makeFakeSdk(): FakeSdk {
     prompts: [],
     out: new AsyncQueue<SDKMessage>(),
     interrupts: 0,
+    supportedCommands: null,
+    supportedCommandCalls: 0,
     options: () => {
       const last = fake.calls.at(-1);
       if (!last) throw new Error("query() has not been called yet");
@@ -61,6 +72,14 @@ export function makeFakeSdk(): FakeSdk {
           fake.interrupts += 1;
           return undefined;
         },
+        ...(fake.supportedCommands === null
+          ? {}
+          : {
+              supportedCommands: async (): Promise<unknown[]> => {
+                fake.supportedCommandCalls += 1;
+                return fake.supportedCommands ?? [];
+              },
+            }),
       }) as unknown as ClaudeQuery;
     },
   };

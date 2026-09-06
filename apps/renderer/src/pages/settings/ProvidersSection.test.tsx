@@ -17,7 +17,7 @@ vi.mock("@/lib/ipc", () => ({
 beforeEach(() => {
   invoke.mockReset();
   invoke.mockImplementation((channel: string) => {
-    if (channel === "secrets.has") return Promise.resolve({ has: false });
+    if (channel === "secrets.has") return Promise.resolve({ has: false, source: "none" });
     return Promise.resolve({ ok: true });
   });
 });
@@ -34,7 +34,10 @@ describe("ProvidersSection", () => {
 
   it("shows 'Key set' and offers Remove when secrets.has says true", async () => {
     invoke.mockImplementation((channel: string, args: { provider: string }) => {
-      if (channel === "secrets.has") return Promise.resolve({ has: args.provider === "anthropic" });
+      if (channel === "secrets.has") {
+        const stored = args.provider === "anthropic";
+        return Promise.resolve({ has: stored, source: stored ? "stored" : "none" });
+      }
       return Promise.resolve({ ok: true });
     });
     render(<ProvidersSection />);
@@ -63,10 +66,32 @@ describe("ProvidersSection", () => {
     expect(screen.queryByText("sk-ant-secret")).not.toBeInTheDocument();
   });
 
+  it("says which environment variable supplies a key rather than 'Not set'", async () => {
+    invoke.mockImplementation((channel: string, args: { provider: string }) => {
+      if (channel === "secrets.has") {
+        const env = args.provider === "anthropic";
+        return Promise.resolve({ has: env, source: env ? "environment" : "none" });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<ProvidersSection />);
+    const row = await waitFor(() => screen.getByTestId("provider-row-anthropic"));
+    await waitFor(() =>
+      expect(within(row).getByTestId("provider-status-env")).toHaveTextContent(
+        "From ANTHROPIC_API_KEY",
+      ),
+    );
+    // An environment key is not ours to delete, so no Remove button.
+    expect(screen.queryByTestId("provider-anthropic-remove")).not.toBeInTheDocument();
+  });
+
   it("removes a key via secrets.delete", async () => {
     const user = userEvent.setup();
     invoke.mockImplementation((channel: string, args: { provider: string }) => {
-      if (channel === "secrets.has") return Promise.resolve({ has: args.provider === "openai" });
+      if (channel === "secrets.has") {
+        const stored = args.provider === "openai";
+        return Promise.resolve({ has: stored, source: stored ? "stored" : "none" });
+      }
       return Promise.resolve({ ok: true });
     });
     render(<ProvidersSection />);
@@ -79,7 +104,7 @@ describe("ProvidersSection", () => {
   it("shows an error and keeps the field open when saving fails", async () => {
     const user = userEvent.setup();
     invoke.mockImplementation((channel: string) => {
-      if (channel === "secrets.has") return Promise.resolve({ has: false });
+      if (channel === "secrets.has") return Promise.resolve({ has: false, source: "none" });
       if (channel === "secrets.set") return Promise.reject(new Error("no OS-level encryption"));
       return Promise.resolve({ ok: true });
     });

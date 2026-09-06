@@ -159,6 +159,8 @@ export function ChatPage() {
             commands={commands}
             harnesses={harnesses}
             agent={leadAgent ? { backend: leadAgent.backend, model: leadAgent.model } : null}
+            // This agent exists, so its backend is fixed for its lifetime.
+            lockBackend
             // An agent's backend is fixed once it exists (CONTEXT.md); the
             // picker only ever offers that same backend's other models here
             // (Composer filters to `agent.backend`), so "picking" one is
