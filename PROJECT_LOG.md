@@ -1235,3 +1235,20 @@ Duration 4.62s
 ```
 
 No model calls or personal login/config access.
+
+### Test prerequisite — Anthropic API effort reaches request bodies
+
+Opus added supported `output_config.effort` to Anthropic request construction; Astra
+reviewed against installed SDK 0.124.0 `OutputConfig` and independently ran body-capture tests.
+Low effort is no longer silently dropped for the API smoke path. Cache breakpoints and
+thinking configuration remain asserted on the same request. Whole-harness capture is next.
+
+```text
+corepack pnpm exec vitest run --project engine packages/engine/test/apiProviders.test.ts packages/engine/test/testPolicy.test.ts
+apiProviders.test.ts (28 tests)
+Test Files 2 passed (2)
+Tests 33 passed (33)
+Duration 822ms
+```
+
+The second suite checks dedicated test-home guards; no model/network calls.

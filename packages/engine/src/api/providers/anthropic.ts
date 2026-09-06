@@ -146,6 +146,23 @@ export function markMessageCacheBreakpoints(messages: unknown[]): unknown[] {
   return messages;
 }
 
+/**
+ * The effort levels the Messages API accepts, verbatim from
+ * `@anthropic-ai/sdk@0.124.0` `resources/messages/messages.d.ts:2069`
+ * (`OutputConfig.effort`, reachable as `MessageCreateParams.output_config`
+ * at :3500). Written out rather than imported for the reason in this file's
+ * header: the body is built structurally, not through the SDK's generated
+ * types, so it stays fakeable and version-independent.
+ *
+ * `ProviderRequest.reasoningEffort` is a free-form string because the OpenAI
+ * adapter has its own vocabulary (`minimal`, which Anthropic does not accept),
+ * so a value Anthropic would reject is genuinely reachable here. An unknown
+ * one is dropped rather than sent — the same contract as `readClaudeConfig`
+ * and `readCodexConfig`, where an unrecognised setting degrades to the
+ * backend's own default instead of failing the turn.
+ */
+const ANTHROPIC_EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
 export function buildAnthropicBody(request: ProviderRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
@@ -157,6 +174,14 @@ export function buildAnthropicBody(request: ProviderRequest): Record<string, unk
   if (request.tools.length > 0) body.tools = anthropicTools(request.tools);
   if (request.thinking) {
     body.thinking = { type: "enabled", budget_tokens: request.thinking.budgetTokens };
+  }
+  // No model allow-list, deliberately: the account and the API are the
+  // authority on which models take an effort, and a 400 naming the field is a
+  // better outcome than silently charging the default effort while a caller's
+  // policy says `low`. Only written when configured, so an unset effort leaves
+  // the model's own default in place.
+  if (request.reasoningEffort && ANTHROPIC_EFFORT_LEVELS.includes(request.reasoningEffort)) {
+    body.output_config = { effort: request.reasoningEffort };
   }
   return body;
 }

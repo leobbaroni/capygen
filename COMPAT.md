@@ -380,3 +380,11 @@ Installed Agent SDK 0.3.261 `Options.effort` accepts low/medium/high/xhigh/max.
 `ClaudeHarness.readClaudeConfig` now carries valid `agent.config.claude.effort` to query options
 on start and resume, verified by captured requests in `ClaudeHarness.test.ts`. Unknown values
 are ignored like other unrecognized harness config values. Global-default wiring is separate.
+
+## Anthropic API effort — 2026-09-07
+
+Installed Anthropic SDK 0.124.0 `MessageCreateParams.output_config.effort` accepts
+low/medium/high/xhigh/max. The Anthropic adapter maps configured `reasoningEffort` to that
+field and leaves it absent when unset/unsupported. An unsupported model response is surfaced
+as an API error instead of silently dropping a valid effort. `apiProviders.test.ts` captures
+the body and preserves caching/thinking assertions.

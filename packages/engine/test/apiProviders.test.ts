@@ -104,6 +104,60 @@ describe("the Anthropic request body (SPEC R24)", () => {
     expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 4_096 });
   });
 
+  /**
+   * [effort] `reasoningEffort` reached the Anthropic body builder and was
+   * dropped on the floor — only `openai.ts` consumed it — so a caller that
+   * pinned `low` (the live test policy does) silently paid the model's default
+   * effort. The Messages API carries it as `output_config.effort`
+   * (`@anthropic-ai/sdk@0.124.0` `resources/messages/messages.d.ts:2065-2070`,
+   * reachable from `MessageCreateParams.output_config` at :3500).
+   */
+  it("[effort] sends a configured effort as output_config.effort", () => {
+    const body = buildAnthropicBody(request({ reasoningEffort: "low" }));
+    expect(body.output_config).toEqual({ effort: "low" });
+  });
+
+  it("[effort] sends every level the Messages API declares", () => {
+    for (const level of ["low", "medium", "high", "xhigh", "max"]) {
+      expect(buildAnthropicBody(request({ reasoningEffort: level })).output_config).toEqual({
+        effort: level,
+      });
+    }
+  });
+
+  it("[effort] omits output_config entirely when no effort is configured", () => {
+    expect(buildAnthropicBody(request()).output_config).toBeUndefined();
+    expect(buildAnthropicBody(request({ reasoningEffort: undefined })).output_config)
+      .toBeUndefined();
+  });
+
+  it("[effort] drops an unsupported value rather than sending it", () => {
+    // Same contract as `readClaudeConfig`/`readCodexConfig`: an unknown value
+    // degrades to the model default instead of failing the turn. `types.ts`
+    // still declares `reasoningEffort` as a free-form string because the
+    // OpenAI adapter has its own vocabulary (`minimal`), so an Anthropic-
+    // invalid value is genuinely reachable here.
+    for (const bogus of ["minimal", "turbo", "LOW", " low ", ""]) {
+      expect(buildAnthropicBody(request({ reasoningEffort: bogus })).output_config)
+        .toBeUndefined();
+    }
+  });
+
+  it("[effort] leaves the cache breakpoints and thinking untouched", () => {
+    const body = buildAnthropicBody(
+      request({ reasoningEffort: "low", thinking: { type: "enabled", budgetTokens: 4_096 } }),
+    );
+    expect(body.output_config).toEqual({ effort: "low" });
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 4_096 });
+    const system = body.system as { cache_control?: unknown }[];
+    expect(system[0]?.cache_control).toEqual(CACHE_CONTROL_EPHEMERAL);
+    const tools = body.tools as { cache_control?: unknown }[];
+    expect(tools[tools.length - 1]?.cache_control).toEqual(CACHE_CONTROL_EPHEMERAL);
+    const messages = body.messages as { content: { cache_control?: unknown }[] }[];
+    const last = messages[messages.length - 1]?.content ?? [];
+    expect(last[last.length - 1]?.cache_control).toEqual(CACHE_CONTROL_EPHEMERAL);
+  });
+
   it("maps tool_use and tool_result blocks, and drops unsigned thinking", () => {
     const mapped = anthropicMessages([
       {

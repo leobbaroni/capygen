@@ -46,7 +46,13 @@ export interface ProviderRequest {
   maxTokens: number;
   /** Anthropic extended thinking. */
   thinking?: ThinkingConfig | undefined;
-  /** OpenAI reasoning effort (`minimal` | `low` | `medium` | `high`). */
+  /**
+   * Reasoning effort, honoured by both adapters: OpenAI sends it as
+   * `reasoning.effort` (`minimal` | `low` | `medium` | `high`), Anthropic as
+   * `output_config.effort` (`low` | `medium` | `high` | `xhigh` | `max`).
+   * Free-form here because the two vocabularies differ; each adapter drops a
+   * value its own API does not accept rather than failing the turn.
+   */
   reasoningEffort?: string | undefined;
   signal?: AbortSignal | undefined;
 }
