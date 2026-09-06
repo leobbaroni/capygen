@@ -24,6 +24,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { Codex, type ThreadEvent, type ThreadItem, type Usage } from "@openai/codex-sdk";
+import { requireIsolatedHomes, TEST_CODEX_MODEL, TEST_EFFORT } from "./test-policy.js";
 
 // ---------------------------------------------------------------- setup
 
@@ -142,8 +143,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ---------------------------------------------------------------- SDK checks
 
 function sdkClient(bin: Bin, config?: Record<string, string | number | boolean>): Codex {
-  return new Codex({ codexPathOverride: bin.exe, env: cleanEnv(bin.pathDirs), config });
+  return new Codex({
+    codexPathOverride: bin.exe,
+    env: cleanEnv(bin.pathDirs),
+    config: { model: TEST_CODEX_MODEL, model_reasoning_effort: TEST_EFFORT, ...config },
+  });
 }
+
+requireIsolatedHomes("spike-codex");
 
 async function collect(events: AsyncGenerator<ThreadEvent>, src: string) {
   const types: string[] = [];
@@ -173,7 +180,8 @@ async function checkA(bin: Bin): Promise<void> {
       skipGitRepoCheck: true,
       sandboxMode: "read-only",
       approvalPolicy: "never",
-      modelReasoningEffort: "low",
+      model: TEST_CODEX_MODEL,
+      modelReasoningEffort: TEST_EFFORT,
     });
     const { events } = await thread.runStreamed("Reply with exactly the word pong.", { signal: AbortSignal.timeout(240_000) });
     const r = await collect(events, "sdk-a");
@@ -191,7 +199,8 @@ async function checkA(bin: Bin): Promise<void> {
         skipGitRepoCheck: true,
         sandboxMode: "read-only",
         approvalPolicy: "never",
-        modelReasoningEffort: "low",
+        model: TEST_CODEX_MODEL,
+        modelReasoningEffort: TEST_EFFORT,
       });
       const { events: ev2 } = await resumed.runStreamed("Which single word did you reply with just before? Answer with only that word.", {
         signal: AbortSignal.timeout(240_000),
@@ -228,7 +237,8 @@ async function checkB(bin: Bin): Promise<void> {
         skipGitRepoCheck: true,
         sandboxMode: "read-only",
         approvalPolicy: "on-request",
-        modelReasoningEffort: "low",
+        model: TEST_CODEX_MODEL,
+        modelReasoningEffort: TEST_EFFORT,
       });
       const { events } = await thread.runStreamed(prompt, { signal: AbortSignal.timeout(300_000) });
       const r = await collect(events, `sdk-b${i + 1}`);
@@ -462,6 +472,7 @@ async function checkC(bin: Bin): Promise<void> {
     srv = await startServer(bin, "appserver-c");
     const started = await srv.request("thread/start", {
       cwd: REPO_ROOT,
+      model: TEST_CODEX_MODEL,
       approvalPolicy: "never",
       sandbox: "read-only",
       approvalsReviewer: "user",
@@ -470,7 +481,7 @@ async function checkC(bin: Bin): Promise<void> {
     note(
       `thread/start -> thread.id=${threadId} model=${started.model} provider=${started.modelProvider} approvalPolicy=${JSON.stringify(started.approvalPolicy)} sandbox=${JSON.stringify(started.sandbox)} reasoningEffort=${started.reasoningEffort} status=${JSON.stringify(started.thread.status)}`,
     );
-    const r = await runTurn(srv, threadId, "Reply with exactly the word pong.", { effort: "low" });
+    const r = await runTurn(srv, threadId, "Reply with exactly the word pong.", { effort: TEST_EFFORT });
     note(`turn ${r.turn.id} status=${r.turn.status} items=${r.items.map((i) => i.type).join(",")} deltas=${JSON.stringify(short(r.deltas, 40))} usage=${JSON.stringify(r.usage)}`);
     const text = r.agentText || r.deltas;
     const order = [...new Set(r.seen)];
@@ -535,13 +546,14 @@ async function checkD(bin: Bin): Promise<void> {
       };
       const started = await srv.request("thread/start", {
         cwd: REPO_ROOT,
+        model: TEST_CODEX_MODEL,
         approvalPolicy: att.approvalPolicy,
         sandbox: att.sandbox,
         approvalsReviewer: "user",
       });
       const threadId: string = started.thread.id;
       note(`attempt${i + 1}: thread ${threadId} sandbox=${JSON.stringify(started.sandbox)} approvalPolicy=${JSON.stringify(started.approvalPolicy)} reviewer=${started.approvalsReviewer}`);
-      const r = await runTurn(srv, threadId, att.prompt, { effort: "low" });
+      const r = await runTurn(srv, threadId, att.prompt, { effort: TEST_EFFORT });
       cleanupSpikeFile();
       const cmds = r.items.filter((it) => it.type === "commandExecution");
       const summary = `attempt${i + 1}(${att.approvalPolicy}/${att.sandbox}): approvals=${approvals.length} serverRequests=[${srv.serverRequestsSeen.join(",")}] commands=${JSON.stringify(

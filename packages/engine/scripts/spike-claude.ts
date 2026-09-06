@@ -29,6 +29,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { requireIsolatedHomes, TEST_CLAUDE_MODEL, TEST_EFFORT } from './test-policy.js';
 
 const CWD = 'C:/Users/TugaPlayz/Desktop/GITHUB/capygen';
 const RAW = `${CWD}/docs/spikes/claude.raw.json`;
@@ -103,6 +104,8 @@ type RunOpts = {
   streaming?: boolean;
   extraEnv?: Record<string, string>;
   forwardSubagentText?: boolean;
+  model?: string;
+  effort?: Options["effort"];
 };
 
 async function run(o: RunOpts): Promise<RunResult> {
@@ -114,6 +117,8 @@ async function run(o: RunOpts): Promise<RunResult> {
     env,
     abortController: abort,
     permissionMode: o.permissionMode ?? 'bypassPermissions',
+    model: o.model ?? TEST_CLAUDE_MODEL,
+    effort: o.effort ?? TEST_EFFORT,
     allowDangerouslySkipPermissions: (o.permissionMode ?? 'bypassPermissions') === 'bypassPermissions',
     settingSources: ['user', 'project'],
     maxTurns: o.maxTurns ?? 4,
@@ -212,6 +217,8 @@ async function run(o: RunOpts): Promise<RunResult> {
   }
   return out;
 }
+
+requireIsolatedHomes('spike-claude');
 
 function usageLine(r: RunResult): string {
   const res = r.result;
@@ -441,20 +448,19 @@ if (wanted.has('f')) {
 // Sub-agent routing (SPEC R12) needs a lever that actually steers which model a spawned sub-agent
 // runs on. The candidate lever is PreToolUse.hookSpecificOutput.updatedInput on the Task/Agent
 // tool call (AgentInput.model, sdk-tools.d.ts:678, accepts 'sonnet'|'opus'|'haiku'|'fable'). This
-// step forces model:'haiku' from the hook and checks the STREAM for proof it took effect, using
-// exactly the three places the SDK could report it: task_started (no model field in the .d.ts —
+// step forces model:'claude-sonnet-5' from the hook and checks the STREAM for proof it took effect, using
+// exactly the places the SDK could report it: task_started (no model field in the .d.ts —
 // recorded to confirm that absence rather than assume it), task_notification.usage (same), and
-// the final result's modelUsage keys (a per-model dictionary — a 'haiku' key with tokens>0 is
-// direct proof the sub-agent billed against that model). The undocumented-but-observed
-// tool_use_result.resolvedModel (claude-sdk-shapes.md §8.6) is recorded as corroborating evidence
-// alongside those three, not a substitute for them.
+// the undocumented-but-observed tool_use_result.resolvedModel (claude-sdk-shapes.md §8.6).
+// Because the parent and child are both pinned to Sonnet 5 for test-policy safety, this probe can
+// establish that the hook ran and the child resolved, but cannot prove a model change.
 if (wanted.has('g')) {
   const hookCalls: Array<{ tool_name: string; tool_input: unknown }> = [];
   const hook: HookCallback = async (input, toolUseID) => {
     rec('g', 'hook_PreToolUse', { input, toolUseID });
     if (input.hook_event_name === 'PreToolUse' && /^(Task|Agent)$/.test(input.tool_name)) {
       hookCalls.push({ tool_name: input.tool_name, tool_input: input.tool_input });
-      const updatedInput = { ...(input.tool_input as Record<string, unknown>), model: 'haiku' };
+      const updatedInput = { ...(input.tool_input as Record<string, unknown>), model: TEST_CLAUDE_MODEL };
       const res = {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse' as const,
@@ -489,27 +495,26 @@ if (wanted.has('g')) {
     ? ((taskResultFrame as { tool_use_result?: { resolvedModel?: string } }).tool_use_result?.resolvedModel ?? null)
     : null;
   const modelUsageKeys = Object.keys(r.result?.modelUsage ?? {});
-  const haikuInModelUsage = modelUsageKeys.some((k) => /haiku/i.test(k));
-  const haikuInResolved = typeof resolvedModel === 'string' && /haiku/i.test(resolvedModel);
+  const sonnetInResolved = resolvedModel === TEST_CLAUDE_MODEL;
   const ts0 = taskStarted[0];
   const tn0 = taskNotif[0];
   const ev =
-    `hookFired=${hookCalls.length} sentUpdatedInput.model='haiku'=${hookCalls.length > 0} ` +
+    `hookFired=${hookCalls.length} sentUpdatedInput.model='${TEST_CLAUDE_MODEL}'=${hookCalls.length > 0} ` +
     `task_started.hasModelField=${!!(ts0 && 'model' in ts0)} task_started.fields=${ts0 ? JSON.stringify(Object.keys(ts0)) : 'n/a'} ` +
     `task_notification.usage.hasModelField=${!!(tn0 && typeof tn0.usage === 'object' && tn0.usage !== null && 'model' in (tn0.usage as object))} ` +
     `resolvedModel=${JSON.stringify(resolvedModel)} modelUsage keys=[${modelUsageKeys.join(',')}] final=${JSON.stringify(r.finalText.trim().slice(0, 100))}`;
   if (hookCalls.length === 0) {
     cap('routing_lever', 'FAIL', `hook never fired for a Task/Agent tool_use — could not attempt the override; ${ev}`);
-  } else if (haikuInModelUsage || haikuInResolved) {
-    cap('routing_lever', 'PASS', ev);
+  } else if (!taskStarted.length && !taskNotif.length) {
+    cap('routing_lever', 'FAIL', `hook ran but no child task evidence was observed; ${ev}`);
+  } else if (resolvedModel && resolvedModel !== TEST_CLAUDE_MODEL) {
+    cap('routing_lever', 'FAIL', `child resolved to unexpected model ${JSON.stringify(resolvedModel)}; ${ev}`);
   } else {
     cap(
       'routing_lever',
-      'FAIL',
-      `SDK ignored PreToolUse.hookSpecificOutput.updatedInput.model — the sub-agent billed against the inherited model, not haiku; ` +
-        `fallback (engine.md §5): deny the Task/Agent call from the hook (permissionDecision:'deny') and have capygen's own ` +
-        `dispatcher re-issue the equivalent work as a fresh query() with options.model set directly, instead of relying on the ` +
-        `CLI to honour an in-flight rewrite; ${ev}`,
+      'PARTIAL',
+      `hook ran and child evidence was observed${sonnetInResolved ? `; child resolved to ${TEST_CLAUDE_MODEL}` : ''}, ` +
+        `but parent and child are both pinned to ${TEST_CLAUDE_MODEL}, so the rewrite cannot be proven; ${ev}`,
     );
   }
 }

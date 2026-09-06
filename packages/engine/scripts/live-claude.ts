@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ClaudeHarness } from "../src/claude/ClaudeHarness.js";
 import type { EngineEvent } from "../src/harness.js";
+import { requireIsolatedHomes, requirePinnedTestModel, TEST_CLAUDE_MODEL, TEST_EFFORT } from "./test-policy.js";
 
 const argv = process.argv.slice(2);
 
@@ -24,8 +25,10 @@ function flag(name: string, fallback: string): string {
 }
 
 const prompt = flag("prompt", "Reply with exactly the word pong.");
-const model = flag("model", "claude-sonnet-5");
+const model = flag("model", TEST_CLAUDE_MODEL);
 const timeoutMs = Number(flag("timeout", "120000"));
+requireIsolatedHomes("live-claude");
+requirePinnedTestModel("live-claude", model, TEST_CLAUDE_MODEL);
 
 const cwd = mkdtempSync(path.join(tmpdir(), "capygen-live-"));
 const harness = new ClaudeHarness({
@@ -46,6 +49,7 @@ try {
       name: "capy",
       backend: "claude",
       model,
+      config: { claude: { effort: TEST_EFFORT } },
       permissionMode: "default",
       resumeSessionId: null,
     },

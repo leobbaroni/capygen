@@ -35,6 +35,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { cleanEnv } from "../src/env.js";
+import { requireIsolatedHomes, TEST_CLAUDE_MODEL, TEST_EFFORT } from "./test-policy.js";
 
 const REPO = "C:/Users/TugaPlayz/Desktop/GITHUB/capygen";
 const FIXTURE = `${REPO}/tests/fixtures/mcp-apps-server/server.mjs`;
@@ -184,7 +185,8 @@ async function runClaude(step: string, prompt: string, extra: Partial<Options>):
         cwd: REPO,
         env: cleanEnv(),
         abortController: abort,
-        model: "claude-sonnet-5",
+        model: TEST_CLAUDE_MODEL,
+        effort: TEST_EFFORT,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         settingSources: ["user", "project"],
@@ -205,6 +207,8 @@ async function runClaude(step: string, prompt: string, extra: Partial<Options>):
   }
   return out;
 }
+
+requireIsolatedHomes("spike-mcp-apps");
 
 function redact(value: unknown): unknown {
   return JSON.parse(
@@ -482,7 +486,8 @@ async function stepStatus(): Promise<void> {
       cwd: REPO,
       env: cleanEnv(),
       abortController: abort,
-      model: "claude-sonnet-5",
+      model: TEST_CLAUDE_MODEL,
+      effort: TEST_EFFORT,
       permissionMode: "default",
       settingSources: ["user", "project"],
       mcpServers: {

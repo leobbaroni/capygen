@@ -3,7 +3,7 @@
  * real ChatGPT sign-in on this machine.
  *
  *   corepack pnpm --dir packages/engine live:codex
- *   corepack pnpm --dir packages/engine live:codex -- --model gpt-5.5
+ *   corepack pnpm --dir packages/engine live:codex -- --model gpt-5.6-luna
  *
  * Two turns in one throwaway thread, in a temp directory:
  *
@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { CodexHarness } from "../src/codex/CodexHarness.js";
 import type { EngineEvent } from "../src/harness.js";
+import { requireIsolatedHomes, requirePinnedTestModel, TEST_CODEX_MODEL, TEST_EFFORT } from "./test-policy.js";
 
 const argv = process.argv.slice(2);
 
@@ -32,9 +33,11 @@ function flag(name: string, fallback: string): string {
   return fallback;
 }
 
-const model = flag("model", "gpt-5.5");
+const model = flag("model", TEST_CODEX_MODEL);
 const timeoutMs = Number(flag("timeout", "180000"));
 const verbose = argv.includes("--verbose");
+requireIsolatedHomes("live-codex");
+requirePinnedTestModel("live-codex", model, TEST_CODEX_MODEL);
 
 /**
  * `realpathSync.native` matters here: on this machine `os.tmpdir()` is the 8.3
@@ -154,7 +157,13 @@ try {
       // `untrusted` is what makes turn 2 ask: under the default `on-request`
       // Codex approves an `echo` inside the sandbox by itself and the approval
       // card the script is here to prove never appears.
-      config: { codex: { approvalPolicy: "untrusted", sandbox: "workspace-write" } },
+      config: {
+        codex: {
+          approvalPolicy: "untrusted",
+          sandbox: "workspace-write",
+          reasoningEffort: TEST_EFFORT,
+        },
+      },
     },
   );
   console.log(`cwd:   ${cwd}`);

@@ -28,6 +28,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { requireIsolatedHomes } from './test-policy.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
@@ -65,6 +66,7 @@ const only = new Set(
     .map((s) => s.trim())
     .filter(Boolean),
 );
+requireIsolatedHomes('spike-engine');
 
 function backends(): Backend[] {
   const list: Backend[] = [];

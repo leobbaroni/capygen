@@ -2,27 +2,25 @@
  * Live check for the API harness — a real provider, a real key, one real turn.
  *
  *   corepack pnpm --dir packages/engine live:api
- *   corepack pnpm --dir packages/engine live:api -- --provider openai --model gpt-5
+ *   corepack pnpm --dir packages/engine live:api -- --provider anthropic --model claude-sonnet-5
  *   corepack pnpm --dir packages/engine live:api -- --tool
  *
  * **It costs money and it needs a key.** With no key for the chosen provider it
  * prints `SKIP` and the reason, and exits 0 — this machine has none of the three
- * environment variables set (SPEC §Current State), so that is the expected
- * result here and the script is still worth running as a regression check that
- * the harness composes and the SDK loads.
+ * environment variable set, so that is the expected result here and the script
+ * is still worth running as a regression check that the harness composes.
  *
- * Keys come from the environment only. The engine never reads a key from disk
- * (SPEC R21): in the app they arrive through the `KeyProvider` the desktop
- * injects out of Electron `safeStorage`, and no value is ever printed here —
- * only `maskKey`'s ends.
+ * The key comes from the environment only. The engine never reads a key from
+ * disk, and no value is ever printed here.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ApiHarness } from "../src/api/ApiHarness.js";
-import { ENV_KEY_NAMES, envKeyProvider, maskKey } from "../src/api/keys.js";
+import { ENV_KEY_NAMES, envKeyProvider } from "../src/api/keys.js";
 import type { EngineEvent } from "../src/harness.js";
 import type { ApiProvider } from "@capygen/shared";
+import { requireApiTestModel, requireIsolatedHomes, TEST_CLAUDE_MODEL, TEST_EFFORT } from "./test-policy.js";
 
 const argv = process.argv.slice(2);
 
@@ -33,18 +31,14 @@ function flag(name: string, fallback: string): string {
 }
 const has = (name: string): boolean => argv.includes(`--${name}`);
 
-const DEFAULT_MODELS: Record<ApiProvider, string> = {
-  anthropic: "claude-sonnet-4-5",
-  openai: "gpt-5-mini",
-  openrouter: "anthropic/claude-sonnet-4.5",
-};
-
 const provider = flag("provider", "anthropic") as ApiProvider;
-if (!(provider in DEFAULT_MODELS)) {
-  console.error(`unknown provider ${provider}; expected one of ${Object.keys(DEFAULT_MODELS)}`);
+if (provider !== "anthropic") {
+  console.error(`unsupported provider ${provider}; this test only supports anthropic`);
   process.exit(2);
 }
-const model = flag("model", DEFAULT_MODELS[provider]);
+const model = flag("model", TEST_CLAUDE_MODEL);
+requireIsolatedHomes("live-api");
+requireApiTestModel(provider, model);
 const timeoutMs = Number(flag("timeout", "180000"));
 /** `--tool` proves the loop, not just the stream: it forces one read_file. */
 const useTool = has("tool");
@@ -60,8 +54,7 @@ const key = (await envKeyProvider().getKey(provider)) as string | null;
 if (!key) {
   console.log(
     `SKIP — no ${provider} key. Set ${ENV_KEY_NAMES[provider]} in the environment, ` +
-      "or run this from the app where the desktop injects the stored key " +
-      "(Settings ▸ API keys, Electron safeStorage).",
+      "before running this script.",
   );
   process.exit(0);
 }
@@ -95,13 +88,12 @@ try {
       // read_file is class `read`, which `default` allows; anything that writes
       // or executes would raise a card nobody is here to answer.
       permissionMode: "default",
-      config: { api: { provider, model } },
+      config: { api: { provider, model, reasoningEffort: TEST_EFFORT } },
     },
   );
 
   console.log(`provider: ${provider}`);
   console.log(`model:    ${model}`);
-  console.log(`key:      ${maskKey(key)}`);
   console.log(`cwd:      ${cwd}`);
   console.log(`prompt:   ${JSON.stringify(prompt)}\n`);
 

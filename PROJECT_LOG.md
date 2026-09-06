@@ -1317,3 +1317,91 @@ not user keys or personal configuration. The reference API is not yet connected 
 resolution; P1 owns that integration. Atomic rename is not a power-loss durability guarantee
 (the store does not fsync); reference presence is not proof this account can decrypt it.
 No overall phase has been marked complete.
+
+### Phase 7-P0 — review round 2 (Astra + Fable findings, Opus 5)
+
+Seven correctness fixes on top of the first P0 pass, each with a regression that
+was confirmed to fail with the fix reverted:
+
+1. **`McpDialog` writes to the scope it opened on.** `backend` + `projectId` are
+   frozen in a ref when the dialog opens and sent with the add/update; a scope
+   that moved under the open dialog disables Save with a stated reason, and the
+   panel closes the dialog on any backend/project change.
+2. **Write reach is the resource's, not the request's.** `afterWrite` takes a
+   `WriteReach`: `user`/`plugin` MCP servers, plugins and user skills are
+   `global` however the request was addressed, so they re-read at global scope —
+   which drops every project snapshot of that backend, re-persists the global
+   SQLite projection, and emits `projectId: null`. `project`/`local` MCP servers,
+   project skills and project policies stay per project.
+3. **A global re-read invalidates the project snapshots before it broadcasts.**
+   `SyncCoordinator.refreshOne` drops the backend's project memos at the top of
+   the run, so the reload a watcher event asks for cannot be served the snapshot
+   computed against the previous global content.
+4. **`api` is watched and refreshed with what it inherits.** Listing `api` for a
+   project also establishes the Claude and Codex watchers for that scope, and
+   every `claude`/`codex` refresh fans out to `api` in the same scope.
+   Project watchers now watch only the paths the project *adds*.
+5. **`useIntegrations` guards on the current scope, not only the ticket.** An old
+   refresh's captured `reload` resolving after a scope switch took the newest
+   ticket and overwrote the new project's data; a scope check at request entry
+   and completion stops it, and the previous scope's rows are cleared the moment
+   the scope changes so nothing stale stays actionable.
+6. **Unidentifiable tool-policy scopes are refused.** `policies` has no project
+   column, its natural key is (backend, scope, pattern) and `session_id` is
+   always NULL — so `project`/`session` for `codex`/`api` and `session` for
+   `claude` are refused with that reason instead of stored as if scoped.
+   Removal still works, so pre-existing rows stay deletable. The Tools editor
+   already renders only for Claude and only offers global/project.
+7. **The project watcher pool is bounded.** LRU over project scopes
+   (`DEFAULT_MAX_PROJECT_WATCHERS = 8`) closes and drops the coldest project's
+   watchers, timers and snapshots; a watcher that cannot be created backs off for
+   `DEFAULT_WATCH_RETRY_COOLDOWN_MS` instead of being retried by every list.
+
+Also: `refreshOne` no longer needs (and callers must not do) a pre-emptive
+`invalidate` — that dropped the `before` snapshot and made every refresh claim
+all four kinds moved. Dead `invalidateAll`/`invalidateAllScopes` removed.
+
+Projection audit for the review's open question: `mcp_servers`, `plugins` and
+`skills` have **no** production reader — `SyncCoordinator.persist` is the only
+writer and nothing outside tests reads them back. `policies` **is** read
+(`IntegrationsService.toolPolicies`), so it stays. The three dead projections
+were left in place rather than removed in a review round; they are global-scope
+only and no longer a correctness hazard. Recommend removal as a separate task.
+
+```
+corepack pnpm --filter @capygen/shared --filter @capygen/desktop --filter @capygen/renderer -r typecheck
+  packages/shared: Done   apps/desktop: Done   apps/renderer: Done
+corepack pnpm exec vitest run --project desktop --exclude **/mcpPools.test.ts
+  Test Files  30 passed (30)      Tests  437 passed (437)      7.93s
+corepack pnpm exec vitest run --project renderer --project shared
+  Test Files  52 passed (52)      Tests  511 passed (511)     30.72s
+```
+
+Run natively on Windows via `cmd.exe /c corepack pnpm …`. No commit, no push, no
+installs, no live model calls; every backend home isolated under a temp dir.
+`mcpPools.ts`/test (7-P2) and `packages/engine/scripts` untouched. **Not claiming
+P0 accepted — this is the fix round, awaiting Astra's re-review.**
+
+### Live script policy accepted (Luna implementation, Astra/Opus review)
+
+All live/spike entrypoints require explicit isolated Claude/Codex homes and pin model prompts
+to Sonnet 5 low or GPT Luna low. Other provider/model selections are refused before dispatch.
+The path guard rejects personal roots, descendants, ancestors and symlink aliases. API smoke
+no longer logs even a masked key. Same-model native routing reports PARTIAL rather than
+claiming proof of a different-model rewrite. Opus reviewed the final scripts and guard fixes.
+
+The five guard regressions passed within Astra's independent Windows gate:
+
+```text
+corepack pnpm typecheck
+all packages: Done
+corepack pnpm test
+Test Files 104 passed (104)
+Tests 1388 passed | 4 skipped (1392)
+Duration 42.29s
+corepack pnpm build
+[build] desktop bundle written
+```
+
+Logs: `e2e-out/review/p0-gate-{typecheck,unit,build}.log`. This is offline evidence, not a live
+CLI capability proof or an overall phase completion. Full e2e and P0 final review are pending.
