@@ -31,3 +31,7 @@ Terms used in SPEC.md, PLAN.md, code and UI. One meaning each.
 - **Reference** — `reference/omnigent/`: Omnigent's SPA sources, routes and API description,
   read for layout/behaviour, never imported.
 - **Compaction** — replacing older context with a summary when usage crosses the threshold.
+
+- **Custom Mode** — a reviewed declarative crew policy layered on the round-table dispatcher:
+  a lead, optional chat members for decision debate, and worker targets selected by task rules.
+  The visual editor and JSON editor operate on the same versioned document (ADR-0006).

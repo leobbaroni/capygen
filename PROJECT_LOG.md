@@ -1185,3 +1185,16 @@ apps/desktop typecheck: Done
 ```
 
 - Opus 5 independently reviewed the static conversion: approved, no high/medium findings.
+
+## 2026-09-07 — remaining phases and Custom Mode authorized
+
+- User adds Custom Mode from supplied diagram and requests completing all remaining phases.
+  SPEC R33/R34 and PLAN Phase9C capture prompt authoring, visual/JSON review/editing, combined
+  solo/debate behavior and example role/model/effort routing. All test prompts now restricted
+  to GPT Luna low / Sonnet5 low, with no silent substitution.
+- Astra/Fable completed two design debate rounds. ADR-0006 records decisions and required
+  capability proofs; this is accepted design, not implemented feature acceptance.
+- Phase7-P0 explicit project context contract frozen before implementation. Opus implements
+  P0 and independently owned P2 connection identity; Luna updates isolated live test scripts.
+- Validation for this documentation task: checked PLAN Phase9C and SPEC R33/R34 against all
+  image requirements and both debate reviews; no numbered phase marked complete.

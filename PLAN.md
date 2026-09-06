@@ -294,6 +294,15 @@ silently substitute models. Review status and failed Claude attempts are recorde
       pages render and gate tool permissions locally.
       Steps: port pages; local policy engine (allow/deny/ask per tool pattern); share bundles.
       Covers: P14–P17.
+- [ ] Phase 9C: Custom Mode (user addition, R33–R34)
+      Done when: a selected agent generates a reviewable mode from a prompt; visual and JSON
+      editors round-trip the same complete policy; validation rejects malformed/unavailable
+      assignments; Apply persists the mode; task/difficulty routes and conditional same-chat
+      round-table debate execute under existing permission/hop/budget limits; restart preserves
+      mode and history. Offline fixtures exercise the exact example from the user's diagram.
+      Steps: Astra/Fable contract debate; versioned declarative policy schema; generator draft
+      and preview; visual/text editors; route/debate runtime; persistence and e2e.
+      Dependencies: Phase 9 permissions and cross-backend delegation proof.
 - [ ] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
       Done when: mic button dictates into the composer (Windows Speech or whisper.cpp local);
       Hosts page shows this machine's harness statuses; Terminal attach opens the raw `claude` /
@@ -368,3 +377,11 @@ silently substitute models. Review status and failed Claude attempts are recorde
 - Q6 approval → approved with name/mascot/font/efficiency amendments (user; changed Design
   Reference, R23–R26, Phase 2/11).
 Count: 6; none failed the necessity test.
+
+## Execution amendment — 2026-09-07
+
+Continue remaining phases through final verification, including Phase 9C Custom Mode.
+Test prompts use only GPT Luna low / Sonnet 5 low; record resolved backend model IDs and
+effort in test evidence, refuse silent substitutions. Fixture tests remain model-free.
+Astra remains lead/design/decisions; Opus handles hard/medium implementation; Luna handles
+simple implementation; Fable 5.1 medium debates core decisions.

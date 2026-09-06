@@ -197,3 +197,19 @@ path. Config-file registration is an explicit opt-in fallback. `docs/spikes/code
 records these fields but not live proof of cross-backend delegation. ADR-0004's current lack
 of implementation stands; its claim that config.toml is the only possible path is unproven.
 A new accepted ADR requires the capability proof, not this planning hypothesis.
+
+## User expansion — 2026-09-07
+
+Phase 9C adds Custom Mode (SPEC R33–R34), before Phase 10. A small prompt box lets the user
+choose an available agent to draft routing rules/instructions. Both visual and text/code
+views edit one versioned declarative policy; generated drafts require review and Apply.
+Combine a solo lead with conditional round-table discussions in the existing chat. Preserve
+roles, model/effort assignments, task/difficulty conditions and instructions in both views.
+The image's example is an editable preset; model availability is resolved from the actual
+harness catalogue. No executable user code is needed for policy editing. Final runtime
+contract follows Astra/Fable debate and receives its own ADR before implementation.
+
+Acceptance includes draft-generation errors/cancellation, invalid or unavailable models,
+visual→JSON→visual equivalence, apply/restart persistence, role routing, same-chat debate,
+hop limits and permission enforcement. Live test prompts across all phases now use only
+GPT Luna low and Sonnet 5 low; deterministic fixtures do not call models.

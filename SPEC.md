@@ -317,3 +317,23 @@ SQL; rollback = restore the pre-migration backup the migrator writes next to the
 The user requests PNGs only for now. Show one static PNG per reactive mascot state with no
 animation or fades; preserve the larger size and sharp pixels. This supersedes the animated
 mascot direction above.
+
+## Additions — 2026-09-07, Custom Mode and test models
+
+- R33 WHEN the user selects **Custom Mode** THE SYSTEM SHALL offer a small prompt box and
+  choice of an available agent to generate mode routing policies, instructions and rules.
+  The user can review and edit the complete mode visually and as text/code before applying.
+  Custom modes combine solo orchestration and conditional round-table discussion in one chat.
+  Check: generate a draft, edit in either view without information loss, validate/apply, run
+  routed tasks and conditional debate, restart and recover the applied mode and history.
+- R34 THE SYSTEM SHALL support custom roles and task/difficulty routing with explicit model
+  and effort selection. Example: Astra medium leads, Fable 5.1 medium debates core/big
+  decisions in chat, Astra low handles design, Luna medium research, Opus 5 medium handles
+  hard/medium development and Sonnet 5 medium easy/text work. This is a user-editable example,
+  not a hardcoded list of available models. Check: the runtime follows the reviewed policy;
+  unavailable models and invalid rules are visible before activation.
+- User authorizes continuing all remaining phases to the specified app finish line, including
+  implementation of Custom Mode. Existing local commit/no-push rules still apply.
+- All live testing prompts, smoke runs and benchmarks from now on use **GPT Luna low** and
+  **Sonnet 5 low**. This changes test execution, not the implementation/review crew or models
+  the finished app allows users to select. No silent higher-cost fallback.
