@@ -50,6 +50,7 @@ export function ChatPage() {
   const harnesses = useAppStore((s) => s.harnesses);
   const agents = useAppStore((s) => s.agents);
   const chainStopped = useAppStore((s) => s.chainStopped);
+  const unknownMentions = useAppStore((s) => s.unknownMentions);
   // The harness/model picker in the composer only ever shows/edits the lead
   // agent — round-table's own per-message @-mention routing is separate
   // (the composer's `@mention` menu below), not a second backend picker.
@@ -109,10 +110,16 @@ export function ChatPage() {
   }
 
   const stoppedTurn = chainStopped ? turns.find((t) => t.id === chainStopped.turnId) : undefined;
+  /** Which backends can actually run `/model` (SPEC R14). */
+  const canSwitchModel = leadAgent ? leadAgent.backend !== "api" : false;
 
   return (
-    <div className="flex min-h-0 flex-1" data-testid="chat-page-row">
-      <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-page">
+    // `min-w-0` on both: a flex item's default minimum width is its content,
+    // so with the Agents pane open the chat column refused to shrink and the
+    // whole shell scrolled sideways — clipping the pane's own footer button
+    // and the sessions sidebar on a 1280px window.
+    <div className="flex min-h-0 min-w-0 flex-1" data-testid="chat-page-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="chat-page">
         <header className="titlebar-clearance flex h-9 shrink-0 items-center gap-2 px-4">
           <Mascot state={mascotState} size={20} />
           <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
@@ -172,6 +179,7 @@ export function ChatPage() {
             <Transcript
               turns={turns}
               agents={agents}
+              unknownMentions={unknownMentions}
               blocksOfTurn={(turnId) => blocksOfTurn(useAppStore.getState(), turnId)}
             />
             <div ref={bottom} />
@@ -255,8 +263,18 @@ export function ChatPage() {
               // picker only ever offers that same backend's other models here
               // (Composer filters to `agent.backend`), so "picking" one is
               // exactly what the `/model` built-in is for (R14) — there is no
-              // separate "switch model" IPC to call.
+              // separate "switch model" IPC to call. The agent row is updated
+              // from the backend's own `session` event once the switch lands
+              // (`SessionRunner`), so the label here follows the real model.
+              //
               onPickAgent={({ model }) => void send(`/model ${model}`)}
+              // Disabled for a backend with no command layer at all
+              // (`ApiHarness.capabilities().slashCommands === false`,
+              // `BACKEND_BUILTIN_SLASH_COMMANDS.api === []`): picking a model
+              // there used to send the literal text "/model <id>" to the
+              // provider, which answered it as prose while the agent kept its
+              // old model.
+              canPickModel={canSwitchModel}
               agents={session?.mode === "round-table" ? agents : []}
             />
           </div>

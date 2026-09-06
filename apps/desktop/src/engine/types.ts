@@ -78,6 +78,9 @@ export interface EngineDispatchResult {
   agentTurnId: string;
   /** Every agent turn this message opened, in target order (R11). */
   agentTurnIds: string[];
+  /** `@names` the message used that answer to no agent in this session — the
+   *  renderer warns rather than letting a typo look like a routed message. */
+  unknownMentions: string[];
 }
 
 export interface Engine {
@@ -96,6 +99,13 @@ export interface Engine {
    * there was nothing to continue.
    */
   continueChain(sessionId: string): { ok: boolean; agentTurnId: string | null };
+  /**
+   * [B1] Is a hop the cap refused still resumable for this session? Durable
+   * state the `chat.chainStopped` event is only a notification of, so
+   * `sessions.get` can rebuild the Continue bar for a session the user
+   * navigated away from and back to.
+   */
+  hasPendingChain(sessionId: string): boolean;
   /** Cancel the in-flight turn for a session. Resolves true if one was running. */
   interrupt(sessionId: string): boolean | Promise<boolean>;
   /** Route a permission card's answer back to the waiting backend. */

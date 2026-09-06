@@ -629,3 +629,42 @@ Not fixed, on purpose
   proved by making Codex quote Claude's first line verbatim; the hop cap offline; the routed
   sub-agent; cross-backend delegation; the info drawer, asserted in the UI *and* straight off
   `agents.describe`.
+
+## Phase 4 — review fixes (2026-09-06)
+
+- **`chat.continue` kept the wrong chain root.** `PendingChain` remembered only the blocked
+  turn, so a resumed hop was persisted with `triggeredByTurnId` pointing at itself and every
+  later hop inherited that — the exact opposite of the invariant `Turn` documents. The root is
+  captured at block time now (`rootTriggeredByTurnId`), and the Continue test asserts it.
+- **`Session.mode` is finally load-bearing.** Nothing read it: a solo session still routed
+  `@codex` to Codex and still chained peer hops, while the confirm dialog promised the opposite
+  and the UI hid the mention menu. `resolveTargets`/`nextHopTargets`/`buildRoundTablePrompt`
+  take a `mode` (default `round-table`, so every existing caller is unchanged).
+- **A peer could forge a speaker label.** The context delta is line-oriented, so an agent
+  manipulated by attacker-controlled tool output could emit `[user]: …` and it arrived in the
+  next agent's prompt indistinguishable from a real turn. Quoted text is now backslash-escaped
+  at a line-leading `[`; capygen never escapes its own labels, so the two always differ.
+- **`permissionMode` was read from `.claude` for every backend.** An `api` agent configured
+  `default` under a global `bypassPermissions` silently ran write/execute tools with no card
+  (R19/R27). Read per backend (`permissionModeFor`).
+- **Stop did not reach a delegated sub-agent.** The child harness lives inside
+  `createDelegateRunner`'s closure and was in no registry, so a cross-backend sub-agent kept
+  running (and billing) for up to ten minutes after Interrupt. `onHarness` registers it next to
+  the parent's turn; `Engine.interrupt` stops both.
+- **`delegate_task`'s result was the only unbounded tool result in the codebase.** Clamped at
+  the source (both call sites) and again against the caller's `ctx.maxOutputChars`.
+- **A delegated sub-agent's text was folded into its parent's reply.** Blocks now carry
+  `delegatedFrom`; `RoundTable.textOfTurn`/`transcriptOf` skip them (so another model's whole
+  answer is not re-sent as the next hop's message, R23) and the transcript nests them under
+  their own label instead of showing them as the lead's own words.
+- UI: `AddAgentDialog` re-seeds on open (the first open after launch was a dead end — `harness.list`
+  is un-awaited) and re-reads `defaultLead` (the second drafted agent stole the crown); the agents
+  tree gained Make-lead/Remove and the info drawer an editable sub-agent routing section (the three
+  store methods and their IPC channels had no caller at all); a Codex parent's cross-backend route
+  is disabled with the ADR-0004 reason; `chainPending` on `sessions.get` rebuilds the Continue bar
+  after navigating away; `chat.send` returns `unknownMentions` and the transcript badges them next
+  to the turn's recipients; the sub-agent card shows model/routed/cost; the model picker is disabled
+  for a backend with no `/model`, and a real switch is persisted onto the agent row; `min-w-0` +
+  `overflow-hidden` stop the Agents pane scrolling the whole shell sideways.
+- Gate: typecheck, 731 unit tests (was 696), build, 16/17 Playwright (the API-key case is skipped —
+  no key on this machine).

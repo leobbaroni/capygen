@@ -120,6 +120,9 @@ export function promptAdditionFor(
     agents,
     leadAgentId: session.leadAgentId,
     hopCap: session.settings.hopCap,
+    // A solo session's dispatcher plans no peer hop, so the hand-off
+    // paragraph would describe something that cannot happen (ADR-0002).
+    mode: session.mode,
     ...(target ? { delegation: { ...target, toolName: DELEGATE_TASK_TOOL } } : {}),
   });
   return prompt ?? undefined;

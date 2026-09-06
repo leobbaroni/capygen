@@ -18,7 +18,15 @@
  *  5. A hop whose index would exceed the session's `hopCap` does not happen:
  *     the chain stops, the transcript records why, and `chat.continue` is the
  *     only way past it until the user speaks again.
+ *
+ * `mode` (ADR-0002) sits above all five. A **solo** session has one agent that
+ * talks — the lead — however many rows its roster still carries from before
+ * the switch: mentions of anyone else are ignored (they resolve to the lead
+ * instead) and agent-to-agent hops do not happen at all. That is what the
+ * mode-switch confirm promises the user ("the other agents stay in the roster
+ * but stop receiving messages"), and until this was read here it was not true.
  */
+import type { SessionMode } from "@capygen/shared";
 import { parseMentions } from "./mentions.js";
 import type { RoundTableAgent } from "./types.js";
 
@@ -28,6 +36,9 @@ export interface ResolveTargetsInput {
   leadAgentId: string | null;
   /** The composer's explicit pick; overrides mention parsing when set. */
   explicitAgentId?: string | null;
+  /** Defaults to `round-table`: a caller that does not know the mode gets the
+   *  permissive reading, which is what every pre-mode test asserts. */
+  mode?: SessionMode;
 }
 
 export interface ResolvedTargets {
@@ -44,21 +55,33 @@ export interface ResolvedTargets {
  */
 export function resolveTargets(input: ResolveTargetsInput): ResolvedTargets {
   const { agents, leadAgentId } = input;
+  const solo = input.mode === "solo";
+  const lead = agents.find((a) => a.id === leadAgentId) ?? agents[0] ?? null;
+
   if (input.explicitAgentId) {
     const picked = agents.find((a) => a.id === input.explicitAgentId);
-    if (picked) return { agents: [picked], source: "explicit", unknown: [] };
+    // In solo the picker cannot hand the floor to a sidelined agent either;
+    // there is exactly one agent that speaks and it is the lead.
+    if (picked && (!solo || picked.id === lead?.id)) {
+      return { agents: [picked], source: "explicit", unknown: [] };
+    }
   }
 
   const parsed = parseMentions(input.text, agents);
-  if (parsed.mentions.length > 0) {
+  if (parsed.mentions.length > 0 && !solo) {
     const byId = new Map(agents.map((a) => [a.id, a]));
     const targets = parsed.mentions
       .map((m) => byId.get(m.agentId))
       .filter((a): a is RoundTableAgent => a !== undefined);
     return { agents: targets, source: "mentions", unknown: parsed.unknown };
   }
+  // Solo: a mention of the lead itself is still a mention — it went where it
+  // said it would. A mention of anyone else falls through to the lead below,
+  // which is precisely "stops receiving messages".
+  if (solo && lead && parsed.mentions.some((m) => m.agentId === lead.id)) {
+    return { agents: [lead], source: "mentions", unknown: parsed.unknown };
+  }
 
-  const lead = agents.find((a) => a.id === leadAgentId) ?? agents[0];
   if (!lead) return { agents: [], source: "none", unknown: parsed.unknown };
   return { agents: [lead], source: "lead", unknown: parsed.unknown };
 }
@@ -72,7 +95,10 @@ export function nextHopTargets(input: {
   text: string;
   speakerAgentId: string;
   agents: readonly RoundTableAgent[];
+  /** Defaults to `round-table`; a solo session hands the floor to nobody. */
+  mode?: SessionMode;
 }): RoundTableAgent[] {
+  if (input.mode === "solo") return [];
   const parsed = parseMentions(input.text, input.agents);
   const byId = new Map(input.agents.map((a) => [a.id, a]));
   return parsed.mentions

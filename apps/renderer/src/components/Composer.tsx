@@ -121,6 +121,14 @@ export interface ComposerProps {
   /** A different backend/model was chosen — see the file header for what
    *  "picking" means with vs. without `agent`. */
   onPickAgent?: (choice: AgentChoice) => void;
+  /**
+   * False for a backend that cannot run `/model` at all — the `api` backend,
+   * whose `capabilities().slashCommands` is false and whose harness has no
+   * leading-slash handling, so a pick would reach the provider as the literal
+   * chat message "/model <id>" and the agent would keep its old model. The
+   * picker then renders disabled, still labelled with the current model.
+   */
+  canPickModel?: boolean;
   /** Session agents the `@mention` menu can suggest (SPEC item B2.2). Empty
    *  (the default) keeps the menu from ever opening — a solo session's one
    *  agent has nothing worth mentioning. */
@@ -141,6 +149,7 @@ export function Composer({
   agent = null,
   lockBackend = false,
   onPickAgent,
+  canPickModel = true,
   agents = [],
   testId = "composer",
 }: ComposerProps) {
@@ -501,6 +510,14 @@ export function Composer({
               className="h-7 gap-1 pr-1.5"
               onClick={() => setAgentMenuOpen((v) => !v)}
               aria-expanded={agentMenuOpen}
+              // `canPickModel === false` is a backend with no command layer
+              // (`ApiHarness.capabilities().slashCommands`), where picking a
+              // model used to send the literal text "/model <id>" to the
+              // provider as a chat message and change nothing. The button
+              // still names the current model; it just stops pretending to be
+              // a control.
+              disabled={canPickModel === false}
+              title={canPickModel === false ? "This backend has no /model command." : undefined}
               data-testid={`${testId}-agent-picker`}
             >
               <span className="max-w-40 truncate">{pickerLabel}</span>

@@ -107,6 +107,10 @@ export async function createDelegateMcpServer(
           prompt: typeof args.prompt === "string" ? args.prompt : "",
           ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
         });
+        // `result.text` is already clamped by `createDelegateRunner`
+        // (`DEFAULT_DELEGATE_RESULT_CHARS`) — a delegated answer becomes a
+        // `tool_result` in Claude's own context and is re-sent on every later
+        // turn, so it is bounded once, at the source, for both call sites.
         return {
           content: [{ type: "text", text: result.text }],
           ...(result.ok ? {} : { isError: true }),

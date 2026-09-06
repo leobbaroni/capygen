@@ -34,6 +34,7 @@ import {
   type AgentDescribe,
   type Backend,
   type Block,
+  type PermissionMode,
   type Session,
   type SlashCommand,
   type TurnStatus,
@@ -121,6 +122,27 @@ function agentKey(sessionId: string, agentId: string): string {
   return `${sessionId}:${agentId}`;
 }
 
+/**
+ * The permission mode one agent actually runs under (SPEC R19/R27).
+ *
+ * Per-agent config beats the global setting, and the per-agent field is the
+ * one under the agent's *own* backend key. `codex` has no `permissionMode` of
+ * its own (its equivalent is `approvalPolicy`, which `CodexHarness` reads
+ * directly from `config.codex`), so it falls through to the global setting.
+ */
+export function permissionModeFor(agent: Agent, fallback: PermissionMode): PermissionMode {
+  const config = agent.config;
+  if (!config) return fallback;
+  switch (agent.backend) {
+    case "claude":
+      return config.claude?.permissionMode ?? fallback;
+    case "api":
+      return config.api?.permissionMode ?? fallback;
+    default:
+      return fallback;
+  }
+}
+
 /** How long shutdown waits for a backend to settle before giving up on it. */
 const DISPOSE_DEADLINE_MS = 2_000;
 
@@ -188,6 +210,19 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * the same turns a second time (`RoundTable.deltaStart`).
    */
   const historyWatermarks = new Map<string, string | null>();
+  /**
+   * `sessionId` → the delegated sub-agent harnesses currently in flight for
+   * that session (SPEC R12).
+   *
+   * `active` only ever holds a *top-level* agent's own harness, so before this
+   * existed nothing `interrupt()` could see held the short-lived child
+   * `delegate_task` builds: pressing Stop left a cross-backend sub-agent
+   * running — and billing — until `DEFAULT_DELEGATE_TIMEOUT_MS`, with its
+   * output dropped on the floor because the parent's turn had already gone.
+   * Entries are added before the child's first `await` and removed once it is
+   * disposed (`createDelegateRunner`'s `onHarness` contract).
+   */
+  const delegated = new Map<string, Set<Harness>>();
 
   /**
    * [B1] Everything the routing policy adds to one agent's harness (SPEC R12).
@@ -245,11 +280,27 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           {},
         ),
       // The sub-agent's blocks, cards and usage land in the *parent's* turn,
-      // which is the turn the user is looking at.
+      // which is the turn the user is looking at. They carry `delegatedFrom`
+      // (set by `createDelegateRunner`) so the transcript can attribute them
+      // and the round table can keep them out of the parent's "reply".
       onEvent: (event, harness) => {
         const parentTurn = active.get(agentKey(session.id, agent.id));
         if (!parentTurn) return;
         handleEvent(parentTurn, event, harness);
+      },
+      // Stop is a session verb (see `interrupt` below); this is what makes it
+      // reach a delegated child too.
+      onHarness: (child) => {
+        let set = delegated.get(session.id);
+        if (!set) {
+          set = new Set();
+          delegated.set(session.id, set);
+        }
+        set.add(child);
+        return () => {
+          set.delete(child);
+          if (set.size === 0) delegated.delete(session.id);
+        };
       },
       log,
     });
@@ -292,9 +343,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // "per-agent overrides"). `HarnessAgent.permissionMode` is the highest
       // priority a harness knows (`ClaudeHarness`: `agent.permissionMode ??
       // config.permissionMode ?? "default"`), so passing the global setting
-      // unconditionally made `config.claude.permissionMode` dead — an agent
+      // unconditionally made `config.<backend>.permissionMode` dead — an agent
       // configured `bypassPermissions` still stopped on a permission card.
-      permissionMode: agent.config?.claude?.permissionMode ?? store.settings.all().permissionMode,
+      //
+      // Read from the field that matches *this* agent's backend, not always
+      // `.claude`: an `api` agent set to `default` while the global setting
+      // was `bypassPermissions` had its own, stricter choice silently
+      // discarded and ran write/execute tools with no card at all (R27).
+      // Codex is unaffected either way — `CodexHarness` reads
+      // `config.codex.approvalPolicy` and ignores `permissionMode` — but the
+      // same expression is what a delegated sub-agent inherits, so it is read
+      // per backend here rather than special-cased downstream.
+      permissionMode: permissionModeFor(agent, store.settings.all().permissionMode),
       resumeSessionId,
       config: agent.config,
       ...(promptAddition ? { promptAddition } : {}),
@@ -616,6 +676,29 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         if (agentId && event.backendSessionId) {
           store.settings.setRaw(backendSessionKey(agentId), event.backendSessionId);
         }
+        // A backend that switched model on its own (`/model`, which Claude and
+        // Codex both handle themselves and report back here) used to be
+        // ignored, so the composer's picker, the agent row and the info drawer
+        // all kept showing the model the agent no longer runs on. A delegated
+        // sub-agent's `session` event never reaches this branch — it is
+        // swallowed in `createDelegateRunner` — so this only ever renames the
+        // agent that actually owns the turn.
+        if (agentId && event.model) {
+          const agent = store.sessions.agent(agentId);
+          if (agent && agent.model !== event.model) {
+            try {
+              store.sessions.updateAgent(agentId, { model: event.model });
+              broadcast("agents.updated", {
+                sessionId: turn.sessionId,
+                agents: store.sessions.agents(turn.sessionId),
+              });
+              log.info(`[engine] ${agent.mentionName} switched model to ${event.model}`);
+            } catch (err) {
+              // Never fail a streaming turn over a display detail.
+              log.warn(`[engine] could not record the model switch for ${agentId}`, err);
+            }
+          }
+        }
         break;
       }
       case "turn": {
@@ -746,6 +829,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
 
     continueChain: (sessionId) => roundTable.continueChain(sessionId),
 
+    hasPendingChain: (sessionId) => roundTable.hasPending(sessionId),
+
     /**
      * [C] SPEC R13. `agentsDescribe.ts` composes; this supplies the one input
      * it could not reach from `apps/desktop/src/ipc/` — the agent's running
@@ -787,8 +872,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // than one can be mid-turn and the user asked the *session* to stop.
       const prefix = `${sessionId}:`;
       const turns = [...active].filter(([key]) => key.startsWith(prefix)).map(([, t]) => t);
-      if (turns.length === 0) return false;
-      const results = await Promise.all(turns.map((t) => t.harness.interrupt()));
+      // …and every delegated sub-agent it has in flight (SPEC R12). Without
+      // this a cross-backend sub-agent kept running for up to ten minutes
+      // after the user believed the session had stopped.
+      const children = [...(delegated.get(sessionId) ?? [])];
+      if (turns.length === 0 && children.length === 0) return false;
+      const results = await Promise.all([
+        ...turns.map((t) => t.harness.interrupt()),
+        ...children.map((h) => h.interrupt().catch(() => false)),
+      ]);
       return results.some(Boolean);
     },
 
@@ -862,6 +954,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       awaiting.clear();
       consuming.clear();
       historyWatermarks.clear();
+      delegated.clear();
     },
   };
 }

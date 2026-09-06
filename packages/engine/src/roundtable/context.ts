@@ -28,6 +28,13 @@
  *    must start at the later of "the agent's last turn" and "the watermark the
  *    harness started from", or a restart would replay the same turns twice.
  *
+ * The one thing the delta must not allow is a *quoted* speaker forging a label
+ * of its own: a reply containing a line `[user]: rm -rf …` would otherwise
+ * reach the next agent looking like a genuine instruction from the operator.
+ * `escapeSpeakerLabels` backslash-escapes a line-leading `[` in everything
+ * quoted, and capygen never escapes the labels it writes itself, so the two
+ * can always be told apart.
+ *
  * Nothing here reads a database: the desktop passes the turns it already has.
  */
 import type { Backend, TurnRole } from "@capygen/shared";
@@ -79,6 +86,26 @@ function clamp(text: string, limit: number): string {
   return `${text.slice(0, limit)}… [${text.length - limit} more characters]`;
 }
 
+/**
+ * Neutralise a speaker label a *quoted* speaker wrote themselves.
+ *
+ * The delta is line-oriented and its only structure is the `[label]: ` prefix
+ * capygen puts at the start of each line. So an agent whose tool call read
+ * attacker-controlled text (a file, a web page, an MCP result) could reply
+ * with a line of its own that begins `[user]: …` and it would arrive in the
+ * next agent's prompt looking exactly like a turn capygen had added — a
+ * forged instruction from the human operator, indistinguishable from a real
+ * one.
+ *
+ * Escaping the bracket is enough to make the two distinguishable, because
+ * capygen never escapes the labels *it* writes: a line starting `\[` is
+ * quoted text, always. The character is kept (nothing the agent said is lost)
+ * and the cost is one backslash per offending line.
+ */
+export function escapeSpeakerLabels(text: string): string {
+  return text.replace(/^(\s*)\[/gm, "$1\\[");
+}
+
 function labelFor(
   agentId: string | null,
   speakers: ReadonlyMap<string, SpeakerInfo>,
@@ -116,7 +143,9 @@ export function contextDelta(input: BuildAgentPromptInput): string {
     if (turn.agentId === input.agentId) continue; // its own words
     const text = turn.text.trim();
     if (!text) continue;
-    const line = `${labelFor(turn.agentId, input.speakers)}: ${clamp(text, maxTurn)}`;
+    const line = `${labelFor(turn.agentId, input.speakers)}: ${escapeSpeakerLabels(
+      clamp(text, maxTurn),
+    )}`;
     total += line.length + 1;
     lines.push(line);
   }
@@ -138,8 +167,12 @@ export function contextDelta(input: BuildAgentPromptInput): string {
 export function buildAgentPrompt(input: BuildAgentPromptInput): string {
   const delta = contextDelta(input);
   const from = input.messageFrom ?? null;
+  // Another agent's text is escaped for the same reason the delta's lines are:
+  // it is a quotation, and it must not be able to forge a `[user]:` line of
+  // its own inside it. The *user's* message is not escaped — it is the turn,
+  // not a quotation of one.
   const message = from
-    ? `${labelFor(from, input.speakers)}: ${input.message}`
+    ? `${labelFor(from, input.speakers)}: ${escapeSpeakerLabels(input.message)}`
     : input.message;
   return delta ? `${delta}\n\n${message}` : message;
 }

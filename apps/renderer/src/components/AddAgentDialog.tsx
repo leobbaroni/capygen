@@ -81,6 +81,15 @@ export function AddAgentDialog({
   const [error, setError] = useState<string | null>(null);
 
   const currentHarness = available.find((h) => h.backend === backend) ?? null;
+  /**
+   * A Codex parent cannot be handed a `delegate_task` tool at all — `codex
+   * app-server` takes MCP servers only from `~/.codex/config.toml` and capygen
+   * will not write one behind the user's back (ADR-0004, `canDelegateFrom`).
+   * A cross-backend rule on such an agent is not a preference the product
+   * honours later; it is dead on arrival, so the options say so rather than
+   * accepting a policy that silently fails open.
+   */
+  const crossBackendRouting = backend !== "codex";
 
   // Auto-derive the mention name from the display name until the user edits
   // it directly — the same "auto, then sticky once touched" pattern the
@@ -104,8 +113,40 @@ export function AddAgentDialog({
     setSubmitting(false);
   }
 
+  /**
+   * Seed the form when the dialog is **shown**, not when it is dismissed.
+   *
+   * Both of this component's inputs change after mount, and resetting on close
+   * read them one render too early:
+   *   - `harnesses` is empty at mount (`harness.list` is deliberately not
+   *     awaited by the bootstrap), so the first open rendered a Backend select
+   *     displaying "Claude Code" over a `backend` of `""` and a Model select
+   *     with no options at all. Add then refused with "Choose a backend.", and
+   *     on a machine with one backend re-picking the shown option fires no
+   *     `change` event — the only way out was Cancel and reopen;
+   *   - `defaultLead` flips to false once the caller's roster has an agent,
+   *     but `resetFields` ran from the closure of the render that submitted,
+   *     where it was still true — so the second agent drafted on the landing
+   *     silently stole the lead crown.
+   */
+  useEffect(() => {
+    if (open) resetFields();
+    // Keyed on `open` alone on purpose: this means "the dialog was shown".
+    // Re-running it whenever a dependency moved would wipe what the user typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // `harness.list` can also land *while* the dialog is open. Fill in only what
+  // is still unset, so this can never overwrite a choice the user has made.
+  useEffect(() => {
+    if (backend) return;
+    const first = firstAvailable(harnesses);
+    if (!first) return;
+    setBackend(first.backend);
+    setModel(first.defaultModel);
+  }, [harnesses, backend]);
+
   function handleOpenChange(next: boolean): void {
-    if (!next) resetFields();
     onOpenChange(next);
   }
 
@@ -203,9 +244,18 @@ export function AddAgentDialog({
                       setBackend(nextBackend);
                       const harness = available.find((h) => h.backend === nextBackend);
                       setModel(harness?.defaultModel ?? harness?.models[0]?.id ?? "");
+                      // A rule this backend cannot apply must not survive the
+                      // switch as an invisible no-op.
+                      if (nextBackend === "codex" && routingBackend && routingBackend !== "codex") {
+                        setRoutingBackend("");
+                      }
                     }}
                     className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring"
                   >
+                    {/* A controlled select with no matching option still
+                        *displays* its first one, so an unseeded `backend` read
+                        as a choice the state did not actually hold. */}
+                    <option value="">Choose a backend…</option>
                     {available.map((h) => (
                       <option key={h.backend} value={h.backend}>
                         {h.label}
@@ -299,9 +349,13 @@ export function AddAgentDialog({
                     className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
                   >
                     <option value="">Inherit parent's backend</option>
-                    <option value="claude">{BACKEND_LABEL.claude}</option>
+                    <option value="claude" disabled={!crossBackendRouting}>
+                      {BACKEND_LABEL.claude}
+                    </option>
                     <option value="codex">{BACKEND_LABEL.codex}</option>
-                    <option value="api">{BACKEND_LABEL.api}</option>
+                    <option value="api" disabled={!crossBackendRouting}>
+                      {BACKEND_LABEL.api}
+                    </option>
                   </select>
                   <input
                     type="text"
@@ -313,6 +367,17 @@ export function AddAgentDialog({
                     className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
                   />
                 </div>
+                {!crossBackendRouting ? (
+                  <p
+                    data-testid="add-agent-routing-note"
+                    className="px-1 text-xs text-muted-foreground"
+                  >
+                    A Codex agent can only route sub-agents to Codex. capygen cannot hand{" "}
+                    <code>codex app-server</code> a tool — it reads MCP servers only from{" "}
+                    <code>~/.codex/config.toml</code> (ADR-0004) — so another backend here
+                    would fail open onto Codex's own model.
+                  </p>
+                ) : null}
               </fieldset>
             </>
           )}

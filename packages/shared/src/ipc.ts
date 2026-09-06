@@ -98,6 +98,12 @@ export const INVOKE_CHANNELS = {
         agents: z.array(AgentSchema),
         turns: z.array(TurnSchema),
         blocks: z.array(BlockSchema),
+        /** True when the dispatcher still holds a hop the cap refused, so
+         *  `chat.continue` would run it (ADR-0002, SPEC R11). The renderer's
+         *  Continue bar is rebuilt from this rather than from the one-shot
+         *  `chat.chainStopped` event, which only the foreground session hears
+         *  and which `openSession` clears. */
+        chainPending: z.boolean().default(false),
       })
       .nullable(),
   ),
@@ -191,7 +197,15 @@ export const INVOKE_CHANNELS = {
       /** Target agent in round-table mode; the lead when omitted. */
       agentId: z.string().min(1).nullable().default(null),
     }),
-    z.object({ userTurnId: z.string(), agentTurnId: z.string() }),
+    z.object({
+      userTurnId: z.string(),
+      agentTurnId: z.string(),
+      /** `@names` in the message that answer to no agent in this session.
+       *  `resolveTargets` documents these as "never silently dropped" — a
+       *  typo (`@claud`) otherwise becomes a message to the lead with nothing
+       *  in the UI to say so. */
+      unknownMentions: z.array(z.string()).default([]),
+    }),
   ),
   "chat.interrupt": channel(z.object({ sessionId: z.string().min(1) }), OkSchema),
   /**

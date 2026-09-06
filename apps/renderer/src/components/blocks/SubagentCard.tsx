@@ -1,7 +1,14 @@
 /**
  * Sub-agent spawn block (CONTEXT.md §Sub-agent). Collapsed by default —
- * expands to the spawn's description. The status badge is the primary
- * signal; the routing policy and agent tree proper arrive with Phase 4 (R12).
+ * expands to the spawn's description.
+ *
+ * The card shows the routed **model** and, when capygen re-homed the spawn
+ * itself, a "routed" marker and the spawn's own cost. Those three fields are
+ * on `SubagentBlock` precisely so R12's routing has a visible effect: without
+ * them a Claude agent whose rule sends sub-agents to `claude-haiku-4-5`
+ * produced a card byte-identical to an unrouted spawn, and the only surface
+ * that showed the difference was the Agents pane — which `ChatPage` opens
+ * closed.
  */
 import { ChevronRightIcon, UsersIcon } from "lucide-react";
 import type { SubagentBlock } from "@capygen/shared";
@@ -22,6 +29,7 @@ export function SubagentCard({ block }: { block: SubagentBlock }) {
       className="group w-full"
       data-testid="block-subagent"
       data-status={block.status}
+      data-delegated={block.delegated ? "true" : undefined}
     >
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1.5 rounded-lg border border-border-weak bg-card px-3 py-2 text-left text-sm transition-colors hover:bg-accent/40">
         <UsersIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -30,7 +38,26 @@ export function SubagentCard({ block }: { block: SubagentBlock }) {
           {block.backend ? (
             <span className="text-muted-foreground"> · {block.backend}</span>
           ) : null}
+          {block.model ? (
+            <span className="text-muted-foreground" data-testid="block-subagent-model">
+              {" "}
+              · {block.model}
+            </span>
+          ) : null}
         </span>
+        {block.delegated ? (
+          <Badge variant="info" data-testid="block-subagent-routed" title="capygen routed this spawn to another backend (SPEC R12)">
+            routed
+          </Badge>
+        ) : null}
+        {block.costUsd !== undefined && block.costUsd > 0 ? (
+          <span
+            className="shrink-0 text-xs text-muted-foreground"
+            data-testid="block-subagent-cost"
+          >
+            ${block.costUsd.toFixed(4)}
+          </span>
+        ) : null}
         <Badge variant={STATUS_VARIANT[block.status]}>{block.status}</Badge>
         <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>

@@ -94,8 +94,23 @@ export interface AppState {
    * R11) — `null` when nothing is stopped. `chat.chainStopped` sets it;
    * `send()` and `continueChat()` both clear it (a new message or a
    * Continue is exactly "until the user speaks or presses Continue").
+   *
+   * `openSession` rebuilds it from `sessions.get`'s `chainPending`, which is
+   * the main process's own durable answer. The event alone was not enough: a
+   * chain stopped while the user was reading *another* session is dropped by
+   * the handler below (wrong `sessionId`), and coming back to the session
+   * cleared the field — leaving the transcript's "press Continue" line above
+   * a button that did not exist, while the main process still held a
+   * resumable hop that the next message would silently discard.
    */
   chainStopped: { turnId: string; reason: "hop_cap" | "error" } | null;
+  /**
+   * `@names` in the last message this session sent that answer to no agent
+   * (`chat.send`'s `unknownMentions`). `resolveTargets` promises these are
+   * "never silently dropped"; the transcript badges them on the user turn so
+   * a typo does not look like a message that was routed correctly.
+   */
+  unknownMentions: { turnId: string; names: string[] } | null;
 
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
@@ -372,8 +387,15 @@ export const useAppStore = create<AppState>()((set, get) => {
    * code path for solo and round-table alike.
    */
   async function dispatchNow(sessionId: string, text: string): Promise<void> {
-    set({ chainStopped: null });
-    await ipc().invoke("chat.send", { sessionId, text, agentId: null });
+    set({ chainStopped: null, unknownMentions: null });
+    const { userTurnId, unknownMentions } = await ipc().invoke("chat.send", {
+      sessionId,
+      text,
+      agentId: null,
+    });
+    if (get().activeSessionId === sessionId && unknownMentions.length > 0) {
+      set({ unknownMentions: { turnId: userTurnId, names: unknownMentions } });
+    }
     await refreshTurns(sessionId);
   }
 
@@ -431,6 +453,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     showArchived: false,
     staleRequests: [],
     chainStopped: null,
+    unknownMentions: null,
 
     async init() {
       if (!hasBridge()) {
@@ -498,6 +521,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         lastDoneAt: null,
         staleRequests: [],
         chainStopped: null,
+        unknownMentions: null,
       }));
       return session;
     },
@@ -514,6 +538,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         lastDoneAt: null,
         staleRequests: [],
         chainStopped: null,
+        unknownMentions: null,
       });
       const [loaded, commands] = await Promise.all([
         ipc().invoke("sessions.get", { sessionId }),
@@ -522,11 +547,20 @@ export const useAppStore = create<AppState>()((set, get) => {
       if (get().activeSessionId !== sessionId) return;
       set({ commands });
       if (!loaded) return;
+      // The main process still holds the hop the cap refused; rebuild the
+      // Continue bar from that rather than from an event this renderer may
+      // never have heard. `turnId` is the chain's last agent turn, which is
+      // what `RoundTable` blocked on and what the bar reads `hopIndex` from.
+      const lastAgentTurn = [...loaded.turns].reverse().find((t) => t.role === "agent");
       set({
         agents: loaded.agents,
         turns: loaded.turns,
         blocks: Object.fromEntries(loaded.blocks.map((b) => [b.id, b])),
         turnStatus: Object.fromEntries(loaded.turns.map((t) => [t.id, t.status])),
+        chainStopped:
+          loaded.chainPending && lastAgentTurn
+            ? { turnId: lastAgentTurn.id, reason: "hop_cap" }
+            : null,
       });
       void refreshUsage(sessionId);
     },
@@ -556,7 +590,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       const sessionId = get().activeSessionId;
       if (!sessionId) return;
       touchActivity();
-      set({ chainStopped: null });
+      set({ chainStopped: null, unknownMentions: null });
       const { ok } = await ipc().invoke("chat.continue", { sessionId });
       if (ok) await refreshTurns(sessionId);
     },

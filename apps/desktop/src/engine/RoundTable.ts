@@ -27,6 +27,12 @@
  *    transcript's order stays deterministic (`created_at, rowid`) rather than
  *    depending on which backend happened to answer first. Completion order is
  *    still what drives chaining, so a fast agent's mention is queued first.
+ *  - **`Session.mode` is read here, not only drawn in the UI.** A solo session
+ *    routes every message to the lead and plans no agent-to-agent hop at all,
+ *    however many agents its roster still carries from before the switch —
+ *    which is what the mode-switch confirm promises the user. Solo is still
+ *    the same code path (ADR-0002), just with the mode passed to
+ *    `resolveTargets`/`nextHopTargets`.
  *  - **A stateful backend is never re-sent the transcript** (SPEC R23). The
  *    text a harness receives is `buildAgentPrompt`: the labelled delta since
  *    that agent's own last turn, then the addressed message. See
@@ -43,7 +49,7 @@ import {
   type SpeakerInfo,
   type TranscriptTurn,
 } from "@capygen/engine";
-import type { Turn, TurnStatus } from "@capygen/shared";
+import type { SessionMode, Turn, TurnStatus } from "@capygen/shared";
 import { errorBlock, finishTurn, openAgentTurn, recordUserTurn, systemTurn } from "./persist.js";
 import { roundTableAgents } from "./routing.js";
 import type { EngineDeps } from "./types.js";
@@ -80,6 +86,13 @@ export interface DispatchResult {
   agentTurnId: string;
   /** Every agent turn this message opened, in target order. */
   agentTurnIds: string[];
+  /**
+   * `@names` in the message that answer to no agent in this session. A typo
+   * (`@claud`) silently becomes a message to the lead otherwise, and nothing
+   * in the transcript distinguishes it from a message that was addressed
+   * correctly — so it is returned rather than only logged.
+   */
+  unknownMentions: string[];
 }
 
 /** One turn queued to run: which agent, and what it is being told. */
@@ -98,6 +111,15 @@ interface Entry {
 interface PendingChain {
   fromTurnId: string;
   fromAgentId: string;
+  /**
+   * The turn whose @-mention started this whole chain — `Turn.triggeredByTurnId`'s
+   * documented contract (`packages/shared/src/domain.ts`): "`chat.continue`
+   * resuming a hop-capped chain sets `parentTurnId` to the chain's *last* turn
+   * while `triggeredByTurnId` keeps pointing at the mention that actually
+   * started it". Captured when the hop is blocked, because `fromTurnId` alone
+   * is the *last* turn and using it made every resumed chain claim a new root.
+   */
+  rootTriggeredByTurnId: string;
   text: string;
   hopIndex: number;
   targets: RoundTableAgent[];
@@ -106,6 +128,17 @@ interface PendingChain {
 export interface RoundTable {
   dispatch(args: DispatchArgs): DispatchResult;
   continueChain(sessionId: string): { ok: boolean; agentTurnId: string | null };
+  /**
+   * Is there a hop this session's cap refused that `chat.continue` would run?
+   *
+   * The Continue bar used to exist only as a one-shot `chat.chainStopped`
+   * event, which the renderer drops for a session that is not in the
+   * foreground and clears on every `openSession` — so a chain stopped while
+   * the user was reading another session came back with its transcript line
+   * ("press Continue") and no button. This is the durable answer that
+   * `sessions.get` reports instead.
+   */
+  hasPending(sessionId: string): boolean;
   /** Drop any queued hop for this session (interrupt, or the user speaking). */
   cancel(sessionId: string): void;
   /** Wait for every chain this session has in flight — shutdown only. */
@@ -119,11 +152,19 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
   const cancelled = new Set<string>();
   const running = new Set<Promise<void>>();
 
-  function sessionSettings(sessionId: string): { hopCap: number; parallel: boolean } {
+  function sessionSettings(sessionId: string): {
+    hopCap: number;
+    parallel: boolean;
+    mode: SessionMode;
+  } {
     const session = store.sessions.get(sessionId);
     return {
       hopCap: session?.settings.hopCap ?? 3,
       parallel: session?.settings.parallelAgents ?? false,
+      // ADR-0002: in solo the lead is the only agent that speaks, so no hop
+      // is ever planned — whatever the roster still holds from before the
+      // switch, and whoever a reply @-mentions.
+      mode: session?.mode ?? "round-table",
     };
   }
 
@@ -145,6 +186,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
     const texts = new Map<string, string[]>();
     for (const block of blocks) {
       if (block.kind !== "text") continue;
+      if (block.delegatedFrom) continue; // see `textOfTurn`
       const list = texts.get(block.turnId);
       if (list) list.push(block.text);
       else texts.set(block.turnId, [block.text]);
@@ -160,11 +202,21 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       }));
   }
 
-  /** The text an agent turn produced, for chaining and for the next delta. */
+  /**
+   * The text an agent turn produced, for chaining and for the next delta.
+   *
+   * A *delegated* sub-agent (SPEC R12) streams its own text blocks into the
+   * parent's turn, and those are not the parent's words: folding them in here
+   * would deliver a sub-agent's entire raw answer, unbounded, to whichever
+   * agent the parent then @-mentions — and re-include it in every later
+   * context delta on top of that (SPEC R23's "minimal delta"). `delegatedFrom`
+   * is exactly the marker that says which blocks those are.
+   */
   function textOfTurn(turnId: string): string {
     return store.blocks
       .listByTurn(turnId)
       .filter((b): b is Extract<typeof b, { kind: "text" }> => b.kind === "text")
+      .filter((b) => !b.delegatedFrom)
       .map((b) => b.text)
       .join("\n")
       .trim();
@@ -269,7 +321,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         return;
       }
 
-      const { hopCap, parallel } = sessionSettings(sessionId);
+      const { hopCap, parallel, mode } = sessionSettings(sessionId);
       const settled: { entry: Entry; status: TurnStatus }[] = [];
       if (parallel) {
         // One lane per agent, lanes run concurrently. Two hops addressed to
@@ -335,6 +387,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
           text: reply,
           speakerAgentId: entry.agent.id,
           agents,
+          mode,
         });
         if (targets.length === 0) continue;
 
@@ -343,6 +396,8 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
           blocked.push({
             fromTurnId: entry.turn.id,
             fromAgentId: entry.agent.id,
+            // Exactly what the un-blocked hop below would have inherited.
+            rootTriggeredByTurnId: entry.turn.triggeredByTurnId ?? entry.turn.id,
             text: reply,
             hopIndex,
             targets,
@@ -406,6 +461,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         agents,
         leadAgentId: session.leadAgentId,
         ...(args.agentId ? { explicitAgentId: args.agentId } : {}),
+        mode: session.mode,
       });
       if (targets.unknown.length > 0) {
         log.info(
@@ -433,7 +489,12 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         });
         errorBlock(deps, args.sessionId, turn.id, "This session has no agent to answer with.");
         finishTurn(deps, args.sessionId, turn.id, "error", "no agent");
-        return { userTurnId: userTurn.id, agentTurnId: turn.id, agentTurnIds: [turn.id] };
+        return {
+          userTurnId: userTurn.id,
+          agentTurnId: turn.id,
+          agentTurnIds: [turn.id],
+          unknownMentions: targets.unknown,
+        };
       }
 
       const entries = openEntries(args.sessionId, targets.agents, {
@@ -454,6 +515,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         userTurnId: userTurn.id,
         agentTurnId: entries[0]!.turn.id,
         agentTurnIds: entries.map((e) => e.turn.id),
+        unknownMentions: targets.unknown,
       };
     },
 
@@ -479,8 +541,10 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         const entries = chains.flatMap((chain) =>
           openEntries(sessionId, chain.targets, {
             hopIndex: chain.hopIndex,
+            // `parentTurnId` is the chain's last turn, `triggeredByTurnId` the
+            // mention that started it — the split `Turn` documents.
             parentTurnId: chain.fromTurnId,
-            triggeredByTurnId: chain.fromTurnId,
+            triggeredByTurnId: chain.rootTriggeredByTurnId,
             message: chain.text,
             messageFrom: chain.fromAgentId,
             sourceTurnId: chain.fromTurnId,
@@ -508,6 +572,10 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       });
       start(sessionId, entries);
       return { ok: true, agentTurnId: entries[0]!.turn.id };
+    },
+
+    hasPending(sessionId: string): boolean {
+      return (pending.get(sessionId)?.length ?? 0) > 0;
     },
 
     cancel(sessionId: string): void {

@@ -106,7 +106,13 @@ export function createStubEngine(
         userTurnId: userTurn.id,
         agentTurnId: agentTurn.id,
         agentTurnIds: [agentTurn.id],
+        // The echo double resolves no mentions at all, so none can be unknown.
+        unknownMentions: [],
       };
+    },
+
+    hasPendingChain(sessionId) {
+      return roundTable?.hasPending(sessionId) ?? false;
     },
 
     continueChain(sessionId) {

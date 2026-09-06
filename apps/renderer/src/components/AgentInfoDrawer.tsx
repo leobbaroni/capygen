@@ -6,10 +6,14 @@
  * route/dialog for it, matching the reference's in-rail `AgentInfo` panel,
  * simplified to capygen's `AgentDescribe` shape rather than porting its
  * full MCP-server/policy-editing surface, which capygen does not have yet).
+ *
+ * It is also the one place a live agent's **sub-agent routing** rule (SPEC
+ * R12) can be read and changed — see `RoutingSection` at the bottom of this
+ * file for why that matters and for the one case where a rule cannot apply.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeftIcon } from "lucide-react";
-import type { Agent, AgentDescribe } from "@capygen/shared";
+import type { Agent, AgentDescribe, Backend } from "@capygen/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -78,6 +82,7 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
 
         {info ? (
           <div className="flex flex-col gap-4">
+            <RoutingSection agent={agent} />
             {/* Two different things, both of which R13 asks for: the note the
                 user wrote when they added this agent, and the usage
                 description the backend's own facts produce. Folding them into
@@ -92,11 +97,18 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
               </Section>
             ) : null}
 
-            <Section title={agent.description ? "What it can do" : "Description"}>
-              <p className="text-foreground" data-testid="agent-info-usage-description">
-                {info.description || "No description yet."}
-              </p>
-            </Section>
+            {/* Until an agent has taken a turn there is no harness snapshot,
+                so `describeCore`'s fallback returns the user's own note back
+                as the usage description — and the drawer printed the same
+                sentence twice under two headings. Show the second section
+                only when it actually says something else. */}
+            {agent.description && info.description.trim() === agent.description.trim() ? null : (
+              <Section title={agent.description ? "What it can do" : "Description"}>
+                <p className="text-foreground" data-testid="agent-info-usage-description">
+                  {info.description || "Not reported yet."}
+                </p>
+              </Section>
+            )}
 
             <Section title="Capabilities">
               {info.capabilities.length > 0 ? (
@@ -159,6 +171,114 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The agent's own sub-agent routing rule (SPEC R12), editable here.
+ *
+ * The rule was previously write-once, in the Add-agent dialog: nothing in the
+ * app read `agent.subagentRouting` back, so a session's lead — created by
+ * `sessions.create` from the landing's harness picker, which never asks for one
+ * — could never be given a routing rule at all, and a rule set at creation
+ * could never be seen or changed.
+ *
+ * It also says when a rule cannot take effect. `codex app-server` takes MCP
+ * servers only from `~/.codex/config.toml`, so capygen cannot hand a Codex
+ * agent the `delegate_task` tool a cross-backend route needs (ADR-0004,
+ * `canDelegateFrom`): such a rule fails open onto Codex's own model, and until
+ * now the only trace of that was a log line.
+ */
+function RoutingSection({ agent }: { agent: Agent }) {
+  const updateAgent = useAppStore((s) => s.updateAgent);
+  const [backend, setBackend] = useState<Backend | "">(agent.subagentRouting?.backend ?? "");
+  const [model, setModel] = useState(agent.subagentRouting?.model ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // The row can be replaced under us (`agents.updated` after a save, or an
+  // edit from another surface); the fields follow the row, not the mount.
+  useEffect(() => {
+    setBackend(agent.subagentRouting?.backend ?? "");
+    setModel(agent.subagentRouting?.model ?? "");
+    setSaveError(null);
+  }, [agent.id, agent.subagentRouting?.backend, agent.subagentRouting?.model]);
+
+  const crossBackend = backend !== "" && backend !== agent.backend;
+  const failsOpen = crossBackend && agent.backend === "codex";
+  const dirty =
+    backend !== (agent.subagentRouting?.backend ?? "") ||
+    model.trim() !== (agent.subagentRouting?.model ?? "");
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await updateAgent(agent.id, {
+        subagentRouting: {
+          ...(backend ? { backend } : {}),
+          ...(model.trim() ? { model: model.trim() } : {}),
+        },
+      });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not save the routing rule.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section title="Sub-agent routing">
+      <div className="flex flex-col gap-1.5" data-testid="agent-info-routing">
+        <div className="flex gap-1.5">
+          <select
+            aria-label="Sub-agent backend"
+            data-testid="agent-info-routing-backend"
+            value={backend}
+            onChange={(e) => setBackend(e.target.value as Backend | "")}
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
+          >
+            <option value="">Inherit ({BACKEND_LABEL[agent.backend]})</option>
+            <option value="claude" disabled={agent.backend === "codex"}>
+              {BACKEND_LABEL.claude}
+            </option>
+            <option value="codex">{BACKEND_LABEL.codex}</option>
+            <option value="api" disabled={agent.backend === "codex"}>
+              {BACKEND_LABEL.api}
+            </option>
+          </select>
+          <input
+            type="text"
+            aria-label="Sub-agent model"
+            data-testid="agent-info-routing-model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="model (optional)"
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground" data-testid="agent-info-routing-effect">
+          {failsOpen
+            ? "This rule cannot be applied: capygen cannot give a Codex agent a delegation tool (ADR-0004), so its sub-agents run on its own model."
+            : backend || model.trim()
+              ? `Sub-agents run on ${BACKEND_LABEL[(backend || agent.backend) as Backend]}${
+                  model.trim() ? ` / ${model.trim()}` : ""
+                }.`
+              : "Sub-agents inherit this agent's own backend and model."}
+        </p>
+        {saveError ? <p className="text-xs text-destructive">{saveError}</p> : null}
+        <Button
+          variant="outline"
+          size="sm"
+          className="self-start"
+          data-testid="agent-info-routing-save"
+          disabled={!dirty || saving}
+          onClick={() => void save()}
+        >
+          {saving ? "Saving…" : "Save routing"}
+        </Button>
+      </div>
+    </Section>
   );
 }
 

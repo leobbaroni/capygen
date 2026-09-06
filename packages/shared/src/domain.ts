@@ -433,6 +433,18 @@ const blockBase = {
   index: z.number().int().nonnegative(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
+  /**
+   * Set when this block was produced by a *delegated* sub-agent (SPEC R12)
+   * streaming into its parent agent's own turn: the sub-agent's label. Two
+   * things need it and neither can recover it afterwards — the transcript,
+   * which must not present another model's answer as the lead's own, and
+   * `RoundTable`'s `textOfTurn`, which must not fold a sub-agent's whole
+   * output into the reply it hands the next hop (SPEC R23).
+   *
+   * Absent (not `null`) on every block an agent wrote itself, so an old row
+   * parses unchanged and `"delegatedFrom" in block` is the whole test.
+   */
+  delegatedFrom: z.string().min(1).optional(),
 };
 
 export const ToolCallStatusSchema = z.enum([

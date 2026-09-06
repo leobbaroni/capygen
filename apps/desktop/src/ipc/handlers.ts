@@ -196,6 +196,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         agents: store.sessions.agents(session.id),
         turns: store.turns.list(session.id),
         blocks: store.blocks.listBySession(session.id),
+        // Durable answer to "is the Continue button real?" — the renderer
+        // cannot keep that from a `chat.chainStopped` event it may not have
+        // been listening for (ADR-0002, SPEC R11).
+        chainPending: engine.hasPendingChain(session.id),
       };
     },
 
@@ -300,6 +304,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return {
         userTurnId: dispatched.userTurnId,
         agentTurnId: dispatched.agentTurnId,
+        unknownMentions: dispatched.unknownMentions,
       };
     },
 

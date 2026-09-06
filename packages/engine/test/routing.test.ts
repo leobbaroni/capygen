@@ -370,3 +370,85 @@ describe("the Claude in-process MCP server", () => {
     expect(log.warn).toHaveBeenCalled();
   });
 });
+
+describe("a delegated turn is bounded and interruptible (SPEC R12/R23/R25)", () => {
+  function textScript(text: string) {
+    return (out: AsyncQueue<EngineEvent>): void => {
+      out.push({ type: "block", key: "msg:0", patch: { kind: "text", text } });
+      out.push({ type: "turn", status: "done" });
+      out.close();
+    };
+  }
+
+  it("clamps the answer it hands back — it becomes a tool_result the caller re-sends", async () => {
+    const huge = "x".repeat(300_000);
+    const sub = new ScriptedHarness("codex", textScript(huge));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      maxResultChars: 1_000,
+    });
+    const result = await run({ description: "dump", prompt: "p" });
+    expect(result.ok).toBe(true);
+    expect(result.text.length).toBeLessThan(1_200);
+    expect(result.text).toMatch(/more characters \(truncated\)/);
+  });
+
+  it("honours the calling tool runtime's own budget as every other tool does", async () => {
+    const tool = delegateTaskTool(async () => ({ ok: true, text: "y".repeat(5_000) }));
+    const result = await tool.run({ description: "d", prompt: "p" }, {
+      cwd: "C:/proj",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      maxOutputChars: 100,
+      ask: async () => ({}),
+    });
+    expect(result.content.length).toBeLessThan(200);
+    expect(result.truncated).toBe(true);
+    expect(result.fullOutput).toHaveLength(5_000);
+  });
+
+  it("marks every forwarded block with the sub-agent it came from", async () => {
+    const sub = new ScriptedHarness("codex", textScript("the sub-agent's answer"));
+    const events: EngineEvent[] = [];
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onEvent: (event) => events.push(event),
+    });
+    await run({ description: "review the parser", prompt: "p" });
+
+    const texts = events.filter(
+      (e): e is Extract<EngineEvent, { type: "block" }> =>
+        e.type === "block" && e.patch.kind === "text",
+    );
+    expect(texts).toHaveLength(1);
+    // Without this the block is indistinguishable from the parent's own words,
+    // in the transcript and in `RoundTable.textOfTurn` alike.
+    expect(texts[0]!.patch).toMatchObject({ delegatedFrom: "review the parser" });
+  });
+
+  it("hands the child harness out so a Stop can reach it, and takes it back after", async () => {
+    const seen: Harness[] = [];
+    let released = 0;
+    const sub = new ScriptedHarness("codex", textScript("ok"));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onHarness: (harness) => {
+        seen.push(harness);
+        return () => {
+          released += 1;
+        };
+      },
+    });
+    await run({ description: "d", prompt: "p" });
+    expect(seen).toEqual([sub]);
+    expect(released).toBe(1);
+  });
+});

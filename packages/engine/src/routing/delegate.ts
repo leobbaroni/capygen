@@ -18,7 +18,13 @@
  *  - it streams that turn's blocks into the parent's turn under a `delegate:`
  *    key prefix, wrapped in a `subagent` block with `delegated: true`, so the
  *    agent tree (R13) shows it and R23 bills its tokens to the right model;
- *  - it returns the sub-agent's final text to the caller, as a tool result.
+ *  - it returns the sub-agent's final text to the caller, as a tool result —
+ *    **clamped**, because that text lands in the delegating model's context as
+ *    a `tool_result` and is re-sent with every later turn of that
+ *    conversation, exactly like a Bash or MCP result (SPEC R23/R25);
+ *  - it hands the delegated harness to `onHarness` for the duration of the
+ *    call, so the desktop's Stop can interrupt a sub-agent that is still
+ *    running rather than leaving it to the 10-minute timeout.
  *
  * And it fails open like the rest of R12: no route, an unusable route, a
  * backend that will not start — the tool answers with a sentence saying so and
@@ -31,8 +37,8 @@
  * delegated harness. Nothing is auto-approved (R27).
  */
 import { newId, type Backend, type TurnStatus, type UsageTotals } from "@capygen/shared";
-import { EMPTY_USAGE, addUsage, type EngineEvent, type Harness, type HarnessAgent, type HarnessSession } from "../harness.js";
-import type { JsonSchemaObject, ToolDefinition } from "../tools/types.js";
+import { EMPTY_USAGE, addUsage, type BlockPatch, type EngineEvent, type Harness, type HarnessAgent, type HarnessSession } from "../harness.js";
+import { clampText, type JsonSchemaObject, type ToolDefinition } from "../tools/types.js";
 
 export const DELEGATE_TASK_TOOL = "delegate_task";
 
@@ -103,13 +109,35 @@ export interface DelegateRunnerDeps {
    * event handling, which is how the cards and the usage rows appear.
    */
   onEvent?: (event: EngineEvent, harness: Harness) => void;
+  /**
+   * Called with the delegated harness as soon as it exists, and the function
+   * it returns is called once that harness has been disposed.
+   *
+   * Without it a delegated sub-agent is unstoppable: the child harness is
+   * created inside this closure, so nothing the desktop's `interrupt()` can
+   * see holds a reference to it, and pressing Stop left a cross-backend
+   * sub-agent running (and billing) until `timeoutMs` — with its output
+   * dropped, because the parent's turn was gone by then. The desktop registers
+   * it next to the parent's `ActiveTurn` and interrupts both.
+   */
+  onHarness?: (harness: Harness) => (() => void) | void;
   log?: DelegationLogger;
   /** Hard ceiling on one delegated turn; the harness is disposed after it. */
   timeoutMs?: number;
+  /** Characters of the sub-agent's final text handed back to the caller. */
+  maxResultChars?: number;
 }
 
 const NO_LOG: DelegationLogger = { info: () => {}, warn: () => {}, error: () => {} };
 export const DEFAULT_DELEGATE_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Same 64 KB the tool runtime clamps every other tool result to
+ * (`DEFAULT_MAX_TOOL_OUTPUT_CHARS`, duplicated rather than imported so this
+ * module does not depend on a harness). A delegated answer is a tool result
+ * like any other: unbounded, it would be replayed into the delegating model's
+ * context on every later turn of that conversation.
+ */
+export const DEFAULT_DELEGATE_RESULT_CHARS = 64 * 1024;
 
 /**
  * A backend that can pick its own model when capygen has not named one.
@@ -153,6 +181,15 @@ export function createDelegateRunner(
 
     const index = (counter += 1);
     const key = `delegate:${deps.parent.agentId}:${index}`;
+    /**
+     * Stamped on every block the sub-agent streams into the parent's turn.
+     * Two consumers, neither of which can recover it later: the transcript
+     * (a delegated answer must not render as the lead's own words) and
+     * `RoundTable.textOfTurn`, which would otherwise fold the whole
+     * sub-agent output into the reply it hands the next hop.
+     */
+    const delegatedFrom =
+      req.description.trim() || `${routed.backend} sub-agent`;
     const emit = (event: EngineEvent, harness: Harness): void => {
       try {
         deps.onEvent?.(event, harness);
@@ -190,6 +227,10 @@ export function createDelegateRunner(
       },
     });
 
+    // Registered before the first `await`: an interrupt that lands while the
+    // child is still starting must still reach it.
+    const release = deps.onHarness?.(harness);
+
     emit(subagentBlock("running"), harness);
 
     const agent: HarnessAgent = {
@@ -221,7 +262,11 @@ export function createDelegateRunner(
               // Text is what the caller gets back; every block is also
               // forwarded so the transcript shows the sub-agent working.
               if (event.patch.kind === "text") texts.set(event.key, event.patch.text);
-              emit({ ...event, key: `${key}:${event.key}` }, harness);
+              // The spread of a union of patches cannot be narrowed back to
+              // the union by the compiler; the field is on every block kind
+              // (`blockBase`) and the store re-parses with zod on the way in.
+              const patch = { ...event.patch, delegatedFrom } as BlockPatch;
+              emit({ ...event, key: `${key}:${event.key}`, patch }, harness);
               break;
             }
             case "turn": {
@@ -255,13 +300,22 @@ export function createDelegateRunner(
       error = describe(err);
     } finally {
       await harness.dispose().catch(() => undefined);
+      release?.();
     }
 
-    const text = [...texts.values()].map((t) => t.trim()).filter(Boolean).join("\n\n");
+    // Bounded here rather than at the two call sites, so the Claude in-process
+    // MCP server and the `api` tool definition cannot disagree about it: the
+    // sub-agent's answer becomes a `tool_result` in the *delegating* model's
+    // context and is re-sent with every later turn of that conversation, so an
+    // unbounded one compounds turn after turn (SPEC R23/R25).
+    const raw = [...texts.values()].map((t) => t.trim()).filter(Boolean).join("\n\n");
+    const clamped = clampText(raw, deps.maxResultChars ?? DEFAULT_DELEGATE_RESULT_CHARS);
+    const text = clamped.content;
     emit(subagentBlock(status === "done" ? "done" : "error", usage.costUsd), harness);
     log.info(
       `[delegate] ${routed.backend}/${model || "default"} ${status}` +
-        ` (${text.length} chars, $${usage.costUsd.toFixed(4)})`,
+        ` (${raw.length} chars${clamped.truncated ? ", truncated" : ""},` +
+        ` $${usage.costUsd.toFixed(4)})`,
     );
 
     if (status !== "done") {
@@ -302,7 +356,7 @@ export function delegateTaskTool(
     permissionClass: "execute",
     family: "task",
     parameters: DELEGATE_TASK_SCHEMA,
-    async run(input) {
+    async run(input, ctx) {
       const description = typeof input.description === "string" ? input.description : "";
       const prompt = typeof input.prompt === "string" ? input.prompt : "";
       if (!prompt) {
@@ -313,7 +367,11 @@ export function delegateTaskTool(
         prompt,
         ...(typeof input.model === "string" && input.model ? { model: input.model } : {}),
       });
-      return { content: result.text, ...(result.ok ? {} : { isError: true }) };
+      // `createDelegateRunner` already clamps to its own ceiling; this honours
+      // the *caller's* budget as every other tool in `tools/` does, so a
+      // harness configured with a smaller `maxToolOutputChars` gets it.
+      const clamped = clampText(result.text, ctx.maxOutputChars);
+      return { ...clamped, ...(result.ok ? {} : { isError: true }) };
     },
   };
 }

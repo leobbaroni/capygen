@@ -229,3 +229,98 @@ describe("AddAgentDialog — live mode (an open round-table session)", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 });
+
+describe("AddAgentDialog — seeding (first open after launch)", () => {
+  it("fills in backend and model when harness.list lands after mount", async () => {
+    // `harness.list` is deliberately un-awaited by the bootstrap (G1), so the
+    // dialog mounts with an empty list. It used to seed once, at mount, and
+    // never again: the first open showed a backend it did not hold and a Model
+    // select with no options at all, and Add refused with "Choose a backend."
+    const onAdd = vi.fn();
+    const { rerender } = render(
+      <AddAgentDialog
+        mode="draft"
+        open
+        onOpenChange={vi.fn()}
+        harnesses={[]}
+        existingMentionNames={[]}
+        onAdd={onAdd}
+      />,
+    );
+    rerender(
+      <AddAgentDialog
+        mode="draft"
+        open
+        onOpenChange={vi.fn()}
+        harnesses={HARNESSES}
+        existingMentionNames={[]}
+        onAdd={onAdd}
+      />,
+    );
+
+    expect(screen.getByTestId("add-agent-backend")).toHaveValue("claude");
+    expect(screen.getByTestId("add-agent-model")).toHaveValue("claude-opus-4-5");
+
+    const user = userEvent.setup();
+    await user.type(screen.getByTestId("add-agent-name-input"), "Reviewer");
+    await user.click(screen.getByTestId("add-agent-submit"));
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "claude", model: "claude-opus-4-5" }),
+    );
+  });
+
+  it("re-reads defaultLead when it is shown, so the second agent does not steal the crown", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    const props = {
+      mode: "draft" as const,
+      harnesses: HARNESSES,
+      existingMentionNames: [],
+      onAdd,
+    };
+    // First add: the roster is empty, so this one is the lead.
+    const { rerender } = render(
+      <AddAgentDialog {...props} open onOpenChange={vi.fn()} defaultLead />,
+    );
+    await user.type(screen.getByTestId("add-agent-name-input"), "Alice");
+    await user.click(screen.getByTestId("add-agent-submit"));
+    expect(onAdd).toHaveBeenLastCalledWith(expect.objectContaining({ role: "lead" }));
+
+    // Closed, then reopened with a roster that now has a lead.
+    rerender(<AddAgentDialog {...props} open={false} onOpenChange={vi.fn()} defaultLead={false} />);
+    rerender(<AddAgentDialog {...props} open onOpenChange={vi.fn()} defaultLead={false} />);
+    expect(screen.getByTestId("add-agent-lead")).not.toBeChecked();
+
+    await user.type(screen.getByTestId("add-agent-name-input"), "Bob");
+    await user.click(screen.getByTestId("add-agent-submit"));
+    expect(onAdd).toHaveBeenLastCalledWith(expect.objectContaining({ role: "member" }));
+  });
+
+  it("refuses a cross-backend sub-agent route for a Codex parent, and says why", async () => {
+    const user = userEvent.setup();
+    render(
+      <AddAgentDialog
+        mode="draft"
+        open
+        onOpenChange={vi.fn()}
+        harnesses={HARNESSES}
+        existingMentionNames={[]}
+        onAdd={vi.fn()}
+      />,
+    );
+    // Claude parent: every target is offered.
+    const before = Array.from(
+      screen.getByTestId("add-agent-routing-backend").querySelectorAll("option"),
+    );
+    expect(before.every((o) => !o.disabled)).toBe(true);
+    expect(screen.queryByTestId("add-agent-routing-note")).toBeNull();
+
+    await user.selectOptions(screen.getByTestId("add-agent-backend"), "codex");
+    const routing = screen.getByTestId("add-agent-routing-backend");
+    const options = Array.from(routing.querySelectorAll("option"));
+    expect(options.find((o) => o.value === "claude")).toBeDisabled();
+    expect(options.find((o) => o.value === "api")).toBeDisabled();
+    expect(options.find((o) => o.value === "codex")).toBeEnabled();
+    expect(screen.getByTestId("add-agent-routing-note")).toHaveTextContent("fail open");
+  });
+});

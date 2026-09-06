@@ -11,13 +11,20 @@
  * (a "Back" arrow returns); "+ Add agent" opens `AddAgentDialog` in `live`
  * mode, shown only in round-table sessions.
  *
+ * The roster is editable, not append-only: each row carries "Make lead"
+ * (`agents.setLead`) and "Remove" (`agents.remove`), and the info drawer edits
+ * the agent's own sub-agent routing rule (`agents.update`). Without those the
+ * three store methods and their IPC channels had no caller at all — an agent
+ * added with the wrong backend could never be taken out again, the crown was
+ * display-only, and R12's per-agent routing was unreachable after creation.
+ *
  * This is a fixed-width side panel, not a dockable pane — the real dockview
  * workspace (Files/Editor/Diff/Browser/Terminal/Agents/Tasks/Servers, SPEC
  * R16/R17) is Phase 5; `ChatPage` toggles this one from its own header
  * button in the meantime.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRightIcon, CrownIcon, PlusIcon, UsersIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, CrownIcon, PlusIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 import type { Agent, SubagentBlock } from "@capygen/shared";
 import { AddAgentDialog } from "@/components/AddAgentDialog";
 import { AgentAvatar } from "@/components/AgentAvatar";
@@ -44,6 +51,8 @@ export function AgentsPane({ sessionId, onClose }: AgentsPaneProps) {
   const blocks = useAppStore((s) => s.blocks);
   const harnesses = useAppStore((s) => s.harnesses);
   const session = useAppStore((s) => s.sessions.find((x) => x.id === sessionId));
+  const setLead = useAppStore((s) => s.setLead);
+  const removeAgent = useAppStore((s) => s.removeAgent);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -97,6 +106,18 @@ export function AgentsPane({ sessionId, onClose }: AgentsPaneProps) {
                     agent={agent}
                     subagents={subagentsByParent.get(agent.id) ?? []}
                     onSelect={() => setSelectedAgentId(agent.id)}
+                    onMakeLead={() => void setLead(sessionId, agent.id)}
+                    // The last agent is not removable: a session with an empty
+                    // roster answers nothing, and `resolveTargets` would have
+                    // no lead to fall back to.
+                    onRemove={
+                      ordered.length > 1
+                        ? () => {
+                            if (selectedAgentId === agent.id) setSelectedAgentId(null);
+                            void removeAgent(agent.id);
+                          }
+                        : null
+                    }
                   />
                 ))}
               </ul>
@@ -136,10 +157,15 @@ function AgentTreeRow({
   agent,
   subagents,
   onSelect,
+  onMakeLead,
+  onRemove,
 }: {
   agent: Agent;
   subagents: SubagentBlock[];
   onSelect: () => void;
+  onMakeLead: () => void;
+  /** Null when this agent cannot be removed (it is the only one left). */
+  onRemove: (() => void) | null;
 }) {
   // `useState(subagents.length > 0)` alone latched the value from the first
   // render: opening the pane *before* an agent spawns anything left the row
@@ -178,10 +204,33 @@ function AgentTreeRow({
         >
           <AgentAvatar agent={agent} size={18} />
           <span className="min-w-0 flex-1 truncate text-sm text-foreground">{agent.displayName}</span>
-          {agent.role === "lead" ? (
-            <CrownIcon className="size-3 shrink-0 text-warning" aria-label="Lead agent" />
-          ) : null}
         </button>
+        {agent.role === "lead" ? (
+          <CrownIcon className="size-3 shrink-0 text-warning" aria-label="Lead agent" />
+        ) : (
+          <button
+            type="button"
+            data-testid="agent-make-lead"
+            aria-label={`Make ${agent.displayName} the lead agent`}
+            title="Make lead"
+            onClick={onMakeLead}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent/50 hover:text-warning"
+          >
+            <CrownIcon className="size-3" />
+          </button>
+        )}
+        {onRemove ? (
+          <button
+            type="button"
+            data-testid="agent-remove"
+            aria-label={`Remove ${agent.displayName}`}
+            title="Remove from this session"
+            onClick={onRemove}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent/50 hover:text-destructive"
+          >
+            <Trash2Icon className="size-3" />
+          </button>
+        ) : null}
       </div>
       {open && subagents.length > 0 ? (
         <ul className="ml-6 flex flex-col gap-0.5 border-l border-border-weak pl-2">
@@ -191,8 +240,18 @@ function AgentTreeRow({
               data-testid="agents-tree-subagent"
               className="flex items-center gap-1.5 px-1.5 py-1 text-xs"
             >
-              <span className="min-w-0 flex-1 truncate text-foreground">{sub.name}</span>
-              {sub.model ? <span className="shrink-0 text-muted-foreground">{sub.model}</span> : null}
+              {/* The name has priority over the model id: it is the thing
+                  the tree exists to show, and a `shrink-0` model id used to
+                  push it down to "re…" inside this 288px rail. `title`
+                  makes the truncated form recoverable either way. */}
+              <span className="min-w-0 flex-1 truncate text-foreground" title={sub.name}>
+                {sub.name}
+              </span>
+              {sub.model ? (
+                <span className="min-w-0 max-w-24 truncate text-muted-foreground" title={sub.model}>
+                  {sub.model}
+                </span>
+              ) : null}
               <Badge variant={SUBAGENT_STATUS_VARIANT[sub.status]}>{sub.status}</Badge>
               {sub.costUsd ? (
                 <span className="shrink-0 text-muted-foreground">${sub.costUsd.toFixed(4)}</span>

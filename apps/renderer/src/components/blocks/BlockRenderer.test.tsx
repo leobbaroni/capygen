@@ -180,6 +180,30 @@ describe("BlockRenderer", () => {
     expect(screen.getByTestId("block-subagent")).toHaveTextContent("running");
   });
 
+  it("shows the routed model, the routing marker and the cost (SPEC R12/R23)", () => {
+    // Without these three an unrouted spawn and one capygen re-homed onto
+    // another model render byte-identically, and the only surface that told
+    // them apart was a pane ChatPage opens closed.
+    const block: SubagentBlock = {
+      ...base,
+      id: "b7r",
+      kind: "subagent",
+      agentId: null,
+      name: "reviewer",
+      backend: "codex",
+      model: "gpt-5.5",
+      description: "",
+      status: "done",
+      delegated: true,
+      costUsd: 0.0053,
+    };
+    renderBlock(block);
+    const card = screen.getByTestId("block-subagent");
+    expect(within(card).getByTestId("block-subagent-model")).toHaveTextContent("gpt-5.5");
+    expect(within(card).getByTestId("block-subagent-routed")).toBeInTheDocument();
+    expect(within(card).getByTestId("block-subagent-cost")).toHaveTextContent("$0.0053");
+  });
+
   it("renders an error block's message", () => {
     const block: ErrorBlock = { ...base, id: "b8", kind: "error", message: "boom" };
     renderBlock(block);

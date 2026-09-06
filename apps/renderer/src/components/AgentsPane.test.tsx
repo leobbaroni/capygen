@@ -173,3 +173,44 @@ describe("AgentsPane → AgentInfoDrawer (SPEC R13)", () => {
     expect(await screen.findByTestId("agent-info-error")).toHaveTextContent("unknown agent");
   });
 });
+
+describe("the roster is editable, not append-only (SPEC R12/R13)", () => {
+  it("promotes a member to lead and removes an agent", async () => {
+    const user = userEvent.setup();
+    seed();
+    const setLead = vi.fn().mockResolvedValue(session);
+    const removeAgent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ setLead, removeAgent });
+    render(<AgentsPane sessionId="s1" onClose={vi.fn()} />);
+
+    const codexRow = screen.getAllByTestId("agents-tree-row")[1]!;
+    await user.click(within(codexRow).getByTestId("agent-make-lead"));
+    expect(setLead).toHaveBeenCalledWith("s1", "a-codex");
+
+    await user.click(within(codexRow).getByTestId("agent-remove"));
+    expect(removeAgent).toHaveBeenCalledWith("a-codex");
+  });
+
+  it("offers no crown on the lead and no remove on the last agent", () => {
+    useAppStore.setState({
+      sessions: [session],
+      agents: [agents[0]!],
+      blocks: {},
+      harnesses: [],
+    });
+    render(<AgentsPane sessionId="s1" onClose={vi.fn()} />);
+    const row = screen.getAllByTestId("agents-tree-row")[0]!;
+    expect(within(row).queryByTestId("agent-make-lead")).not.toBeInTheDocument();
+    // A session with no agents answers nothing, so the last one stays.
+    expect(within(row).queryByTestId("agent-remove")).not.toBeInTheDocument();
+  });
+
+  it("keeps a sub-agent's name legible and recoverable", () => {
+    seed();
+    render(<AgentsPane sessionId="s1" onClose={vi.fn()} />);
+    const sub = screen.getByTestId("agents-tree-subagent");
+    // The name, not the model id, is what the tree exists to show.
+    expect(within(sub).getByTitle("reviewer")).toBeInTheDocument();
+    expect(within(sub).getByTitle("gpt-5.5-mini")).toBeInTheDocument();
+  });
+});

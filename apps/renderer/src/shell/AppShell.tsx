@@ -34,7 +34,10 @@ export function AppShell() {
   }, [theme]);
 
   return (
-    <div className="app-shell relative flex h-dvh bg-sidebar text-foreground">
+    // `overflow-hidden`: nothing a page renders may scroll the *shell*
+    // sideways — a wide child (the Agents pane at 1280px) took the sessions
+    // sidebar off-screen with it. Panes clip or scroll inside their own box.
+    <div className="app-shell relative flex h-dvh overflow-hidden bg-sidebar text-foreground">
       <div className="titlebar-drag" aria-hidden="true" />
       <Sidebar sessions={sessions} activeSessionId={activeSessionId} />
       <main className="relative flex min-w-0 flex-1 flex-col bg-background">
