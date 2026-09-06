@@ -798,3 +798,30 @@ Not fixed, on purpose
   made to agree instead, which was the machine-dependent half of that finding.
 - Gate: `pnpm typecheck` clean (6 projects), `pnpm test` 66 files / 967 passed, `pnpm build` clean,
   `pnpm exec playwright test` 23 passed / 1 skipped (the API-key case) in 6.4 min.
+
+## 2026-09-06 — Phase 6 / P0: contracts for settings hub, integrations, prerequisites
+- `packages/shared/src/domain.ts`: `GlobalSettingsSchema` (versioned, sectioned — general/
+  appearance/git/shortcuts/notifications/updates/efficiency/backends, plus closeToTray/
+  startWithWindows/telemetry:false), additive alongside the flat `SettingsSchema` (still what
+  `SessionRunner`/`appStore`/`DevWorkspacePage` read; this pass documents but does not migrate
+  those call sites). Layering documented: global (`GlobalSettings.backends.<backend>`) → per-agent
+  override (`Agent.config.<backend>`, already shipped). `McpServerEntry`/`PluginEntry`/
+  `SkillEntry`/`ToolPolicyEntry` (R28) and `PrereqStep`/`DiagnosticsInfo` (R3, R19).
+- `packages/shared/src/ipc.ts`: 22 new channels (`settings.getAll/.patch/.reset`,
+  `integrations.list/.mcp.add|update|remove|test/.plugin.install|uninstall|setEnabled|
+  marketplaces/.skill.setEnabled|create|open/.tools.setPolicy|removePolicy/.refresh`,
+  `prereqs.status/.run`, `diagnostics.get/.copy`) + 3 events (`settings.changed`,
+  `integrations.changed`, `prereqs.changed`).
+- `packages/db`: migration `0005_integrations_backend_column.sql` adds the `backend` column
+  `mcp_servers`/`policies` (migration 0001) were missing, plus `policies.updated_at` and a unique
+  natural-key index — `plugins`/`skills` already had `backend` hoisted, and `GlobalSettings` needed
+  no new table at all (one more row in the existing key/value `settings` table). New repos:
+  `GlobalSettingsRepo`, `McpServersRepo`, `PluginsRepo`, `SkillsRepo`, `ToolPoliciesRepo`, all keyed
+  by the entry's own natural identity (none of the four domain shapes has an `id` field) and fully
+  unit-tested (`packages/db/test/store.test.ts` now 68 tests, `packages/shared/src/ipc.test.ts`
+  now 42).
+- `apps/desktop/src/ipc/handlers.ts`: minimal stub handlers (throw "not implemented — Phase 6
+  Build wires this") for all 22 new channels, only to satisfy the exhaustive `IpcHandlers` type —
+  wiring them to the new repos and to live CLI/file probes is Phase 6 Build's job.
+- Gate: `pnpm typecheck` clean (5 workspace projects + `tests/tsconfig.json`), `pnpm test` 66 files
+  / 993 passed, no regressions in files this task did not touch.
