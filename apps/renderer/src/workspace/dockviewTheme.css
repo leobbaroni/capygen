@@ -1,0 +1,82 @@
+/**
+ * Maps dockview's own `--dv-*` custom properties onto capygen's tokens
+ * (`apps/renderer/src/index.css`) instead of shipping one of dockview's
+ * built-in palettes — the reuse-tokens-verbatim rule (CLAUDE.md) applies to
+ * a vendored library's theme surface exactly as it does to a hand-rolled
+ * component. Every value here is a `var(--…)` reference, so light/dark and
+ * the whole app's other themes (`themePalettes.generated.css`) apply for
+ * free — this file never hardcodes a colour.
+ *
+ * Scoped to `.capygen-dockview` (the wrapper `WorkspaceHost` renders around
+ * `DockviewReact`), not `:root`: dockview's base stylesheet
+ * (`dockview-react/dist/styles/dockview.css`) already falls back to sane
+ * defaults for every variable, so nothing outside the workspace host is
+ * affected by not loading this file (a consumer who forgets the import gets
+ * dockview's own default look, not a broken one).
+ */
+.capygen-dockview {
+  --dv-group-view-background-color: var(--background);
+  --dv-tabs-and-actions-container-background-color: var(--card);
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 32px;
+  --dv-tab-font-size: 12px;
+  --dv-tab-close-icon-size: 12px;
+
+  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
+  --dv-activegroup-visiblepanel-tab-color: var(--foreground);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted-foreground);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted-foreground);
+
+  --dv-tab-divider-color: var(--border-weak);
+  --dv-separator-border: var(--border-weak);
+  --dv-paneview-header-border-color: var(--border-weak);
+  --dv-icon-hover-background-color: var(--accent);
+  --dv-tabs-container-scrollbar-color: var(--border);
+  --dv-scrollbar-background-color: var(--border);
+
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--ring);
+
+  --dv-drag-over-background-color: color-mix(in oklab, var(--accent) 35%, transparent);
+  --dv-drag-over-border-color: var(--ring);
+  --dv-drag-over-border: 2px solid var(--ring);
+
+  --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --dv-floating-border: 1px solid var(--border);
+  --dv-floating-group-border: 1px solid var(--border);
+  --dv-floating-titlebar-background-color: var(--card);
+  --dv-floating-titlebar-border-bottom: 1px solid var(--border-weak);
+
+  --dv-context-menu-background-color: var(--popover);
+  --dv-context-menu-color: var(--popover-foreground);
+
+  --dv-tab-border-radius: 0.375rem;
+  --dv-dropdown-border-radius: 0.5rem;
+  --dv-border-radius: 0.375rem;
+
+  height: 100%;
+  width: 100%;
+}
+
+/* dockview's default (non-React) watermark/empty-group text is otherwise
+   unstyled black-on-transparent, invisible against a dark ground. */
+.capygen-dockview .dv-void-container,
+.capygen-dockview .dv-watermark-container {
+  color: var(--muted-foreground);
+  background-color: var(--background);
+}
+
+/* Reduced-motion (SPEC item B2.1): dockview's own default `tabAnimation` is
+   already off, but sash-drag and drag-over-overlay transitions still carry a
+   duration — zero them rather than disable the features they belong to. */
+@media (prefers-reduced-motion: reduce) {
+  .capygen-dockview {
+    --dv-transition-duration: 0s;
+    --dv-active-sash-transition-duration: 0s;
+    --dv-active-sash-transition-delay: 0s;
+  }
+}

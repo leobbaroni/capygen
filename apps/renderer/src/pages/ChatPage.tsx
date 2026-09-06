@@ -14,14 +14,22 @@
  *   - `ChainStoppedBar` above the composer, wired to `chat.continue`, when
  *     the dispatcher has stopped an agent-to-agent chain at the hop cap.
  *   - A gear button opens `SessionSettingsSheet` (hop cap, parallel agents,
- *     sub-agent routing default), and a users button toggles `AgentsPane`.
+ *     sub-agent routing default), and a users button toggles the workspace.
+ *
+ * Phase 5 addition (SPEC R16-R17, item B2.1): the users button's panel is no
+ * longer the bare `AgentsPane` — it is `WorkspaceHost`, a resizable dockable
+ * workspace (Files/Editor/Diff/Browser/Terminal/Agents/Tasks/Servers) whose
+ * default layout still opens straight onto Agents, so this button keeps
+ * doing what it always did (one click → the roster) while also being the
+ * door into every other pane. `AgentsPane` itself is unchanged and still
+ * reachable through the workspace's own toolbar/tab strip
+ * (`panes/agents/AgentsWorkspacePane.tsx`).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ArrowDownIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
 import type { SessionMode } from "@capygen/shared";
 import { Mascot } from "@/brand/Mascot";
-import { AgentsPane } from "@/components/AgentsPane";
 import { ChainStoppedBar } from "@/components/ChainStoppedBar";
 import { Composer } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
@@ -34,6 +42,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { useMascotState } from "@/hooks/useMascotState";
 import { blocksOfTurn, isBusy, useAppStore } from "@/store/appStore";
 import { cn } from "@/lib/utils";
+import { WorkspaceHost } from "@/workspace/WorkspaceHost";
 
 export function ChatPage() {
   const { sessionId = "" } = useParams();
@@ -281,8 +290,12 @@ export function ChatPage() {
         </div>
       </div>
 
-      {agentsPaneOpen && sessionId ? (
-        <AgentsPane sessionId={sessionId} onClose={() => setAgentsPaneOpen(false)} />
+      {agentsPaneOpen && sessionId && session ? (
+        <WorkspaceHost
+          projectId={session.projectId}
+          sessionId={sessionId}
+          onClose={() => setAgentsPaneOpen(false)}
+        />
       ) : null}
 
       <Dialog

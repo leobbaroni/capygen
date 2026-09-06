@@ -9,6 +9,7 @@ import { LandingPage } from "@/pages/LandingPage";
 import { ChatPage } from "@/pages/ChatPage";
 import { DevAgentsPage } from "@/pages/DevAgentsPage";
 import { DevCardsPage } from "@/pages/DevCardsPage";
+import { DevWorkspacePage } from "@/pages/DevWorkspacePage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { useAppStore } from "@/store/appStore";
 
@@ -33,6 +34,9 @@ export function App() {
           {/* Fixture round-table session for the Agents pane (B2 evidence) —
               dev-only, never part of a production build. */}
           {import.meta.env.DEV ? <Route path="/dev/agents" element={<DevAgentsPage />} /> : null}
+          {/* Fixture project for the dockview workspace (Phase 5, B2
+              evidence) — dev-only, never part of a production build. */}
+          {import.meta.env.DEV ? <Route path="/dev/workspace" element={<DevWorkspacePage />} /> : null}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
