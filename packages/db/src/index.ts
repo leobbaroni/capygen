@@ -12,6 +12,7 @@ import {
   ProjectsRepo,
   SessionsRepo,
   SettingsRepo,
+  ToolOutputsRepo,
   TurnsRepo,
   UsageRepo,
 } from "./repos.js";
@@ -27,6 +28,7 @@ export interface CapygenStore {
   sessions: SessionsRepo;
   turns: TurnsRepo;
   blocks: BlocksRepo;
+  toolOutputs: ToolOutputsRepo;
   usage: UsageRepo;
   settings: SettingsRepo;
   /** Migrations applied by this open, and the backup taken beforehand. */
@@ -63,6 +65,7 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     sessions: new SessionsRepo(db),
     turns: new TurnsRepo(db),
     blocks: new BlocksRepo(db),
+    toolOutputs: new ToolOutputsRepo(db),
     usage: new UsageRepo(db),
     settings: new SettingsRepo(db),
     migration: result,

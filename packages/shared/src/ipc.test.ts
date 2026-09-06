@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 import {
+  AgentConfigSchema,
   BLOCK_KINDS,
   BlockSchema,
   DEFAULT_SETTINGS,
   EVENT_CHANNEL_NAMES,
+  HarnessInfoSchema,
   INVOKE_CHANNEL_NAMES,
   IpcContractError,
   SettingsSchema,
@@ -37,6 +39,14 @@ describe("IPC contract", () => {
       "chat.listCommands",
       "permission.answer",
       "question.answer",
+      "elicitation.answer",
+      "harness.list",
+      "secrets.set",
+      "secrets.has",
+      "secrets.delete",
+      "mcp.readResource",
+      "widget.callTool",
+      "widget.event",
       "settings.get",
       "settings.set",
       "app.version",
@@ -47,6 +57,7 @@ describe("IPC contract", () => {
       "session.updated",
       "permission.request",
       "question.request",
+      "elicitation.request",
       "app.status",
     ]);
   });
@@ -110,6 +121,29 @@ describe("defineIpc", () => {
     off();
     expect(unsub).toHaveBeenCalled();
   });
+
+  it("sends permission.answer's three-way decision, not the old binary behavior", async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    await ipc.invoke("permission.answer", { requestId: "req_1", decision: "allow_always" });
+
+    expect(invoke).toHaveBeenCalledWith("permission.answer", {
+      requestId: "req_1",
+      decision: "allow_always",
+      scope: "once",
+    });
+  });
+
+  it("never round-trips a secret value back through secrets.has", async () => {
+    const invoke = vi.fn(async () => ({ has: true }));
+    const ipc = defineIpc(fakeTransport({ invoke }));
+
+    const result = await ipc.invoke("secrets.has", { provider: "anthropic" });
+
+    expect(result).toEqual({ has: true });
+    expect(invoke).toHaveBeenCalledWith("secrets.has", { provider: "anthropic" });
+  });
 });
 
 describe("domain schemas", () => {
@@ -149,12 +183,96 @@ describe("domain schemas", () => {
       subagent: { ...base, id: newId("block"), kind: "subagent", name: "reviewer" },
       error: { ...base, id: newId("block"), kind: "error", message: "boom" },
       usage: { ...base, id: newId("block"), kind: "usage", usage: {} },
+      widget: {
+        ...base,
+        id: newId("block"),
+        kind: "widget",
+        toolCallId: "toolu_1",
+        serverName: "higgsfield",
+        toolName: "animate",
+        resourceUri: "ui://higgsfield/animate",
+        htmlStatus: "pending",
+        toolInput: { prompt: "a capybara" },
+      },
+      elicitation: {
+        ...base,
+        id: newId("block"),
+        kind: "elicitation",
+        requestId: "req_3",
+        schema: { type: "object", properties: { name: { type: "string" } } },
+      },
     };
 
     for (const kind of BLOCK_KINDS) {
       const parsed = BlockSchema.parse(samples[kind]);
       expect(parsed.kind).toBe(kind);
     }
+  });
+
+  it("rejects a widget block whose resourceUri is not a ui:// URI (R31)", () => {
+    const base = {
+      id: newId("block"),
+      turnId: "trn_1",
+      sessionId: "ses_1",
+      index: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    expect(() =>
+      BlockSchema.parse({
+        ...base,
+        kind: "widget",
+        toolCallId: "toolu_1",
+        serverName: "higgsfield",
+        toolName: "animate",
+        resourceUri: "https://not-a-ui-resource",
+        htmlStatus: "pending",
+        toolInput: {},
+      }),
+    ).toThrow();
+  });
+
+  it("widens a permission decision to allow_always without dropping the rest (R28/R32)", () => {
+    const decided = BlockSchema.parse({
+      id: newId("block"),
+      turnId: "trn_1",
+      sessionId: "ses_1",
+      index: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      kind: "permission",
+      request: { requestId: "req_1", toolName: "Bash", input: { cmd: "ls" } },
+      decision: { behavior: "allow_always", scope: "always", decidedAt: 2 },
+      title: "Run a shell command",
+      suggestions: [{ tool: "Bash" }],
+    });
+    expect(decided.kind === "permission" && decided.decision?.behavior).toBe("allow_always");
+    expect(decided.kind === "permission" && decided.title).toBe("Run a shell command");
+  });
+
+  it("validates a per-backend agent config and keeps unknown claude/codex fields (Phase 3)", () => {
+    const config = AgentConfigSchema.parse({
+      claude: { model: "claude-opus-4-5", permissionMode: "plan", futureField: true },
+      codex: { approvalPolicy: "on-request", sandbox: "workspace-write" },
+      api: { provider: "openrouter", model: "z-ai/glm" },
+    });
+    expect(config.claude).toMatchObject({ permissionMode: "plan", futureField: true });
+    expect(config.codex).toMatchObject({ approvalPolicy: "on-request" });
+    expect(config.api).toMatchObject({ provider: "openrouter", model: "z-ai/glm" });
+
+    expect(() => AgentConfigSchema.parse({ api: { provider: "bogus", model: "x" } })).toThrow();
+  });
+
+  it("validates a harness listing", () => {
+    const list = HarnessInfoSchema.parse({
+      backend: "codex",
+      label: "Codex",
+      available: false,
+      reason: "codex.exe not found",
+      models: [{ id: "gpt-5-codex", label: "GPT-5 Codex" }],
+      defaultModel: "gpt-5-codex",
+    });
+    expect(list.available).toBe(false);
   });
 
   it("fills the shipping defaults for an empty settings row", () => {

@@ -228,6 +228,46 @@
   deny route exists through IPC → engine → `canUseTool` yet — Phase 3) and `remark-breaks` for
   multi-line user messages (needs a new dependency).
 
+## 2026-09-06 — Phase 3 / P0: shared contracts for codex/api backends, widget/elicitation blocks
+- `packages/shared/src/domain.ts`: two new block kinds (`widget` — R31 MCP Apps, `elicitation` —
+  R32 structured input); `tool_call` gains `family`/`serverName`/`outputRef`; `permission` gains
+  `title`/`displayName`/`description`/`suggestions`/`reason`, and its `decision.behavior` widens to
+  `allow_always` (R28/R32); `question` gains `allowOther`/`otherText`. Per-backend `Agent.config` is
+  now validated (`ClaudeAgentConfigSchema`/`CodexAgentConfigSchema`/`ApiAgentConfigSchema`, all
+  `.passthrough()`) instead of `unknown` — it already had this `{claude:{...}}` shape in practice
+  (`ClaudeHarness.readClaudeConfig`), just untyped. New `HarnessInfoSchema` (`harness.list`) and
+  `ToolOutputSchema` (the `tool_outputs` table).
+- `packages/shared/src/ipc.ts`: `permission.answer`'s `behavior` renamed `decision`
+  (`'allow'|'allow_always'|'deny'`); added `harness.list`, `secrets.{set,has,delete}`,
+  `mcp.readResource`, `widget.callTool`, `widget.event`, `elicitation.answer` (invoke) and
+  `elicitation.request` (event) — `widget.update` is explicitly *not* a new event, block state
+  rides the existing `chat.block` upsert.
+- `packages/db/migrations/0002_widgets_elicitations_tool_outputs.sql`: discovered `blocks.kind` had
+  a CHECK enumerating the 0001 kinds — inserting `widget`/`elicitation` would have violated it.
+  SQLite has no `ALTER ... DROP CONSTRAINT`, so the table is recreated; the CHECK is dropped rather
+  than re-enumerated (`BlockSchema` is the one source of truth for valid kinds now). Added
+  `tool_outputs` table + `ToolOutputsRepo.put/get` for `ToolCallBlock.outputRef`.
+  Caveat recorded in the migration's own comment: that `DROP TABLE blocks` cascades to
+  `approvals.block_id` under `foreign_keys=ON` — harmless today (Phase 9/`approvals` has no writer
+  yet), but the next blocks-table migration needs `PRAGMA foreign_keys=OFF` outside any transaction
+  first if that has changed.
+- Downstream compatibility fixes (the widened union and the `permission.answer` rename touch code
+  outside `packages/shared`/`packages/db`): `apps/desktop/src/ipc/handlers.ts` gained stub handlers
+  for every new channel (`harness.list` returns a static claude/codex/api list; `secrets.*` backs
+  onto a new in-memory `SecretsStore` — never touches disk, so R21 cannot be violated by it, but it
+  forgets keys on restart until Phase 6 wires `safeStorage`; `mcp.readResource`/`widget.callTool`
+  throw "not wired yet"; `widget.event` logs and acks; `elicitation.answer` persists the block and
+  reports `ok:false`) and updated `permission.answer` to collapse `decision:"allow_always"` to
+  `{behavior:"allow"}` for the harness while keeping the full value on the stored decision.
+  `apps/renderer/src/store/appStore.ts` follows the rename. `BlockRenderer.tsx`'s switch was not
+  actually exhaustive (no `default`/`never` check, despite its header comment) — a widget or
+  elicitation block would have silently rendered nothing; added `WidgetCard`/`ElicitationCard`
+  placeholders (Phase 3 builds the real iframe host and elicitation form) and a `never` assertion so
+  the next new block kind is a compile error for real.
+- Checks: `pnpm typecheck` clean (all 5 packages) · `pnpm test` 177 passed (14 files, +11 from the
+  166 baseline: 3 shared, 4 db, 1 sessionRunner, plus the widget/elicitation samples folded into
+  existing round-trip tests) · `pnpm build` clean.
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.

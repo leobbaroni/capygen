@@ -15,7 +15,9 @@ import { z } from "zod";
 import {
   AgentDraftSchema,
   AgentSchema,
+  ApiProviderSchema,
   BlockSchema,
+  HarnessInfoSchema,
   PermissionRequestSchema,
   ProjectSchema,
   QuestionSchema,
@@ -115,10 +117,18 @@ export const INVOKE_CHANNELS = {
     z.array(SlashCommandSchema),
   ),
 
+  /**
+   * `decision` replaces the Phase 2 `behavior` field: `allow_always` (R28/R32
+   * "remember this choice") is a third button alongside Allow/Deny, not a
+   * variant of `scope`. A handler collapses it to `{behavior:"allow"}` for the
+   * harness (which only ever needs to unblock the call) and `scope:"always"`
+   * for the persisted decision — `PermissionDecisionSchema.behavior` in
+   * `@capygen/shared` carries the full three-way value.
+   */
   "permission.answer": channel(
     z.object({
       requestId: z.string().min(1),
-      behavior: z.enum(["allow", "deny"]),
+      decision: z.enum(["allow", "allow_always", "deny"]),
       updatedInput: z.unknown().optional(),
       message: z.string().optional(),
       scope: z.enum(["once", "session", "always"]).default("once"),
@@ -131,6 +141,77 @@ export const INVOKE_CHANNELS = {
       /** question text → chosen option label (Phase 1 proven shape). */
       answers: z.record(z.string(), z.string()),
     }),
+    OkSchema,
+  ),
+
+  /**
+   * A backend's structured input request that is neither a permission prompt
+   * nor `AskUserQuestion` — MCP `elicitation/create`, or a Codex user-input
+   * request (R32). `null` answers means the user cancelled/declined.
+   */
+  "elicitation.answer": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      turnId: z.string().min(1),
+      blockId: z.string().min(1),
+      answers: z.record(z.string(), z.unknown()).nullable(),
+    }),
+    OkSchema,
+  ),
+
+  /** Backend/model availability for the New Session picker and Settings ▸ Harnesses. */
+  "harness.list": channel(Empty, z.array(HarnessInfoSchema)),
+
+  /**
+   * API keys via Electron `safeStorage` (R21) — `secrets.has` is the only read
+   * path; the value itself never crosses this bridge again once set.
+   */
+  "secrets.set": channel(
+    z.object({ provider: ApiProviderSchema, value: z.string().min(1) }),
+    OkSchema,
+  ),
+  "secrets.has": channel(
+    z.object({ provider: ApiProviderSchema }),
+    z.object({ has: z.boolean() }),
+  ),
+  "secrets.delete": channel(z.object({ provider: ApiProviderSchema }), OkSchema),
+
+  /** Read one MCP resource — how a widget's `ui://` HTML is fetched (R31, A13). */
+  "mcp.readResource": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      agentId: z.string().min(1),
+      serverName: z.string().min(1),
+      uri: z.string().min(1),
+    }),
+    z.object({
+      mimeType: z.string().optional(),
+      text: z.string().optional(),
+      /** Base64, when the resource is not text. */
+      blob: z.string().optional(),
+    }),
+  ),
+
+  /** A widget calls a tool through the host (ext-apps `ui/callTool` bridge, R31). */
+  "widget.callTool": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      agentId: z.string().min(1),
+      blockId: z.string().min(1),
+      name: z.string().min(1),
+      args: z.unknown(),
+    }),
+    z.unknown(),
+  ),
+  /**
+   * Any other `ui/*` message a widget sends the host (size negotiation,
+   * host-side actions such as Higgsfield's Animate/Edit/Download) — renderer
+   * to main, for host-side handling. Widget *state* changes the other
+   * direction ride the existing `chat.block` upsert event, same as any other
+   * block; there is no separate `widget.update` event (see EVENT_CHANNELS).
+   */
+  "widget.event": channel(
+    z.object({ blockId: z.string().min(1), type: z.string().min(1), payload: z.unknown() }),
     OkSchema,
   ),
 
@@ -189,6 +270,16 @@ export const EVENT_CHANNELS = {
     blockId: z.string(),
     requestId: z.string(),
     questions: z.array(QuestionSchema),
+  }),
+  /** MCP `elicitation/create` or a Codex user-input request (R32). */
+  "elicitation.request": z.object({
+    sessionId: z.string(),
+    turnId: z.string(),
+    blockId: z.string(),
+    requestId: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    schema: z.unknown(),
   }),
   /** Shell-level notices: engine readiness, update state, backend errors. */
   "app.status": z.object({

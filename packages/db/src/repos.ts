@@ -11,6 +11,7 @@ import {
   ProjectSchema,
   SessionSchema,
   SettingsSchema,
+  ToolOutputSchema,
   TurnSchema,
   UsageEventSchema,
   newId,
@@ -22,6 +23,7 @@ import {
   type SessionMode,
   type SessionStatus,
   type Settings,
+  type ToolOutput,
   type Turn,
   type TurnRole,
   type TurnStatus,
@@ -451,6 +453,54 @@ export class BlocksRepo {
       turnId,
     );
     return row?.n === null || row?.n === undefined ? 0 : Number(row.n) + 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tool_outputs — full values a block's `outputRef` points at (migration 0002)
+// ---------------------------------------------------------------------------
+
+function rowToToolOutput(row: Row): ToolOutput {
+  return ToolOutputSchema.parse({
+    id: row.id,
+    blockId: row.block_id,
+    content: fromJson<unknown>(row.content, null),
+    createdAt: Number(row.created_at),
+  });
+}
+
+export class ToolOutputsRepo {
+  constructor(private readonly db: Database) {}
+
+  /**
+   * Insert or replace by id. Callers pass the id they already handed out as a
+   * block's `outputRef` (or omit it to mint one), the same upsert-by-id shape
+   * as `BlocksRepo.upsert` so a value can be (re)written as it grows.
+   */
+  put(input: { id?: string; blockId: string; content: unknown }): ToolOutput {
+    const full = ToolOutputSchema.parse({
+      id: input.id ?? newId("toolOutput"),
+      blockId: input.blockId,
+      content: input.content,
+      createdAt: Date.now(),
+    });
+    this.db.run(
+      `INSERT INTO tool_outputs (id, block_id, content, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET content = excluded.content`,
+      full.id,
+      full.blockId,
+      // `content` is NOT NULL: unlike `toJson` (used for nullable JSON
+      // columns), `null`/`undefined` content still needs a stored string —
+      // `JSON.stringify(undefined)` is `undefined`, not a valid SqlValue.
+      JSON.stringify(full.content) ?? "null",
+      full.createdAt,
+    );
+    return full;
+  }
+
+  get(id: string): ToolOutput | null {
+    const row = this.db.get<Row>("SELECT * FROM tool_outputs WHERE id = ?", id);
+    return row ? rowToToolOutput(row) : null;
   }
 }
 

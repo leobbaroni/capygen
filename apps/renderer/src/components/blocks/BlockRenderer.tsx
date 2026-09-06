@@ -6,6 +6,7 @@
  */
 import type { Block } from "@capygen/shared";
 import { DiffCard } from "./DiffCard";
+import { ElicitationCard } from "./ElicitationCard";
 import { ErrorCard } from "./ErrorCard";
 import { PermissionCard } from "./PermissionCard";
 import { QuestionCard } from "./QuestionCard";
@@ -14,6 +15,14 @@ import { TextBlockView } from "./TextBlockView";
 import { ThinkingCard } from "./ThinkingCard";
 import { ToolCallCard } from "./ToolCallCard";
 import { UsageLine } from "./UsageLine";
+import { WidgetCard } from "./WidgetCard";
+
+/** Unreachable if every `Block` kind above has a `case` — a compile error
+ * otherwise, restoring the exhaustiveness the file's header comment promises
+ * (a bare switch with no `default` does not itself enforce that in TS). */
+function assertNever(value: never): never {
+  throw new Error(`BlockRenderer: no card for block kind ${JSON.stringify(value)}`);
+}
 
 export function BlockRenderer({ block, isUser }: { block: Block; isUser: boolean }) {
   switch (block.kind) {
@@ -35,5 +44,11 @@ export function BlockRenderer({ block, isUser }: { block: Block; isUser: boolean
       return <ErrorCard block={block} />;
     case "usage":
       return <UsageLine block={block} />;
+    case "widget":
+      return <WidgetCard block={block} />;
+    case "elicitation":
+      return <ElicitationCard block={block} />;
+    default:
+      return assertNever(block);
   }
 }

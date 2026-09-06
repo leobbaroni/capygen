@@ -76,7 +76,7 @@ export interface AppState {
   setSettings(patch: Partial<Settings>): Promise<void>;
   answerPermission(
     requestId: string,
-    behavior: "allow" | "deny",
+    decision: "allow" | "allow_always" | "deny",
     opts?: { updatedInput?: unknown; message?: string; scope?: "once" | "session" | "always" },
   ): Promise<void>;
   answerQuestion(requestId: string, answers: Record<string, string>): Promise<void>;
@@ -362,11 +362,11 @@ export const useAppStore = create<AppState>()((set, get) => {
       set({ settings });
     },
 
-    async answerPermission(requestId, behavior, opts) {
+    async answerPermission(requestId, decision, opts) {
       touchActivity();
       const { ok } = await ipc().invoke("permission.answer", {
         requestId,
-        behavior,
+        decision,
         scope: opts?.scope ?? "once",
         ...(opts?.updatedInput !== undefined ? { updatedInput: opts.updatedInput } : {}),
         ...(opts?.message !== undefined ? { message: opts.message } : {}),

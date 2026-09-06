@@ -230,13 +230,13 @@ describe("permission and question answers", () => {
     // state a relaunched app is in for a card left over from a previous run:
     // `ok` says the answer went nowhere, and the row stays undecided rather
     // than showing the user a decision no agent ever received.
-    expect(await call("permission.answer", { requestId: "req_9", behavior: "deny" })).toEqual({
+    expect(await call("permission.answer", { requestId: "req_9", decision: "deny" })).toEqual({
       ok: false,
     });
     const saved = store.blocks.get("blk_perm");
     expect(saved?.kind === "permission" && saved.decision).toBeNull();
 
-    expect(await call("permission.answer", { requestId: "nope", behavior: "allow" })).toEqual({
+    expect(await call("permission.answer", { requestId: "nope", decision: "allow" })).toEqual({
       ok: false,
     });
   });

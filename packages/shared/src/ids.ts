@@ -11,6 +11,7 @@ const PREFIXES = {
   block: "blk",
   usage: "usg",
   request: "req",
+  toolOutput: "tout",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

@@ -11,6 +11,7 @@
 import type { CapygenStore } from "@capygen/db";
 import {
   BUILTIN_SLASH_COMMANDS,
+  type ApiProvider,
   type Block,
   type InvokeArgs,
   type InvokeChannel,
@@ -30,6 +31,32 @@ import type {
 
 export type { Broadcast };
 
+/**
+ * Where API keys live between `secrets.set`/`.has`/`.delete` calls (R21).
+ * Electron-free like the rest of this file — `createInMemorySecretsStore`
+ * below is what runs until Phase 6 wires a `safeStorage`-backed one in.
+ */
+export interface SecretsStore {
+  set(provider: ApiProvider, value: string): Promise<void> | void;
+  has(provider: ApiProvider): Promise<boolean> | boolean;
+  delete(provider: ApiProvider): Promise<void> | void;
+}
+
+/**
+ * Never persists anything to disk, so it cannot be the thing that leaks a key
+ * to a log or a settings file — it also cannot remember a key across a
+ * restart, which is exactly why this is a placeholder and not the R21
+ * implementation. Phase 6 replaces this with Electron `safeStorage`.
+ */
+export function createInMemorySecretsStore(): SecretsStore {
+  const values = new Map<ApiProvider, string>();
+  return {
+    set: (provider, value) => void values.set(provider, value),
+    has: (provider) => values.has(provider),
+    delete: (provider) => void values.delete(provider),
+  };
+}
+
 export interface IpcContextDeps {
   store: CapygenStore;
   broadcast: Broadcast;
@@ -42,6 +69,10 @@ export interface IpcContextDeps {
    * real session runner (one Claude harness per agent).
    */
   makeEngine?: EngineFactory;
+  /** Defaults to an in-memory store; see `createInMemorySecretsStore`. */
+  secrets?: SecretsStore;
+  /** Defaults to a static Claude-only list; see the `harness.list` handler. */
+  listHarnesses?: () => InvokeResult<"harness.list">;
 }
 
 export type IpcHandlers = {
@@ -58,6 +89,7 @@ export interface IpcContext {
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const { store, broadcast, log } = deps;
   const engineDeps: EngineDeps = { store, broadcast, log };
+  const secrets = deps.secrets ?? createInMemorySecretsStore();
 
   /** Persist a block and push it to every renderer (upsert by id). */
   function emitBlock(block: Block): Block {
@@ -234,6 +266,13 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * Unblocks the backend first — the agent is what is actually waiting — then
      * records the decision on the block so a relaunch can still show it.
      *
+     * `decision` is the three-way UI choice (Allow / Always Allow / Deny). The
+     * harness only ever needs to unblock a call, so `allow_always` collapses
+     * to `behavior: "allow"` for `engine.answerPermission`; the "always" part
+     * is recorded as `scope: "always"` on the persisted decision instead
+     * (`PermissionDecisionSchema.behavior` in `@capygen/shared` keeps the full
+     * three-way value for the card and for a future policy engine to read).
+     *
      * `ok` is whether the backend actually took the answer. Nothing is waiting
      * on a request whose turn has ended (or whose engine is from a previous
      * launch), and marking such a card "Allowed" would tell the user their
@@ -241,8 +280,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * undecided and the renderer says the request is stale.
      */
     "permission.answer": (args) => {
+      const behavior: "allow" | "deny" = args.decision === "deny" ? "deny" : "allow";
+      const scope = args.decision === "allow_always" ? "always" : args.scope;
       const delivered = engine.answerPermission(args.requestId, {
-        behavior: args.behavior,
+        behavior,
         ...(args.updatedInput !== undefined ? { updatedInput: args.updatedInput } : {}),
         ...(args.message !== undefined ? { message: args.message } : {}),
       });
@@ -252,10 +293,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       emitBlock({
         ...block,
         decision: {
-          behavior: args.behavior,
+          behavior: args.decision,
           ...(args.updatedInput !== undefined ? { updatedInput: args.updatedInput } : {}),
           ...(args.message !== undefined ? { message: args.message } : {}),
-          scope: args.scope,
+          scope,
           decidedAt: Date.now(),
         },
         updatedAt: Date.now(),
@@ -269,6 +310,101 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       const block = findBlockByRequestId(store, args.requestId, "question");
       if (!block || block.kind !== "question") return { ok: true };
       emitBlock({ ...block, answers: args.answers, updatedAt: Date.now() });
+      return { ok: true };
+    },
+
+    /**
+     * Phase 3 stub: no elicitation source exists yet (no MCP client, no Codex
+     * user-input wiring), so there is nothing to route this to. Records the
+     * answer on the block — same shape a relaunch needs to render it — and
+     * reports `ok: false` (nothing delivered), matching how a stale
+     * permission/question answer is reported above.
+     */
+    "elicitation.answer": (args) => {
+      const block = store.blocks.get(args.blockId);
+      if (block && block.kind === "elicitation") {
+        emitBlock({
+          ...block,
+          answers: args.answers,
+          status: args.answers === null ? "declined" : "accepted",
+          updatedAt: Date.now(),
+        });
+      }
+      return { ok: false };
+    },
+
+    /**
+     * Phase 3 stub: static capability list, no real probing (`claude
+     * --version`, `codex app-server`, model catalogs) yet. `deps.listHarnesses`
+     * lets a later phase (or a test) supply the real thing without another
+     * contract change.
+     */
+    "harness.list": () =>
+      deps.listHarnesses?.() ?? [
+        {
+          backend: "claude" as const,
+          label: "Claude Code",
+          available: true,
+          models: [
+            { id: "claude-opus-4-5", label: "Claude Opus 4.5" },
+            { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+          ],
+          defaultModel: store.settings.all().defaultModel,
+        },
+        {
+          backend: "codex" as const,
+          label: "Codex",
+          available: false,
+          reason: "not wired yet (Phase 3)",
+          models: [],
+          defaultModel: "",
+        },
+        {
+          backend: "api" as const,
+          label: "API model",
+          available: true,
+          models: [],
+          defaultModel: "",
+        },
+      ],
+
+    /**
+     * `deps.secrets` is an in-memory placeholder when nothing is injected: it
+     * never touches disk, so it cannot leak a key to a log or a settings file
+     * (R21) — but it also forgets every key on restart. Phase 6 wires this to
+     * Electron `safeStorage` (this file stays Electron-free on purpose).
+     */
+    "secrets.set": async (args) => {
+      await secrets.set(args.provider, args.value);
+      return { ok: true };
+    },
+    "secrets.has": async (args) => ({ has: await secrets.has(args.provider) }),
+    "secrets.delete": async (args) => {
+      await secrets.delete(args.provider);
+      return { ok: true };
+    },
+
+    /**
+     * Phase 3 stub: no MCP client exists yet to actually read a resource from
+     * (A13 — the widget-HTML spike). Refusing loudly beats returning an empty
+     * body a widget host would render as "the tool has no UI".
+     */
+    "mcp.readResource": () => {
+      throw new Error("mcp.readResource: no MCP client is wired yet (Phase 3)");
+    },
+
+    /** Phase 3 stub: no widget host exists yet to route this through. */
+    "widget.callTool": () => {
+      throw new Error("widget.callTool: no widget host is wired yet (Phase 3)");
+    },
+
+    /**
+     * Phase 3 stub: logged rather than dropped silently, so a widget author
+     * testing against a dev build can see their `ui/*` messages arrived even
+     * before the host does anything with them.
+     */
+    "widget.event": (args) => {
+      log.info(`[ipc] widget event ${args.type} for block ${args.blockId} (no host wired yet)`);
       return { ok: true };
     },
 

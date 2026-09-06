@@ -344,7 +344,7 @@ describe("permission and question round-trips", () => {
     expect(
       await call("permission.answer", {
         requestId: "req_1",
-        behavior: "allow",
+        decision: "allow",
         updatedInput: { command: "ls -la" },
       }),
     ).toEqual({ ok: true });
@@ -356,12 +356,52 @@ describe("permission and question round-trips", () => {
 
     // A second answer for the same request has nothing left to unblock, and
     // says so instead of overwriting the decision that did land.
-    expect(await call("permission.answer", { requestId: "req_1", behavior: "deny" })).toEqual({
+    expect(await call("permission.answer", { requestId: "req_1", decision: "deny" })).toEqual({
       ok: false,
     });
     expect(harness.answers).toHaveLength(1);
     const again = store.blocks.get(asked.blockId);
     expect(again?.kind === "permission" && again.decision?.behavior).toBe("allow");
+  });
+
+  it("collapses an allow_always decision to a plain allow for the harness (R28/R32)", async () => {
+    const { sessionId } = await newSession();
+    await send(sessionId, "run it again");
+
+    harness.events.push({
+      type: "block",
+      key: "permission:toolu_2",
+      patch: {
+        kind: "permission",
+        request: { requestId: "req_2", toolName: "Bash", input: { command: "ls" }, suggestions: [] },
+        decision: null,
+      },
+    });
+    harness.events.push({
+      type: "permission",
+      requestId: "req_2",
+      key: "permission:toolu_2",
+      request: { requestId: "req_2", toolName: "Bash", input: { command: "ls" }, suggestions: [] },
+    });
+    await vi.waitFor(() => expect(eventsOn("permission.request")).toHaveLength(1));
+    const asked = eventsOn("permission.request")[0] as { blockId: string };
+
+    expect(
+      await call("permission.answer", { requestId: "req_2", decision: "allow_always" }),
+    ).toEqual({ ok: true });
+
+    // The harness — which only understands allow/deny — sees a plain allow...
+    expect(harness.answers.at(-1)).toEqual({
+      requestId: "req_2",
+      value: { behavior: "allow" },
+    });
+    // ...while the persisted decision keeps the full three-way choice and the
+    // "always" scope it implies, for the card and a future policy engine.
+    const saved = store.blocks.get(asked.blockId);
+    expect(saved?.kind === "permission" && saved.decision).toMatchObject({
+      behavior: "allow_always",
+      scope: "always",
+    });
   });
 
   it("delivers AskUserQuestion answers keyed by question text", async () => {

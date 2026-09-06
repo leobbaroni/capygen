@@ -101,6 +101,7 @@ describe("migrations", () => {
       "members",
       "policies",
       "approvals",
+      "tool_outputs",
       "schema_migrations",
     ]) {
       expect(names, `missing table ${table}`).toContain(`table:${table}`);
@@ -108,8 +109,36 @@ describe("migrations", () => {
     expect(names).toContain("view:tool_calls");
   });
 
+  it("no longer constrains blocks.kind to a fixed list (0002): a new kind inserts fine", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "agent" });
+    expect(() =>
+      store.blocks.upsert({
+        id: newId("block"),
+        turnId: turn.id,
+        sessionId: session.id,
+        kind: "widget",
+        index: 0,
+        toolCallId: "toolu_1",
+        serverName: "higgsfield",
+        toolName: "animate",
+        resourceUri: "ui://higgsfield/animate",
+        html: null,
+        htmlStatus: "pending",
+        toolInput: {},
+        toolResult: null,
+        meta: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    ).not.toThrow();
+  });
+
   it("is idempotent: reopening applies nothing and writes no backup", () => {
-    expect(store.migration.applied).toEqual(["0001_init"]);
+    expect(store.migration.applied).toEqual([
+      "0001_init",
+      "0002_widgets_elicitations_tool_outputs",
+    ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
 
@@ -152,7 +181,10 @@ describe("migrations", () => {
     const migrations = readMigrations(MIGRATIONS_DIR);
     expect(pendingMigrations(store.db, migrations)).toEqual([]);
     const fresh = openRaw(":memory:");
-    expect(pendingMigrations(fresh, migrations).map((m) => m.id)).toEqual(["0001_init"]);
+    expect(pendingMigrations(fresh, migrations).map((m) => m.id)).toEqual([
+      "0001_init",
+      "0002_widgets_elicitations_tool_outputs",
+    ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),
     ).toBeUndefined();
@@ -274,12 +306,45 @@ describe("turns and blocks", () => {
       request: { requestId: "req_2", toolName: "Bash", input: { command: "rm" }, suggestions: [] },
       decision: null,
     });
+    store.blocks.upsert({
+      ...envelope,
+      id: newId("block"),
+      kind: "widget",
+      index: 3,
+      toolCallId: "toolu_2",
+      serverName: "higgsfield",
+      toolName: "animate",
+      resourceUri: "ui://higgsfield/animate",
+      htmlStatus: "ready",
+      html: "<div>hi</div>",
+      toolInput: { prompt: "a capybara" },
+      toolResult: null,
+      meta: null,
+    });
+    store.blocks.upsert({
+      ...envelope,
+      id: newId("block"),
+      kind: "elicitation",
+      index: 4,
+      requestId: "req_3",
+      schema: { type: "object", properties: { name: { type: "string" } } },
+      answers: null,
+      status: "pending",
+    });
 
     const blocks = store.blocks.listByTurn(turn.id);
-    expect(blocks.map((b) => b.kind)).toEqual(["tool_call", "question", "permission"]);
+    expect(blocks.map((b) => b.kind)).toEqual([
+      "tool_call",
+      "question",
+      "permission",
+      "widget",
+      "elicitation",
+    ]);
     expect(blocks[0]).toMatchObject({ name: "Bash", status: "success", toolUseId: "toolu_1" });
     expect(blocks[1]).toMatchObject({ answers: { Which: "A" } });
     expect(blocks[2]).toMatchObject({ decision: null });
+    expect(blocks[3]).toMatchObject({ htmlStatus: "ready", resourceUri: "ui://higgsfield/animate" });
+    expect(blocks[4]).toMatchObject({ status: "pending" });
   });
 
   it("orders a session's blocks by turn then index", () => {
@@ -310,6 +375,43 @@ describe("turns and blocks", () => {
     const turn = store.turns.create({ sessionId: session.id, role: "agent", status: "pending" });
     expect(store.turns.setStatus(turn.id, "streaming")?.status).toBe("streaming");
     expect(store.turns.setStatus(turn.id, "done")?.status).toBe("done");
+  });
+});
+
+describe("tool_outputs (migration 0002 — a block's outputRef)", () => {
+  it("puts and gets a full value by id, minting one when none is given", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "agent" });
+    const block = store.blocks.upsert(textBlock(session.id, turn.id, 0, "hi"));
+    const whole = { lines: Array.from({ length: 5000 }, (_, i) => `line ${i}`) };
+
+    const saved = store.toolOutputs.put({ blockId: block.id, content: whole });
+    expect(saved.id).toMatch(/^tout_[0-9a-f]{32}$/);
+    expect(store.toolOutputs.get(saved.id)).toEqual(saved);
+    expect(store.toolOutputs.get(saved.id)?.content).toEqual(whole);
+    expect(store.toolOutputs.get("tout_nope")).toBeNull();
+  });
+
+  it("overwrites content by id instead of inserting a duplicate row", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "agent" });
+    const block = store.blocks.upsert(textBlock(session.id, turn.id, 0, "hi"));
+
+    store.toolOutputs.put({ id: "tout_fixed", blockId: block.id, content: "first" });
+    store.toolOutputs.put({ id: "tout_fixed", blockId: block.id, content: "second" });
+
+    expect(store.toolOutputs.get("tout_fixed")?.content).toBe("second");
+    expect(store.db.all("SELECT id FROM tool_outputs")).toHaveLength(1);
+  });
+
+  it("cascades on the owning block's deletion", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "agent" });
+    const block = store.blocks.upsert(textBlock(session.id, turn.id, 0, "hi"));
+    const saved = store.toolOutputs.put({ blockId: block.id, content: "x" });
+
+    store.db.run("DELETE FROM blocks WHERE id = ?", block.id);
+    expect(store.toolOutputs.get(saved.id)).toBeNull();
   });
 });
 

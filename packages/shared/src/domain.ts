@@ -37,6 +37,23 @@ export const TurnStatusSchema = z.enum([
 ]);
 export type TurnStatus = z.infer<typeof TurnStatusSchema>;
 
+/**
+ * How a Claude Code agent (SDK `Options.permissionMode`) treats tool calls.
+ * Moved up from the Settings section (still used there) because the
+ * per-backend agent config schemas below need it too.
+ */
+export const PermissionModeSchema = z.enum([
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+]);
+export type PermissionMode = z.infer<typeof PermissionModeSchema>;
+
+/** Which API an `api`-backend agent talks to directly (CONTEXT.md §Backend). */
+export const ApiProviderSchema = z.enum(["anthropic", "openai", "openrouter"]);
+export type ApiProvider = z.infer<typeof ApiProviderSchema>;
+
 // ---------------------------------------------------------------------------
 // Project
 // ---------------------------------------------------------------------------
@@ -58,6 +75,82 @@ export const ProjectSchema = z.object({
 export type Project = z.infer<typeof ProjectSchema>;
 
 // ---------------------------------------------------------------------------
+// Agent config — one namespaced bag per backend (Phase 3)
+// ---------------------------------------------------------------------------
+//
+// `Agent.config` has always been `{ claude?: {...}, codex?: {...}, api?: {...} }`
+// in practice — `ClaudeHarness.readClaudeConfig` already reads `config.claude`
+// — this just gives that convention a validated shape instead of `unknown`.
+// Every sub-schema uses `.passthrough()` so a field a harness knows about but
+// this file does not enumerate (yet) survives a round trip through SQLite
+// instead of being silently stripped by `AgentSchema.parse`.
+
+export const ClaudeAgentConfigSchema = z
+  .object({
+    model: z.string().optional(),
+    permissionMode: PermissionModeSchema.optional(),
+    /** Free-form preset name for the `/effort` built-in (no fixed vocabulary yet). */
+    effort: z.string().optional(),
+    /** `Options.settingSources` — see ClaudeHarnessDeps in @capygen/engine. */
+    settingSources: z.array(z.enum(["user", "project", "local"])).optional(),
+    strictMcpConfig: z.boolean().optional(),
+    allowedTools: z.array(z.string()).optional(),
+    skills: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export type ClaudeAgentConfig = z.infer<typeof ClaudeAgentConfigSchema>;
+
+export const CodexApprovalPolicySchema = z.enum([
+  "untrusted",
+  "on-request",
+  "on-failure",
+  "never",
+]);
+export type CodexApprovalPolicy = z.infer<typeof CodexApprovalPolicySchema>;
+
+export const CodexSandboxModeSchema = z.enum([
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+]);
+export type CodexSandboxMode = z.infer<typeof CodexSandboxModeSchema>;
+
+export const CodexAgentConfigSchema = z
+  .object({
+    model: z.string().optional(),
+    approvalPolicy: CodexApprovalPolicySchema.optional(),
+    sandbox: CodexSandboxModeSchema.optional(),
+    reasoningEffort: z.string().optional(),
+  })
+  .passthrough();
+export type CodexAgentConfig = z.infer<typeof CodexAgentConfigSchema>;
+
+export const ApiAgentConfigSchema = z
+  .object({
+    provider: ApiProviderSchema,
+    model: z.string().min(1),
+    baseUrl: z.string().optional(),
+    maxTokens: z.number().int().positive().optional(),
+    /** Provider-specific extended-thinking config; shape varies by provider. */
+    thinking: z.unknown().optional(),
+    permissionMode: PermissionModeSchema.optional(),
+  })
+  .passthrough();
+export type ApiAgentConfig = z.infer<typeof ApiAgentConfigSchema>;
+
+/** The full namespaced bag. Every key is optional: a claude-backend agent only
+ * ever fills in `.claude`, but nothing stops a config from carrying more than
+ * one backend's settings (e.g. a routing policy that might re-home an agent). */
+export const AgentConfigSchema = z
+  .object({
+    claude: ClaudeAgentConfigSchema.optional(),
+    codex: CodexAgentConfigSchema.optional(),
+    api: ApiAgentConfigSchema.optional(),
+  })
+  .passthrough();
+export type AgentConfig = z.infer<typeof AgentConfigSchema>;
+
+// ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------
 
@@ -69,7 +162,7 @@ export const AgentSchema = z.object({
   backend: BackendSchema,
   model: z.string().min(1),
   role: z.string().default("agent"),
-  config: z.unknown().nullable().default(null),
+  config: AgentConfigSchema.nullable().default(null),
   createdAt: TimestampSchema,
 });
 export type Agent = z.infer<typeof AgentSchema>;
@@ -80,7 +173,7 @@ export const AgentDraftSchema = z.object({
   backend: BackendSchema,
   model: z.string().min(1),
   role: z.string().default("agent"),
-  config: z.unknown().nullable().default(null),
+  config: AgentConfigSchema.nullable().default(null),
 });
 export type AgentDraft = z.infer<typeof AgentDraftSchema>;
 
@@ -159,6 +252,27 @@ export const ThinkingBlockSchema = z.object({
   signature: z.string().optional(),
 });
 
+/**
+ * Coarse tool grouping for filtering/iconography — computed by the harness
+ * from the tool's name (e.g. Claude's `Bash` → `bash`, an MCP server's own
+ * tool → `mcp`). Optional and defaulted to `other` rather than required: the
+ * classifier is harness-specific and a block predating this field (or from a
+ * harness that has not been taught to classify yet) must still parse.
+ */
+export const ToolCallFamilySchema = z.enum([
+  "bash",
+  "read",
+  "write",
+  "edit",
+  "glob",
+  "grep",
+  "web",
+  "mcp",
+  "task",
+  "other",
+]);
+export type ToolCallFamily = z.infer<typeof ToolCallFamilySchema>;
+
 export const ToolCallBlockSchema = z.object({
   ...blockBase,
   kind: z.literal("tool_call"),
@@ -168,6 +282,10 @@ export const ToolCallBlockSchema = z.object({
   status: ToolCallStatusSchema,
   /** The backend's own id for the call, so streamed results can find the block. */
   toolUseId: z.string().optional(),
+  /** Coarse grouping (R6 iconography/filtering); see `ToolCallFamilySchema`. */
+  family: ToolCallFamilySchema.optional(),
+  /** Which MCP server owns this tool, when `family` is `"mcp"`. */
+  serverName: z.string().optional(),
   /** Set when `output` is the truncated stub of a larger result (R25). */
   truncated: z.boolean().optional(),
   /**
@@ -177,6 +295,12 @@ export const ToolCallBlockSchema = z.object({
    * the value is dropped at the harness boundary.
    */
   fullOutput: z.unknown().optional(),
+  /**
+   * `tool_outputs.id` when the full result was big enough to move out of the
+   * block row entirely instead of riding along as `fullOutput` (Phase 3+:
+   * whichever harness/handler decides a value is worth the extra table).
+   */
+  outputRef: z.string().optional(),
 });
 
 export const DiffBlockSchema = z.object({
@@ -201,7 +325,11 @@ export const PermissionRequestSchema = z.object({
 export type PermissionRequest = z.infer<typeof PermissionRequestSchema>;
 
 export const PermissionDecisionSchema = z.object({
-  behavior: z.enum(["allow", "deny"]),
+  /** `allow_always` added for R32/R28: a persisted "always allow" choice,
+   * distinct from `scope: "always"` which is *this call's* granularity —
+   * `permission.answer` collapses it to `{behavior:"allow", scope:"always"}`
+   * for the harness and records the full three-way choice here. */
+  behavior: z.enum(["allow", "allow_always", "deny"]),
   /** Edited input when the user narrowed the call before allowing it. */
   updatedInput: z.unknown().optional(),
   message: z.string().optional(),
@@ -215,6 +343,23 @@ export const PermissionBlockSchema = z.object({
   kind: z.literal("permission"),
   request: PermissionRequestSchema,
   decision: PermissionDecisionSchema.nullable().default(null),
+  /**
+   * Display metadata lifted onto the block from the tool's own
+   * `_meta['anthropic/permissionDisplay']` (R32), so the card can render a
+   * human title without the renderer reaching into backend-specific `_meta`.
+   */
+  title: z.string().optional(),
+  displayName: z.string().optional(),
+  description: z.string().optional(),
+  /**
+   * Raw `updatedPermissions` rule candidates from the SDK's `PermissionResult`
+   * (R32's permission-suggestion UI) — opaque objects, not the backend's own
+   * `request.suggestions` (which are plain alternative-input strings).
+   */
+  suggestions: z.array(z.unknown()).optional(),
+  /** The decision's own reason (e.g. why denied); `request.reason` is the
+   * backend's reason for asking in the first place. */
+  reason: z.string().optional(),
 });
 
 /**
@@ -238,6 +383,87 @@ export const QuestionBlockSchema = z.object({
   questions: z.array(QuestionSchema),
   /** question text → chosen option label; null until the user answers. */
   answers: z.record(z.string(), z.string()).nullable().default(null),
+  /**
+   * Whether a free-text "Other" answer is offered for this card (R32). Left
+   * optional rather than required-with-default on purpose: every existing
+   * `QuestionBlock` in code and tests predates this field, and `QuestionCard`
+   * already renders an Other row unconditionally today — treat an absent
+   * value as "yes" (`allowOther !== false`) until a harness starts setting it
+   * explicitly (e.g. a Codex user-input field that forbids free text).
+   */
+  allowOther: z.boolean().optional(),
+  /** The free-text answer, when the user picked "Other" instead of an option. */
+  otherText: z.string().nullable().optional(),
+});
+
+/** `_meta`/tool-call linkage every MCP-hosted widget carries (R31). */
+export const WidgetHtmlStatusSchema = z.enum(["pending", "ready", "unavailable"]);
+export type WidgetHtmlStatus = z.infer<typeof WidgetHtmlStatusSchema>;
+
+/** MCP's `CallToolResult` shape, kept loose — content blocks vary by server. */
+export const WidgetToolResultSchema = z.object({
+  content: z.array(z.unknown()).default([]),
+  structuredContent: z.unknown().optional(),
+  isError: z.boolean().optional(),
+});
+export type WidgetToolResult = z.infer<typeof WidgetToolResultSchema>;
+
+/**
+ * An MCP Apps widget card (R31): a tool result carrying a `ui://` resource in
+ * its `_meta`. `html` is fetched separately (own MCP client connection, or the
+ * backend's resource read — Phase 3 spike, A13) and arrives after the block
+ * itself, hence `htmlStatus` — the card renders a loading state until it does.
+ */
+export const WidgetBlockSchema = z.object({
+  ...blockBase,
+  kind: z.literal("widget"),
+  /** The tool_use id this widget renders for; links it to any tool_call block. */
+  toolCallId: z.string().min(1),
+  serverName: z.string().min(1),
+  toolName: z.string().min(1),
+  /** The `ui://…` resource URI from the tool/result `_meta` (ext-apps). */
+  resourceUri: z
+    .string()
+    .min(1)
+    .refine((v) => v.startsWith("ui://"), { message: "widget resourceUri must start with ui://" }),
+  /** The resource's own HTML, once fetched; null while `htmlStatus` is pending. */
+  html: z.string().nullable().default(null),
+  htmlStatus: WidgetHtmlStatusSchema.default("pending"),
+  toolInput: z.unknown(),
+  toolResult: WidgetToolResultSchema.nullable().default(null),
+  /** The tool call's and/or result's own `_meta`, verbatim (ext-apps bridge). */
+  meta: z.unknown().nullable().default(null),
+  /** Size negotiated with the host over the ext-apps bridge (`ui/size`). */
+  size: z
+    .object({ width: z.number().positive().optional(), height: z.number().positive().optional() })
+    .optional(),
+});
+
+/** States an elicitation request moves through (mirrors MCP's accept/decline/cancel). */
+export const ElicitationStatusSchema = z.enum([
+  "pending",
+  "accepted",
+  "declined",
+  "cancelled",
+]);
+export type ElicitationStatus = z.infer<typeof ElicitationStatusSchema>;
+
+/**
+ * A backend's structured input request that is not a permission prompt or an
+ * `AskUserQuestion` — MCP `elicitation/create`, or a Codex user-input request
+ * (R32). `schema` is deliberately `unknown`: it is either a JSON Schema object
+ * (MCP) or Codex's own user-input field list, and the form is rendered from
+ * whichever shape it turns out to be, not validated against it here.
+ */
+export const ElicitationBlockSchema = z.object({
+  ...blockBase,
+  kind: z.literal("elicitation"),
+  requestId: z.string().min(1),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  schema: z.unknown(),
+  answers: z.record(z.string(), z.unknown()).nullable().default(null),
+  status: ElicitationStatusSchema.default("pending"),
 });
 
 export const SubagentBlockSchema = z.object({
@@ -285,6 +511,8 @@ export const BlockSchema = z.discriminatedUnion("kind", [
   SubagentBlockSchema,
   ErrorBlockSchema,
   UsageBlockSchema,
+  WidgetBlockSchema,
+  ElicitationBlockSchema,
 ]);
 export type Block = z.infer<typeof BlockSchema>;
 export type BlockKind = Block["kind"];
@@ -298,6 +526,8 @@ export type QuestionBlock = z.infer<typeof QuestionBlockSchema>;
 export type SubagentBlock = z.infer<typeof SubagentBlockSchema>;
 export type ErrorBlock = z.infer<typeof ErrorBlockSchema>;
 export type UsageBlock = z.infer<typeof UsageBlockSchema>;
+export type WidgetBlock = z.infer<typeof WidgetBlockSchema>;
+export type ElicitationBlock = z.infer<typeof ElicitationBlockSchema>;
 
 export const BLOCK_KINDS = [
   "text",
@@ -309,7 +539,22 @@ export const BLOCK_KINDS = [
   "subagent",
   "error",
   "usage",
+  "widget",
+  "elicitation",
 ] as const satisfies readonly BlockKind[];
+
+// ---------------------------------------------------------------------------
+// Tool outputs — full values kept out of a block row (R25, migration 0002)
+// ---------------------------------------------------------------------------
+
+/** One `tool_outputs` row: the whole value a block's `outputRef` points at. */
+export const ToolOutputSchema = z.object({
+  id: z.string().min(1),
+  blockId: z.string().min(1),
+  content: z.unknown(),
+  createdAt: TimestampSchema,
+});
+export type ToolOutput = z.infer<typeof ToolOutputSchema>;
 
 // ---------------------------------------------------------------------------
 // Usage events
@@ -338,14 +583,6 @@ export type UsageEvent = z.infer<typeof UsageEventSchema>;
 
 export const ThemeSchema = z.enum(["system", "light", "dark"]);
 export type Theme = z.infer<typeof ThemeSchema>;
-
-export const PermissionModeSchema = z.enum([
-  "default",
-  "acceptEdits",
-  "bypassPermissions",
-  "plan",
-]);
-export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
 /**
  * Every user-visible preference, with a default. `SettingsSchema.parse({})`
@@ -391,3 +628,25 @@ export const SlashCommandSchema = z.object({
   argumentHint: z.string().optional(),
 });
 export type SlashCommand = z.infer<typeof SlashCommandSchema>;
+
+// ---------------------------------------------------------------------------
+// Harness listing (`harness.list` IPC) — what Settings ▸ Harnesses and the
+// New Session backend picker both need per backend.
+// ---------------------------------------------------------------------------
+
+export const HarnessModelOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+});
+export type HarnessModelOption = z.infer<typeof HarnessModelOptionSchema>;
+
+export const HarnessInfoSchema = z.object({
+  backend: BackendSchema,
+  label: z.string(),
+  available: z.boolean(),
+  /** Why `available` is false (missing CLI, not signed in, no key). */
+  reason: z.string().optional(),
+  models: z.array(HarnessModelOptionSchema),
+  defaultModel: z.string(),
+});
+export type HarnessInfo = z.infer<typeof HarnessInfoSchema>;
