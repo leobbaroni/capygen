@@ -21,6 +21,7 @@ import {
 } from "@capygen/shared";
 import { createSessionRunner } from "../engine/SessionRunner.js";
 import { API_ENV_KEYS } from "./harnessList.js";
+import { createPrereqsIpc, type PrereqsIpcDeps } from "./prereqs.js";
 import { createWorkspaceIpc, type WorkspaceIpcDeps } from "./workspace.js";
 import type { McpPoolRegistry } from "./mcpPools.js";
 import type { WidgetHostHandlers } from "./widgets.js";
@@ -109,6 +110,15 @@ export interface IpcContextDeps {
   workspace?: Omit<WorkspaceIpcDeps, "store" | "broadcast" | "log" | "browser">;
   /** Overridden in tests; `secrets.has` reads the documented API-key env vars. */
   env?: Record<string, string | undefined>;
+  /**
+   * [B3] The setup panel (SPEC R3): `../prereqs/**` + `./prereqs.ts`. Unlike
+   * `browser`/`widgets` above, nothing here is Electron-required by the app —
+   * `createPrereqsIpc`'s own defaults are real (a live CLI probe, a real
+   * confirm dialog, a real visible console), so this is only ever set in
+   * tests, to replace the confirm dialog / console spawn / CLI probes with
+   * fakes.
+   */
+  prereqs?: PrereqsIpcDeps;
 }
 
 export type IpcHandlers = {
@@ -125,6 +135,19 @@ export interface IpcContext {
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const { store, broadcast, log } = deps;
   const secrets = deps.secrets ?? createInMemorySecretsStore();
+
+  // [B3] The setup panel (SPEC R3): `prereqs.status` / `prereqs.run`. See
+  // `IpcContextDeps.prereqs`'s own comment for why this needs no `main.ts`
+  // wiring the way `browser`/`widgets` do. `broadcastChanged` is the one
+  // piece that *is* wired here rather than defaulted inside `prereqs.ts`: it
+  // is `broadcast` itself, already in scope, not an Electron object, so
+  // there is nothing for a default to reach for — Settings ▸ Prerequisites
+  // (`PrereqsSection`, Task B2) subscribes to `prereqs.changed` for its own
+  // live update after a Run, and this is what makes that event real.
+  const prereqs = createPrereqsIpc({
+    broadcastChanged: (steps) => broadcast("prereqs.changed", { steps }),
+    ...deps.prereqs,
+  });
 
   // [B1] Files, git, terminals, dev servers, tasks and the Browser pane's
   // native view (SPEC R16-R18). One module, five registration lines below.
@@ -596,15 +619,17 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     // -------------------------------------------------------------------
-    // Settings hub, integrations, prerequisites, diagnostics (Phase 6, SPEC
-    // R3, R19-R21, R28-R30). Contracts only in this pass: every channel's
-    // shape is real (`@capygen/shared`) and its `@capygen/db` backing repo
+    // Settings hub, integrations, diagnostics (Phase 6, SPEC R19-R21,
+    // R28-R30). Contracts only in this pass: every channel's shape is real
+    // (`@capygen/shared`) and its `@capygen/db` backing repo
     // (`store.globalSettings`/`.mcpServers`/`.plugins`/`.skills`/
     // `.toolPolicies`) is implemented and unit-tested, but wiring a handler
-    // to a repo, a live CLI probe, or Electron (clipboard, app versions, a
-    // visible console for `prereqs.run`) is Phase 6 Build's job. Every
-    // channel below fails loudly rather than returning a fake success
+    // to a repo or Electron (clipboard, app versions) is Phase 6 Build's job.
+    // Every channel below fails loudly rather than returning a fake success
     // (SPEC §Edge Cases: "never swallow") until Build lands.
+    //
+    // `prereqs.status` / `.run` are the exception — SPEC R3, task B3 — wired
+    // for real above (`./prereqs.ts`), Electron included.
     // -------------------------------------------------------------------
     "settings.getAll": () => notImplemented("settings.getAll"),
     "settings.patch": (args) => notImplemented("settings.patch", args),
@@ -624,8 +649,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     "integrations.tools.setPolicy": (args) => notImplemented("integrations.tools.setPolicy", args),
     "integrations.tools.removePolicy": (args) => notImplemented("integrations.tools.removePolicy", args),
     "integrations.refresh": (args) => notImplemented("integrations.refresh", args),
-    "prereqs.status": () => notImplemented("prereqs.status"),
-    "prereqs.run": (args) => notImplemented("prereqs.run", args),
+    ...prereqs.handlers,
     "diagnostics.get": () => notImplemented("diagnostics.get"),
     "diagnostics.copy": () => notImplemented("diagnostics.copy"),
 

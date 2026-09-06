@@ -28,6 +28,7 @@ import { DEFAULT_HEADING, type AgentDraft, type Project, type SessionMode } from
 import { AddAgentDialog } from "@/components/AddAgentDialog";
 import { Composer, type AgentChoice } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
+import { SetupBanner } from "@/components/SetupBanner";
 import { Mascot } from "@/brand/Mascot";
 import { Wordmark } from "@/brand/Wordmark";
 import { useMascotState } from "@/hooks/useMascotState";
@@ -139,6 +140,11 @@ export function LandingPage() {
             {DEFAULT_HEADING}
           </h1>
         </div>
+
+        {/* SPEC R3: nothing to type to until at least one backend is set up.
+            SetupBanner renders nothing once Claude Code or Codex is
+            available, so this costs the common case one always-empty slot. */}
+        <SetupBanner />
 
         <Composer
           onSubmit={handleSubmit}
