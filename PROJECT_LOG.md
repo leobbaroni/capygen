@@ -914,3 +914,45 @@ Not fixed, on purpose
   `packages/engine/test/configLayering.test.ts` (4 failing), is unrelated concurrent work in this
   worktree (`packages/engine`, explicitly outside this task's ownership) and was left untouched;
   `corepack pnpm build` clean. Committed only this task's 41 files (`git add` by path).
+
+## 2026-09-06 — Phase 6 / B1: config sync engine (Claude + Codex stores, watchers, settings hub, diagnostics)
+
+- New `packages/engine/src/config/**` (pure Node, no Electron): `ClaudeConfigStore` (reads
+  `.claude.json` user + `projects[<cwd>]` local scopes, `<project>/.mcp.json`, the four-file
+  settings chain, `plugins/installed_plugins.json` + `known_marketplaces.json`, user/project/plugin
+  skills; writes MCP through `claude mcp add|remove -s <scope>` for the `.claude.json` scopes and
+  by file edit for `.mcp.json`, tool policies into `permissions.{allow,deny,ask}`, skill
+  enable/disable through the real `skillOverrides` settings key, plugins through
+  `claude plugin install|uninstall|enable|disable`), `CodexConfigStore` (config.toml read + a
+  **comment-preserving text-range patcher**, `[mcp_servers.*]`, `[plugins."…"]`, `[marketplaces.*]`,
+  the model/effort/approval/sandbox root keys, skills by rename), `ApiConfigStore` (own servers in
+  one `settings` key, plus the Claude/Codex servers it inherits, read-only), `toml.ts` (a TOML
+  reader that records byte ranges — no library round-trips comments), `layering.ts`
+  (global → backend default → agent override, merged field by field), `paths.ts`/`files.ts`/`cli.ts`.
+- New `apps/desktop/src/integrations/**`: `SyncCoordinator` (chokidar watchers, 5 s TTL cache,
+  concurrent-refresh dedupe, 300 ms debounce, `integrations.changed` only for kinds that moved,
+  cache = a projection of the files), `IntegrationsService` (the 15 channels; every write is
+  followed by a re-read), `SettingsService` (the hub, plus the projection onto Phase 2's flat
+  `Settings` row so `SessionRunner`/`appStore` pick up the global defaults with no second source of
+  truth), `DiagnosticsService` (versions/paths/backends/db size, redacted), `probeMcpServer` (the
+  shared MCP pool behind `integrations.mcp.test`).
+- Wired: `ipc/{settings,integrations,diagnostics}.ts` + three registration lines in `handlers.ts`
+  (the 20 `notImplemented` stubs for those channels are gone), and `main.ts` supplies the Electron
+  half — `nativeTheme.themeSource`, `app.setLoginItemSettings`, `clipboard.writeText`,
+  `shell.openPath`, the pool probe — then calls `settings.applyOnStart()` and starts the watchers
+  without awaiting them (G1's 3 s budget). `prereqs.*` was left alone: another session had already
+  landed `ipc/prereqs.ts` + `src/prereqs/**`, so the duplicate `PrereqService` and
+  `config/prereqs.ts` this task had written were deleted rather than shipped twice.
+- Two real bugs found by the tests rather than by review: chokidar **silently drops** an edit made
+  before its initial scan finishes with `ignoreInitial: true` (fixed by awaiting `ready`), and the
+  diagnostics redactor left a short `Authorization: Bearer <token>` intact (fixed by taking the rest
+  of the line).
+- Verified live, read-only, against the real installation: `claude plugin list --json`,
+  `claude plugin marketplace list --json`, `claude mcp list`
+  (`CAPYGEN_LIVE_CONFIG=1 … --project engine configLive`, 5 passed); and, before any code was
+  written, `CLAUDE_CONFIG_DIR=<temp> claude mcp add -s user|project|local`, which proved the
+  isolation every test in this task depends on and that `.claude.json` moves inside that directory.
+- Gate: `corepack pnpm typecheck` clean (6 projects); `corepack pnpm test` 97 files / 1244 passed,
+  4 skipped, zero failures repo-wide; `corepack pnpm build` clean. COMPAT.md gained a
+  "Config sync" section (every file, CLI command and flag relied on, with the version it was
+  verified against) plus three Internal-seams rows.

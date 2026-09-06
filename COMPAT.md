@@ -185,6 +185,82 @@ client cannot reach a Codex-hosted server.
 | per-widget response CSP | `default-src 'none'` plus only the resource's declared domains | the spec's stated secure default |
 | widget document cap | 4 MB (`DEFAULT_MAX_WIDGET_HTML_BYTES`) | a hostile server must not be able to exhaust the main process's heap |
 
+## Config sync — Claude Code and Codex configuration (SPEC R19–R21, R28–R30)
+
+Driven by `packages/engine/src/config/**` (the stores) and
+`apps/desktop/src/integrations/**` (watchers, cache, IPC). Every row was
+verified on this machine on **2026-09-06** against Claude Code **2.1.261** and
+Codex **0.153.4**: the files by reading them, the CLI shapes by running the
+read-only commands, and the three MCP scopes by running `claude mcp add`
+against an isolated `CLAUDE_CONFIG_DIR` — which wrote only inside that temp
+directory, the isolation proof every test here depends on.
+
+### Claude Code — files
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `CLAUDE_CONFIG_DIR` relocates the whole home | `sdk.mjs`: `process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")`; live run 2026-09-06 | `resolveBackendHomes`, every test under `packages/engine/test/config*` and `apps/desktop/test/integrations*` | without it no test could run without touching the user's real config; the suite would have to be deleted, not adapted |
+| **`.claude.json` moves inside `CLAUDE_CONFIG_DIR`** when it is set | `sdk.mjs`: `join(CLAUDE_CONFIG_DIR or homedir(), ".claude.json")`; the live run wrote `<tmp>/.claude.json` | `claudePaths().globalConfig` | reading `~/.claude.json` unconditionally would make an "isolated" home read the user's real MCP servers |
+| `.claude.json` → `mcpServers` | user-scope servers, `{type,command,args,env}` / `{type,url}` | `ClaudeConfigStore` scope `user` | the *name → object* map is Claude Code's own `mcpServers` format, shared with `.mcp.json` |
+| `.claude.json` → `projects["<forward-slashed cwd>"].mcpServers` | local-scope servers; **the key uses `/` even on Windows** (live: a `C:\…\cfgproj` cwd produced the key `C:/Users/…/cfgproj`) | scope `local`, `claudeProjectKey()` | a backslashed lookup finds nothing and every local server vanishes from the page |
+| `<project>/.mcp.json` → `mcpServers` | project-scope servers; **edited directly**, never through the CLI | scope `project` | three lines a repo checks in — re-serialising it is safe, unlike `.claude.json`'s 70 KB of session bookkeeping |
+| `.mcp.json` approval: `enableAllProjectMcpServers`, `enabledMcpjsonServers`, `disabledMcpjsonServers` | settings-schema keys in `sdk.mjs`; also mirrored in `.claude.json`'s project node | `mcpJsonApproved()` → the row's `enabled` | an unapproved `.mcp.json` server is listed but shown off, which is what `claude mcp list` prints as "⏸ Pending approval" |
+| `permissions.{allow,deny,ask}` — arrays of patterns | `sdk.mjs` settings schema; this machine's own `settings.local.json` uses `allow` | tool policies: read from the whole chain, written to `<configDir>/settings.json` (scope `global`) or `<project>/.claude/settings.local.json` (scope `project`) | an emptied bucket is deleted rather than written as `[]` |
+| **`skillOverrides`**: `Record<string, "on" \| "name-only" \| "user-invocable-only" \| "off">` | `sdk.mjs` settings schema, described there as *"Per-skill listing overrides keyed by skill name … `off` hides it from both. Absent = on."*; already present in this machine's `settings.local.json` | `ClaudeConfigStore.setSkillEnabled` | **this is why capygen never moves a Claude skill file.** If the key disappeared, the fallback would be an enabled/disabled directory pair under capygen's control — strictly worse, because the CLI would not honour it |
+| `enabledPlugins`: `{ "<plugin>@<marketplace>": boolean }` | `sdk.mjs` settings schema; precedence user < project < local | a plugin row's `enabled` | a plugin disabled in user settings can still be re-enabled by a project — the schema says so explicitly |
+| `plugins/installed_plugins.json` — `{version:2, plugins:{id:[{scope,installPath,version,installedAt}]}}` | read from this machine | which plugins exist, and their `installPath` (source of `commands`/`skills`) | an unreadable file yields no plugins, never a crash |
+| `plugins/known_marketplaces.json` — `{name:{source:{source,repo},installLocation}}` | read from this machine | the marketplaces fallback when the CLI cannot run | the CLI's `--json` output is preferred; this is the offline answer |
+| skills at `<configDir>/skills/<name>/SKILL.md`, `<project>/.claude/skills/**`, `<installPath>/skills/**` | read from this machine | `SkillEntry` (`name`/`description` from the YAML front matter) | only those two fields are parsed — the rest of the document is prose, not config |
+| the settings precedence chain | `<configDir>/settings.json` < `settings.local.json` < `<project>/.claude/settings.json` < `.claude/settings.local.json` | `settingsChain()`, and every merged read above | a fifth source (managed/policy settings) is one more entry, not a redesign |
+
+### Claude Code — CLI, headless (PLAN A9)
+
+Every invocation is `execFile` with `windowsHide: true`, `cleanEnv()`, and
+`CLAUDE_CONFIG_DIR` set **explicitly** to the store's own config dir — an
+isolated home stays isolated even when the parent process has the variable
+unset. A non-zero exit throws with the CLI's own stderr in the message.
+
+| Command | Verified | Used by | If it changes |
+|---|---|---|---|
+| `claude mcp add -s <user\|local\|project> [--transport http\|sse] [-e K=V]… <name> [-- <command> <args…>]` / `… <url>` | live, all three scopes | `addMcpServer` for the two `.claude.json` scopes | `--` first, then argv, is the CLI's own documented spelling for a stdio server that has flags of its own |
+| `claude mcp remove <name> -s <scope>` | live | `removeMcpServer`, and the first half of an update — the CLI has no `mcp update` | remove-then-add is also what stops a rename leaving two rows behind |
+| `claude mcp list` | live | `liveMcpStatus()` — per-server status **and** the claude.ai cloud connectors that exist in no file at all | **no `--json` on 2.1.261** (`claude mcp list --help` offers only `-h`), so this parses text: `<name>: <target> - <glyph> <status>`, split on the first `": "` and the last `" - "` because a connector's name contains spaces (`claude.ai Higgsfield`). It can only *enrich*: an unrecognised line leaves the status undefined and the file-derived list stands |
+| `claude plugin list --json` | live | reconciling installed plugins against the file | array of `{id,version,scope,enabled,installPath,installedAt,lastUpdated}` |
+| `claude plugin marketplace list --json` | live | `integrations.plugin.marketplaces` | array of `{name,source,repo,installLocation}`; any failure falls back to `known_marketplaces.json` |
+| `claude plugin install <plugin>@<marketplace> --yes` | `--help`, 2.1.261 | `installPlugin` | **`--yes` is required, not cosmetic**: the CLI refuses a marketplace-declared install command when stdout is not a TTY, which it never is here. R27's confirm-before-installing is satisfied by the renderer's dialog *before* this call is made |
+| `claude plugin uninstall\|enable\|disable <plugin>` | `--help`; `enable`/`disable` exercised through the test shim | `uninstallPlugin`, `setPluginEnabled` | `-s <scope>` defaults to auto-detect and is deliberately not passed |
+
+### Codex — `~/.codex/config.toml` (`CODEX_HOME`)
+
+capygen **patches text ranges**; it never re-serialises this file. See
+`packages/engine/src/config/toml.ts` for why: `@iarna/toml` 2.2.5 and
+`smol-toml` 1.8.0 (both checked on npm, 2026-09-06) parse TOML into plain
+JavaScript objects, and a plain object has nowhere to keep a comment, a key
+order, or the difference between `'C:\Users\x'` and `"C:\\Users\\x"` — and this
+machine's real file has ~80 literal-quoted `[projects.'…']` headers to lose.
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `CODEX_HOME`, default `~/.codex` | Codex's documented variable; used by every test here | `resolveBackendHomes` | same blast radius as `CLAUDE_CONFIG_DIR` |
+| `[mcp_servers.<name>]` with `command`, `args`, `url`, `startup_timeout_sec`, and a child `[mcp_servers.<name>.env]` table | read from this machine's own file | `readMcpServers`, `mcpServerToml` | the **child env table** is why the Phase 3 reader (`mcp/client/config.ts`) was not reused: it skips nested tables by design and would drop every server's environment |
+| `[plugins."<plugin>@<marketplace>"] enabled = <bool>` | read from this machine | the plugin list and `setPluginEnabled` | a quoted table name, so the writer quotes any key outside `[A-Za-z0-9_-]+` |
+| `[marketplaces.<name>] source_type/source` | read from this machine | the Codex marketplace list | `marketplace/add`/`remove` exist on the app-server (Phase 9); capygen does not write these |
+| top-level `model`, `model_reasoning_effort`, `approval_policy`, `sandbox_mode` | `v2/Config.ts` in the 0.153.4 bindings, plus this machine's file | `CodexConfigStore.defaults()` / `.setDefaults()` | a *new* root key is inserted **above the first table header**, or it would silently become a key of that table |
+| `[projects.'<path>'] trust_level`, `[features]`, `[windows]`, `notify = [ … ]` | read from this machine | nothing — but they must survive every write | the patcher's whole reason to exist; `configStores.test.ts` asserts each one after an edit |
+| skills at `<CODEX_HOME>/skills/<name>/SKILL.md`, `<project>/.codex/skills`, `plugins/cache/<marketplace>/<plugin>/<version>/skills` | the cache layout on this machine | `SkillEntry` | a plugin whose cache is absent is listed `installed: false`, not hidden |
+| **Codex has no per-tool permission list** | `v2/Config.ts` (0.153.4) has neither an allow/deny list nor a permissions table; `ExecPolicyAmendment` is a runtime proposal, not a config key | `readToolPolicies()` returns `[]`; a `codex` tool policy is capygen's own SQLite row, enforced by capygen's permission cards | if Codex grows one, the row moves from the DB into the file and `BackendSyncSource.toolPolicyScopes` stops being empty |
+| skill enable/disable is a **rename**: `SKILL.md` ⇄ `SKILL.md.disabled` | capygen's own convention (`CODEX_DISABLED_SKILL_FILE`) | `CodexConfigStore.setSkillEnabled` | the app-server's `skills/config/write {name\|path, enabled}` is the alternative, but it needs a running server and picks its own destination. The rename is reversible, visible in a diff, and cannot lose the file — `FileIo` deliberately has **no delete**, so a rename is the only way anything in this module makes a path stop existing |
+
+### Watchers and refresh (SPEC R29)
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `chokidar` **5.0.0** — `watch(paths[], {ignoreInitial, depth: 2, awaitWriteFinish})` | already a desktop dependency (Phase 5) | `SyncCoordinator` | the same package and options the Files pane uses |
+| **the watcher must be awaited to `ready`** | measured 2026-09-06 | `defaultCreateWatcher` | `chokidar.watch()` returns *before* its initial scan finishes, and with `ignoreInitial: true` an edit made inside that window is **silently dropped** — `integrationsWatcher.test.ts` failed in exactly that way before the `ready` await was added. `main.ts` does not await `start()`, so G1's 3 s landing budget is unaffected |
+| `integrations.changed {backend, kinds}` fires only for the kinds that actually differ | `changedKinds` | the settings page | `.claude.json` is rewritten constantly for unrelated session bookkeeping; broadcasting every write would re-render the page continuously |
+| cache TTL 5 s, watcher debounce 300 ms | `DEFAULT_SYNC_TTL_MS` / `DEFAULT_SYNC_DEBOUNCE_MS` | `SyncCoordinator` | R23–R26: the settings page, the composer and a second window share one read rather than each costing a directory walk |
+| a re-sync **replaces** a backend's cached rows (`DELETE … WHERE backend = ?`, then upsert) | `SyncCoordinator.persist` | `mcp_servers`, `plugins`, `skills`, and only the policy scopes that backend's files own | the files are the source of truth, so a cached row the files stop mentioning is stale by definition. capygen's own `session` policies, and every policy for a backend with no permission file, are never pruned |
+
 ## Internal seams
 
 | Seam | Meaning |
@@ -204,6 +280,9 @@ client cannot reach a Codex-hosted server.
 | `HarnessAgent.promptAddition` | the round table's session-stable prompt text, applied once per backend session: Claude `systemPrompt.append`, Codex `thread/start.developerInstructions`, `api` `buildSystemPrompt({extra})`. Nothing per-turn may go in it (R24) |
 | `HarnessAgent.permissionMode` | the **highest**-priority permission mode a harness knows (`ClaudeHarness`: `agent.permissionMode ?? config.claude.permissionMode ?? "default"`). `SessionRunner` therefore fills it from `agent.config.<backend>.permissionMode` first and only then from the global setting — passing the global one unconditionally made the per-agent override dead (SPEC R19's "per-agent overrides") |
 | `Harness.describeSnapshot?()` | optional, duck-typed, one shape per backend: Claude returns its last `system/init` (`ClaudeInitSnapshot`), Codex `{mcpServers, skills}` from `mcpServerStatus/list` + `skills/list`, `api` `{tools, mcpServers}` from the tool list it was built with. `apps/desktop/src/engine/describeSnapshot.ts` narrows it and merges the config-only halves; a harness without the method, or one whose method throws, simply has no snapshot — an info card never fails a lookup (SPEC R13) |
+| `IntegrationsService` project resolution | `integrations.list` takes only `{backend}` — the contract has no `projectId` — so the project-scope rows (`.mcp.json`, `.claude/settings.local.json`, `.claude/skills`) are read for the **most-recently-touched project** (`projects.list()` is ordered `updated_at DESC`), which is the one the landing page and the open session are already on. When it changes, the watchers are re-pointed (`SyncCoordinator.retarget`) |
+| `SettingsService` **projection** | Phase 2's flat `Settings` row is still what `SessionRunner`, `appStore` and `DevWorkspacePage` read. Rather than give the app two sources of truth, every `settings.patch` writes the overlapping fields down onto it: `appearance.theme`→`theme`, `general.defaultBackend/defaultModel`, `efficiency.compactionThresholdPct`÷100→`compactionThreshold`, `closeToTray`, and `backends.claude.permissionMode`→`permissionMode` (only when the hub has an opinion). That is how the R30 layering reaches a harness: the projected value is `SessionRunner`'s *lowest*-priority fallback, and `agent.config.<backend>` still outranks it (Phase 4) |
+| `ApiConfigStore` inheritance | the `api` backend's own MCP servers live under one `settings` key (`api_mcp_servers`); everything else it lists is **inherited read-only** from the Claude and Codex stores, marked `scope:"plugin"` + `inherited:true`, and every write to one is refused by name. That mirrors what `loadMcpServers` actually hands an `api` agent (Phase 3), so the settings page cannot disagree with the agent |
 
 ## Workspace panes — node-pty, chokidar, simple-git, Electron views (SPEC R16–R18)
 

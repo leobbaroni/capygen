@@ -104,6 +104,21 @@ export * from "./describe/index.js";
 export * from "./roundtable/index.js";
 export * from "./routing/index.js";
 
+/**
+ * [B1] The config-sync engine (Phase 6, SPEC R19-R21, R28-R30): the Claude and
+ * Codex config stores, the comment-preserving TOML patcher they write through,
+ * the settings layering rules and the prerequisites list. Pure Node, no
+ * Electron — `apps/desktop/src/integrations/**` owns the watchers, the SQLite
+ * cache and the IPC on top.
+ *
+ * Safe as an `export *`: `config/types.ts` re-exports nothing, and the two
+ * names that could have collided with the MCP client surface above
+ * (`McpServerConfig`, `loadMcpServers`) are not declared here — the stores
+ * speak `@capygen/shared`'s `McpServerEntry`, which is the *settings* shape,
+ * not the *connection* shape.
+ */
+export * from "./config/index.js";
+
 import type { Backend } from "@capygen/shared";
 import { ApiHarness, type ApiHarnessDeps } from "./api/ApiHarness.js";
 import { ClaudeHarness, type ClaudeHarnessDeps } from "./claude/ClaudeHarness.js";

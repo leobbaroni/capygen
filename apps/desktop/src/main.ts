@@ -19,6 +19,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   BrowserWindow,
   Menu,
+  clipboard,
   Tray,
   WebContentsView,
   app,
@@ -64,6 +65,7 @@ import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
 import { createMcpPoolRegistry, type McpPoolRegistry } from "./ipc/mcpPools.js";
 import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
 import { createHarnessLister } from "./ipc/harnessList.js";
+import { createMcpPoolProbe } from "./integrations/probeMcpServer.js";
 import {
   WIDGET_SCHEME,
   WIDGET_SCHEME_PRIVILEGES,
@@ -397,6 +399,58 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
       // itself never leaves `secrets.get` for anything but the api harness.
       secrets: secretsStore,
     }),
+
+    // [Phase 6] The Settings hub's OS-facing half (SPEC R19, R30). Each one is
+    // a function rather than an Electron object so `SettingsService` — and its
+    // tests — stay Electron-free.
+    settingsPlatform: {
+      applyTheme: (theme) => {
+        // `nativeTheme.themeSource` is what makes Chromium's own widgets (the
+        // scrollbars, a <select> popup, the caption buttons' hover) follow the
+        // choice; `isDark()` then reads the stored value back for the window
+        // background, which is why the projection onto the flat row matters.
+        nativeTheme.themeSource = theme;
+        for (const win of shellWindows) {
+          if (!win.isDestroyed()) win.setBackgroundColor(isDark() ? "#0e1013" : "#ffffff");
+        }
+      },
+      setStartWithWindows: (enabled) => {
+        // Windows' Run key, via Electron. `openAsHidden` is deliberately off:
+        // a window that appears is what a person expects from "start with
+        // Windows", and the tray (R2) is where it goes when they close it.
+        app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
+        log.info(`[settings] start with Windows: ${enabled ? "on" : "off"}`);
+      },
+      applyCloseToTray: (enabled) => log.info(`[settings] close to tray: ${enabled ? "on" : "off"}`),
+      applyNotifications: (notifications) =>
+        log.info(`[settings] notifications: ${notifications.enabled ? "on" : "off"}`),
+    },
+
+    // [Phase 6] The config-sync engine (SPEC R28-R30). Only the two pieces it
+    // cannot build itself: the shared MCP pool for `integrations.mcp.test`
+    // (R26 — a Test button must not spawn a second copy of a server a session
+    // already has open) and the OS "reveal this file" for a skill.
+    integrations: {
+      probeMcpServer: createMcpPoolProbe(mcpPools),
+      openPath: async (target) => {
+        const error = await shell.openPath(target);
+        if (error) throw new Error(`could not open ${target}: ${error}`);
+      },
+    },
+
+    // [Phase 6] Diagnostics (SPEC R19, R21). `writeClipboard` is the only
+    // reason this page needs Electron at all, and everything that reaches it
+    // has been through `redact` first.
+    diagnostics: {
+      writeClipboard: (text) => clipboard.writeText(text),
+      fileSize: (file) => {
+        try {
+          return fs.statSync(file).size;
+        } catch {
+          return 0;
+        }
+      },
+    },
     pickDirectory: async () => {
       const owner = [...shellWindows][0];
       const result = await (owner
@@ -455,6 +509,18 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     });
   }
   log.info(`[ipc] ${INVOKE_CHANNEL_NAMES.length} channels registered`);
+
+  // [Phase 6] Push the stored settings at the OS before the first window
+  // paints (theme, run-at-login), then start the config watchers (SPEC R29:
+  // a change made outside the app is reflected on next open). Both are
+  // deliberately *after* the channels are registered and neither is awaited:
+  // chokidar's first scan must not sit between launch and the landing page
+  // (G1's 3 s budget).
+  context.settings.applyOnStart();
+  void context.integrations.start().catch((err: unknown) => {
+    log.warn("[integrations] could not start the config watchers", err);
+  });
+
   return context;
 }
 

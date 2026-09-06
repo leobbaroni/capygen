@@ -23,6 +23,20 @@ import { createSessionRunner } from "../engine/SessionRunner.js";
 import { API_ENV_KEYS } from "./harnessList.js";
 import { createPrereqsIpc, type PrereqsIpcDeps } from "./prereqs.js";
 import { createWorkspaceIpc, type WorkspaceIpcDeps } from "./workspace.js";
+// [B1/Phase 6] The settings hub, the config-sync engine and diagnostics.
+import { createSettingsHubHandlers } from "./settings.js";
+import { createIntegrationsHandlers } from "./integrations.js";
+import { createDiagnosticsHandlers } from "./diagnostics.js";
+import { SettingsService, type SettingsPlatform } from "../integrations/SettingsService.js";
+import {
+  IntegrationsService,
+  type IntegrationsDeps,
+} from "../integrations/IntegrationsService.js";
+import {
+  DiagnosticsService,
+  type DiagnosticsAppInfo,
+  type DiagnosticsDeps,
+} from "../integrations/DiagnosticsService.js";
 import type { McpPoolRegistry } from "./mcpPools.js";
 import type { WidgetHostHandlers } from "./widgets.js";
 import type { BrowserViewHandlers } from "../workspace/BrowserViewService.js";
@@ -119,6 +133,25 @@ export interface IpcContextDeps {
    * fakes.
    */
   prereqs?: PrereqsIpcDeps;
+  /**
+   * [B1/Phase 6] The OS-facing half of the Settings hub (SPEC R19, R30):
+   * `nativeTheme`, `app.setLoginItemSettings`, the tray. Absent in tests, in
+   * which case a settings write still stores and broadcasts — it just changes
+   * nothing outside the app.
+   */
+  settingsPlatform?: SettingsPlatform;
+  /**
+   * [B1/Phase 6] Test seams for the config-sync engine (SPEC R28-R30): a temp
+   * `CLAUDE_CONFIG_DIR`/`CODEX_HOME`, a fake `claude` runner, a fake watcher.
+   * The app sets only `openPath` and `probeMcpServer`, both from `main.ts`.
+   */
+  integrations?: Omit<IntegrationsDeps, "store" | "broadcast" | "log">;
+  /**
+   * [B1/Phase 6] Diagnostics' two injected pieces: the clipboard and the file
+   * size probe. `appInfo` and `listHarnesses` are taken from the context's own
+   * deps, so the page can never disagree with `app.version` / `harness.list`.
+   */
+  diagnostics?: Omit<DiagnosticsDeps, "log" | "appInfo" | "listHarnesses">;
 }
 
 export type IpcHandlers = {
@@ -128,6 +161,14 @@ export type IpcHandlers = {
 export interface IpcContext {
   handlers: IpcHandlers;
   engine: Engine;
+  /**
+   * [B1/Phase 6] The config-sync engine, reachable directly so `main.ts` can
+   * start its watchers after the window exists (SPEC R29) and so the tests can
+   * drive a refresh without going through IPC.
+   */
+  integrations: IntegrationsService;
+  /** [B1/Phase 6] The settings hub; `main.ts` calls `applyOnStart()`. */
+  settings: SettingsService;
   /** Resolves once every backend is down and its last turn status is written. */
   dispose(): void | Promise<void>;
 }
@@ -147,6 +188,31 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const prereqs = createPrereqsIpc({
     broadcastChanged: (steps) => broadcast("prereqs.changed", { steps }),
     ...deps.prereqs,
+  });
+
+  // [B1/Phase 6] The Settings hub (R19, R30) and the config-sync engine
+  // (R28-R29). Both are Electron-free: the OS-facing switches (theme, run at
+  // login) and the two Electron objects diagnostics needs (clipboard, file
+  // size) arrive as injected functions from `main.ts`.
+  const settingsService = new SettingsService({
+    store,
+    broadcast,
+    log,
+    ...(deps.settingsPlatform ? { platform: deps.settingsPlatform } : {}),
+  });
+  const integrations = new IntegrationsService({
+    store,
+    broadcast,
+    log,
+    ...(deps.integrations ?? {}),
+  });
+  const diagnostics = new DiagnosticsService({
+    log,
+    appInfo: () => deps.appInfo() as DiagnosticsAppInfo,
+    // The very same probe the picker uses, so Diagnostics can never claim a
+    // backend is available that the composer says is not.
+    listHarnesses: () => deps.listHarnesses?.() ?? [],
+    ...(deps.diagnostics ?? {}),
   });
 
   // [B1] Files, git, terminals, dev servers, tasks and the Browser pane's
@@ -620,38 +686,19 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
 
     // -------------------------------------------------------------------
     // Settings hub, integrations, diagnostics (Phase 6, SPEC R19-R21,
-    // R28-R30). Contracts only in this pass: every channel's shape is real
-    // (`@capygen/shared`) and its `@capygen/db` backing repo
-    // (`store.globalSettings`/`.mcpServers`/`.plugins`/`.skills`/
-    // `.toolPolicies`) is implemented and unit-tested, but wiring a handler
-    // to a repo or Electron (clipboard, app versions) is Phase 6 Build's job.
-    // Every channel below fails loudly rather than returning a fake success
-    // (SPEC §Edge Cases: "never swallow") until Build lands.
+    // R28-R30). Three modules, three registration lines — the same shape
+    // `workspace.handlers` uses below, and for the same reason: this file
+    // stays a map from channel to behaviour, and the services that own the
+    // config stores, the watchers and the SQLite cache live next door in
+    // `../integrations/**`.
     //
-    // `prereqs.status` / `.run` are the exception — SPEC R3, task B3 — wired
-    // for real above (`./prereqs.ts`), Electron included.
+    // `prereqs.status` / `.run` are wired separately above (`./prereqs.ts`,
+    // SPEC R3) because they own the confirm dialog and the visible console.
     // -------------------------------------------------------------------
-    "settings.getAll": () => notImplemented("settings.getAll"),
-    "settings.patch": (args) => notImplemented("settings.patch", args),
-    "settings.reset": (args) => notImplemented("settings.reset", args),
-    "integrations.list": (args) => notImplemented("integrations.list", args),
-    "integrations.mcp.add": (args) => notImplemented("integrations.mcp.add", args),
-    "integrations.mcp.update": (args) => notImplemented("integrations.mcp.update", args),
-    "integrations.mcp.remove": (args) => notImplemented("integrations.mcp.remove", args),
-    "integrations.mcp.test": (args) => notImplemented("integrations.mcp.test", args),
-    "integrations.plugin.install": (args) => notImplemented("integrations.plugin.install", args),
-    "integrations.plugin.uninstall": (args) => notImplemented("integrations.plugin.uninstall", args),
-    "integrations.plugin.setEnabled": (args) => notImplemented("integrations.plugin.setEnabled", args),
-    "integrations.plugin.marketplaces": (args) => notImplemented("integrations.plugin.marketplaces", args),
-    "integrations.skill.setEnabled": (args) => notImplemented("integrations.skill.setEnabled", args),
-    "integrations.skill.create": (args) => notImplemented("integrations.skill.create", args),
-    "integrations.skill.open": (args) => notImplemented("integrations.skill.open", args),
-    "integrations.tools.setPolicy": (args) => notImplemented("integrations.tools.setPolicy", args),
-    "integrations.tools.removePolicy": (args) => notImplemented("integrations.tools.removePolicy", args),
-    "integrations.refresh": (args) => notImplemented("integrations.refresh", args),
+    ...createSettingsHubHandlers(settingsService),
+    ...createIntegrationsHandlers(integrations),
     ...prereqs.handlers,
-    "diagnostics.get": () => notImplemented("diagnostics.get"),
-    "diagnostics.copy": () => notImplemented("diagnostics.copy"),
+    ...createDiagnosticsHandlers(diagnostics),
 
     // -------------------------------------------------------------------
     // Workspace panes (SPEC R16-R18) — layout, files, git, terminals, dev
@@ -669,11 +716,16 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   return {
     handlers,
     engine,
+    integrations,
+    settings: settingsService,
     dispose: async () => {
       // The engine first: a harness still writing a turn's final status must
       // not find the workspace services gone underneath it.
       await engine.dispose();
       await workspace.dispose();
+      // Last: the config watchers own nothing anybody else is waiting on, but
+      // a chokidar instance left running keeps the process alive on quit.
+      await integrations.dispose();
     },
   };
 }
