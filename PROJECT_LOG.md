@@ -1198,3 +1198,24 @@ apps/desktop typecheck: Done
   P0 and independently owned P2 connection identity; Luna updates isolated live test scripts.
 - Validation for this documentation task: checked PLAN Phase9C and SPEC R33/R34 against all
   image requirements and both debate reviews; no numbered phase marked complete.
+
+### Phase 7-P2 — MCP connection identity
+
+Opus fixed canonical connection identity to include env/headers and hash unambiguous JSON.
+Astra review caught duplicate-case header order and mutable base env; Opus reproduced and
+fixed both. Base environment is captured once per registry; differing effective connection
+options isolate pools, equivalent maps share. No keys or credentials appear in leases/logs.
+
+Red: 7 failed / 10 passed before initial fix; both review regressions also reproduced red.
+Final independent Windows check: `corepack pnpm exec vitest run --project desktop
+apps/desktop/test/mcpPools.test.ts`:
+
+```text
+Test Files 1 passed (1)
+Tests 19 passed (19)
+Duration 1.45s
+```
+
+An earlier final-check attempt hit an in-progress P0 shared-schema edit (ProjectScoped not
+yet declared); rerun after declaration passed. This task is accepted after two review rounds;
+Phase7 overall remains open, with full integration gate due after its remaining work.

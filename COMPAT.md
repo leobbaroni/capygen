@@ -365,3 +365,11 @@ copies the eight `states/*.png` files; each state uses a static PNG with a relat
 file-compatible URL and pixelated rendering. The animation atlas is authoring history only.
 `capybara-states-256.png` retains its legacy filename but its cell size is 288px; consumers
 must use the manifest. The generator uses existing Python/Pillow only, never installs it.
+
+## MCP connection identity — 2026-09-07
+
+Pool keys hash canonical connection options including explicit env/headers. Header names are
+case-normalized but duplicate normalized names retain insertion order, matching distinct
+fetch combined values. Each registry captures its cleaned base environment once. Source-file
+provenance does not split equivalent connections. `mcpPools.test.ts` proves isolation/sharing
+and absence of credentials or keys from returned leases and logs.
