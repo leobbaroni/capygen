@@ -16,7 +16,7 @@
  * R16/R17) is Phase 5; `ChatPage` toggles this one from its own header
  * button in the meantime.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRightIcon, CrownIcon, PlusIcon, UsersIcon, XIcon } from "lucide-react";
 import type { Agent, SubagentBlock } from "@capygen/shared";
 import { AddAgentDialog } from "@/components/AddAgentDialog";
@@ -141,7 +141,19 @@ function AgentTreeRow({
   subagents: SubagentBlock[];
   onSelect: () => void;
 }) {
+  // `useState(subagents.length > 0)` alone latched the value from the first
+  // render: opening the pane *before* an agent spawns anything left the row
+  // collapsed for the rest of the session, however many sub-agents arrived —
+  // the tree would show a disclosure triangle and nothing under it. Auto-open
+  // when the first one appears; after that the user's own toggle stands.
   const [open, setOpen] = useState(subagents.length > 0);
+  const hadSubagents = useRef(subagents.length > 0);
+  useEffect(() => {
+    if (subagents.length > 0 && !hadSubagents.current) {
+      hadSubagents.current = true;
+      setOpen(true);
+    }
+  }, [subagents.length]);
   return (
     <li data-testid="agents-tree-row" data-agent-id={agent.id}>
       <div className="flex items-center gap-1">

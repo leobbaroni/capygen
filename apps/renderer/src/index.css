@@ -266,9 +266,19 @@ html:not(.dark) .conversations-sidebar {
   -webkit-app-region: no-drag;
 }
 
-/* Anything living in the top-right corner keeps clear of the caption buttons. */
+/* A header that shares the title-bar row: it keeps clear of the caption
+   buttons on the right, and — since `.titlebar-drag` is a window-wide fixed
+   strip at z-index 40 — it paints *above* that strip so the controls in it are
+   actually clickable. It then supplies the drag region itself, and the
+   `no-drag` rule above opts its buttons back out, so the empty part of the row
+   still moves the window. Before Phase 4 this row held nothing interactive and
+   the clash did not show; the mode picker, settings gear and agents toggle
+   made it a real one. */
 .titlebar-clearance {
+  position: relative;
+  z-index: 41;
   padding-right: var(--caption-width);
+  -webkit-app-region: drag;
 }
 
 /* …and anything at the very top of a column keeps clear of the drag strip,

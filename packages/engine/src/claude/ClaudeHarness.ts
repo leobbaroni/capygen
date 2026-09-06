@@ -54,6 +54,7 @@ import {
   type ClaudeQueryFn,
   type SDKUserMessage,
 } from "./sdk.js";
+import type { ClaudeInitSnapshot } from "./describe.js";
 
 export interface HarnessLogger {
   info: (...args: unknown[]) => void;
@@ -143,6 +144,19 @@ interface ActiveTurn {
   out: AsyncQueue<EngineEvent>;
   /** Accumulated text per block key, so a delta only needs the tail. */
   text: Map<string, string>;
+  /**
+   * [C] `<messageId>:<streamIndex>` → the block key that stream position was
+   * given. Text and thinking blocks are keyed by their ordinal **within their
+   * kind**, not by the raw content index, because the two representations of
+   * one message disagree about indices: the settled `assistant` message drops
+   * the thinking block the `content_block_delta` stream sent, so a reply whose
+   * stream was `[0]=thinking, [1]=text` arrives settled as `[0]=text`. Keyed by
+   * index, that wrote the answer twice — once over the thinking block and once
+   * under its own key — and the transcript showed the whole reply twice.
+   */
+  contentKeys: Map<string, string>;
+  /** Per message, how many blocks of each kind have been seen so far. */
+  contentCounts: Map<string, number>;
   /** tool_use id → block key, so a tool_result finds the block it belongs to. */
   toolKeys: Map<string, string>;
   /** task_id → tool_use id, for the `system/task_*` frames. */
@@ -203,6 +217,14 @@ export class ClaudeHarness implements Harness {
   private commandSource: { slash_commands?: unknown; skills?: unknown; plugins?: unknown } = {};
   /** `{name, description, argumentHint, aliases}` from the SDK control request. */
   private commandDetails: SdkSlashCommandDetail[] = [];
+  /**
+   * The last `system/init`, narrowed to what an info card reads (SPEC R13).
+   * Null until the first turn starts: `init` is the *only* place the SDK
+   * reports this session's tool list, MCP servers and permission mode, so an
+   * agent that has not spoken yet honestly has no snapshot rather than a guess
+   * assembled from its config.
+   */
+  private initSnapshot: ClaudeInitSnapshot | null = null;
   private sdkSessionId: string | null = null;
   private resolvedModel: string | null = null;
   /** Latest cumulative `modelUsage`, so each turn reports its own delta. */
@@ -241,6 +263,17 @@ export class ClaudeHarness implements Harness {
     return this.commands;
   }
 
+  /**
+   * What `agents.describe` (SPEC R13) needs from this backend: the fields of
+   * the last `system/init`, or `null` before the first turn has started one.
+   * `describeClaudeAgent` in `./describe.ts` turns it into the card's text;
+   * this getter is the "wiring a getter that also remembers `tools`,
+   * `mcp_servers` and `permissionMode`" that file's header asks for.
+   */
+  describeSnapshot(): ClaudeInitSnapshot | null {
+    return this.initSnapshot;
+  }
+
   backendSessionId(): string | null {
     return this.sdkSessionId;
   }
@@ -270,6 +303,8 @@ export class ClaudeHarness implements Harness {
       turnId: input.turnId,
       out,
       text: new Map(),
+      contentKeys: new Map(),
+      contentCounts: new Map(),
       toolKeys: new Map(),
       taskToolUse: new Map(),
       subagents: new Map(),
@@ -472,6 +507,7 @@ export class ClaudeHarness implements Harness {
         skills: message.skills,
         plugins: message.plugins,
       };
+      this.initSnapshot = readInitSnapshot(message, this.resolvedModel ?? this.agent?.model ?? "");
       this.rebuildCommands();
       this.emit({
         type: "session",
@@ -577,25 +613,48 @@ export class ClaudeHarness implements Harness {
     }
     if (event.type !== "content_block_delta") return;
     const index = typeof event.index === "number" ? event.index : 0;
-    const key = this.blockKey(index);
     const delta = event.delta;
     if (!delta) return;
 
     if (delta.type === "text_delta" && typeof delta.text === "string") {
+      const key = this.streamBlockKey(turn, "text", index);
       const next = (turn.text.get(key) ?? "") + delta.text;
       turn.text.set(key, next);
       this.emitBlock(key, { kind: "text", text: next });
       return;
     }
     if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+      const key = this.streamBlockKey(turn, "thinking", index);
       const next = (turn.text.get(key) ?? "") + delta.thinking;
       turn.text.set(key, next);
       this.emitBlock(key, { kind: "thinking", text: next });
     }
   }
 
-  private blockKey(index: number): string {
-    return `msg:${this.currentMessageId}:${index}`;
+  /**
+   * The block key for the n-th `text`/`thinking` block of one message.
+   *
+   * Keyed by **ordinal within the kind**, not by the raw content index, because
+   * the two representations of one message disagree about indices (see
+   * `ActiveTurn.contentKeys`). Both the delta stream and the settled `content`
+   * walk count their own kinds from zero, so both land on the same key even
+   * when the settled message omits the thinking block the stream sent.
+   */
+  private blockKey(kind: "text" | "thinking", ordinal: number): string {
+    return `msg:${this.currentMessageId}:${kind}:${ordinal}`;
+  }
+
+  /** The key for a streamed content index, allocated once and remembered. */
+  private streamBlockKey(turn: ActiveTurn, kind: "text" | "thinking", index: number): string {
+    const slot = `${this.currentMessageId}:${index}`;
+    const seen = turn.contentKeys.get(slot);
+    if (seen) return seen;
+    const counter = `${this.currentMessageId}:${kind}`;
+    const ordinal = turn.contentCounts.get(counter) ?? 0;
+    turn.contentCounts.set(counter, ordinal + 1);
+    const key = this.blockKey(kind, ordinal);
+    turn.contentKeys.set(slot, key);
+    return key;
   }
 
   private routeAssistant(message: SdkMessageLike): void {
@@ -616,14 +675,17 @@ export class ClaudeHarness implements Harness {
     if (messageId) this.currentMessageId = messageId;
     const content = Array.isArray(inner?.content) ? inner.content : [];
 
+    // Counted per kind, from zero, exactly as the delta stream counted them.
+    const seen = { text: 0, thinking: 0 };
     content.forEach((block, index) => {
-      const key = this.blockKey(index);
       if (block.type === "text" && typeof block.text === "string") {
+        const key = this.blockKey("text", seen.text++);
         turn.text.set(key, block.text);
         this.emitBlock(key, { kind: "text", text: block.text });
         return;
       }
       if (block.type === "thinking" && typeof block.thinking === "string") {
+        const key = this.blockKey("thinking", seen.thinking++);
         turn.text.set(key, block.thinking);
         this.emitBlock(key, {
           kind: "thinking",
@@ -633,7 +695,7 @@ export class ClaudeHarness implements Harness {
         return;
       }
       if (block.type === "tool_use") {
-        const toolUseId = str(block.id) ?? `${key}:tool`;
+        const toolUseId = str(block.id) ?? `msg:${this.currentMessageId}:${index}:tool`;
         const name = str(block.name) ?? "tool";
         if (INTERACTION_TOOLS.has(name)) {
           // The `question:<toolUseId>` block is the card for this call.
@@ -642,10 +704,16 @@ export class ClaudeHarness implements Harness {
         }
         if (SUBAGENT_TOOLS.has(name)) {
           const input = (block.input ?? {}) as Record<string, unknown>;
+          // `model` only when the *model itself* named one. Passing `null`
+          // here would erase a routed model (SPEC R12): the `PreToolUse` hook
+          // runs before this message is delivered, and `upsertSubagent` treats
+          // an explicit `null` as "clear it" — so a spawn the policy had just
+          // re-homed onto haiku came back as no model at all.
+          const asked = str(input.model);
           this.upsertSubagent(turn, toolUseId, {
             name: str(input.subagent_type) ?? name,
             description: str(input.description) ?? "",
-            model: str(input.model) ?? null,
+            ...(asked ? { model: asked } : {}),
             status: "spawned",
           });
           return;
@@ -904,10 +972,11 @@ export class ClaudeHarness implements Harness {
     const anchor = toolUseId ?? str(raw.tool_use_id) ?? newId("request");
 
     if (turn) {
+      const asked = str(input.model);
       this.upsertSubagent(turn, anchor, {
         name: str(input.subagent_type) ?? str(raw.tool_name) ?? "sub-agent",
         description: str(input.description) ?? "",
-        model: str(input.model) ?? null,
+        ...(asked ? { model: asked } : {}),
         status: "spawned",
       });
     }
@@ -1171,6 +1240,11 @@ interface SdkMessageLike {
   slash_commands?: unknown;
   skills?: unknown;
   plugins?: unknown;
+  /** `init.tools` / `init.mcp_servers` / `init.permissionMode` — read only by
+   *  `readInitSnapshot` for `agents.describe` (SPEC R13). */
+  tools?: unknown;
+  mcp_servers?: unknown;
+  permissionMode?: unknown;
 }
 
 interface StreamEventLike {
@@ -1291,6 +1365,46 @@ export function buildCommands(message: {
           : "backend";
     return { name: `/${name}`, description: "", source };
   });
+}
+
+/**
+ * `system/init` → the fields `agents.describe` reads (SPEC R13). Every key is
+ * the raw JSON name, verified against `docs/spikes/claude.raw.json`'s `init`
+ * message; anything the SDK stops sending simply degrades that line of the
+ * card rather than throwing, which is why nothing here is schema-validated.
+ */
+export function readInitSnapshot(
+  message: SdkMessageLike,
+  fallbackModel: string,
+): ClaudeInitSnapshot {
+  return {
+    model: str(message.model) ?? fallbackModel,
+    permissionMode: str(message.permissionMode) ?? "default",
+    tools: Array.isArray(message.tools)
+      ? message.tools.filter((t): t is string => typeof t === "string")
+      : [],
+    mcpServers: Array.isArray(message.mcp_servers)
+      ? message.mcp_servers
+          .filter(isRecord)
+          .map((server) => ({
+            name: str(server.name) ?? "",
+            status: str(server.status) ?? "unknown",
+          }))
+          .filter((server) => server.name.length > 0)
+      : [],
+    skills: Array.isArray(message.skills)
+      ? message.skills.filter((s): s is string => typeof s === "string")
+      : [],
+    plugins: Array.isArray(message.plugins)
+      ? message.plugins
+          .filter(isRecord)
+          .map((plugin) => {
+            const version = str(plugin.version);
+            return { name: str(plugin.name) ?? "", ...(version ? { version } : {}) };
+          })
+          .filter((plugin) => plugin.name.length > 0)
+      : [],
+  };
 }
 
 /** One entry of `Query.supportedCommands()` / `system/commands_changed`. */

@@ -66,7 +66,8 @@ import {
   createWidgetHost,
   type WidgetHostHandlers,
 } from "./ipc/widgets.js";
-import { createStubEngine } from "./engine/stub.js";
+import { ECHO_DELAY_MS, createStubEngine } from "./engine/stub.js";
+import type { EngineDeps } from "./engine/types.js";
 
 /**
  * dist/ after bundling. esbuild emits CommonJS here (Electron's main entry is
@@ -252,8 +253,13 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   // The default engine is the real session runner (one Claude harness per
   // agent). `CAPYGEN_ENGINE=stub` swaps in the offline echo double so the e2e
   // walking-skeleton run is deterministic and spends no tokens.
-  const useStub = process.env[ENGINE_ENV] === "stub";
-  if (useStub) log.warn(`[engine] ${ENGINE_ENV}=stub — running the offline echo engine`);
+  // `stub-roundtable` is the same echo double with `peerMentions` on: every
+  // reply @mentions the next agent, so the *real* dispatcher's hop cap (SPEC
+  // R11) can be proved end to end without spending a token
+  // (`tests/e2e/roundtable.spec.ts`).
+  const engineMode = process.env[ENGINE_ENV];
+  const useStub = engineMode === "stub" || engineMode === "stub-roundtable";
+  if (useStub) log.warn(`[engine] ${ENGINE_ENV}=${engineMode} — running the offline echo engine`);
 
   // One MCP client pool per distinct server list, shared between the widget
   // host and the `api` harness and closed when the last of them lets go
@@ -326,7 +332,14 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     log,
     widgets,
     pools: mcpPools,
-    ...(useStub ? { makeEngine: createStubEngine } : {}),
+    ...(useStub
+      ? {
+          makeEngine: (engineDeps: EngineDeps) =>
+            createStubEngine(engineDeps, ECHO_DELAY_MS, {
+              peerMentions: engineMode === "stub-roundtable",
+            }),
+        }
+      : {}),
     secrets: secretsStore,
     listHarnesses: createHarnessLister({
       defaultModel: () => activeStore.settings.all().defaultModel,

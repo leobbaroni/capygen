@@ -113,6 +113,7 @@ install. `workers: 1` — Electron windows are singletons per user-data-dir.
 | `tests/e2e/skeleton.spec.ts` | the real Claude harness | **real model calls, real money** |
 | `tests/e2e/harnesses.spec.ts` | the real Codex, Claude and API harnesses | **real model calls** (a few cents) |
 | `tests/e2e/widget.spec.ts` | the real Claude harness + a fixture MCP server | **real model calls** |
+| `tests/e2e/roundtable.spec.ts` | four live (Claude + Codex), one offline (`CAPYGEN_ENGINE=stub-roundtable`) | **real model calls** (a few cents) |
 
 `skeleton.spec.ts` is the PLAN Phase 2 proof: landing → live Claude reply with a usage/cost line
 → close → relaunch → same transcript out of SQLite; plus an `AskUserQuestion` card answered in
@@ -132,9 +133,36 @@ gets a green run and a sentence saying why:
 - the API-model test runs **only** with a key in Settings ▸ API keys or in
   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`; otherwise it skips and says so.
 
+`roundtable.spec.ts` is the Phase 4 proof (SPEC R10-R13, ADR-0002). It skips per backend the
+same way `harnesses.spec.ts` does:
+
+- **round table** — a session with `@claude` (Claude Code) and `@codex` (Codex); one message
+  mentioning both opens two agent turns *in mention order*, and Codex's review quotes Claude's
+  haiku, which is only possible because the labelled context delta reached it (R23: a stateful
+  backend is sent the turns since its own last one, never the transcript again). The two may then
+  go on talking to each other — R11 allows that, and the hop cap bounds it — so the test asserts
+  on the hop-1 round and interrupts the session before closing;
+- **hop cap** — offline, on `CAPYGEN_ENGINE=stub-roundtable`: every echoed reply ends
+  `over to @<next agent>`, so two agents would ping-pong forever. The real dispatcher stops them
+  at hops 1-2-3, writes one "Chain stopped after 3 hops" system turn, shows the Continue bar, and
+  Continue grants exactly one more hop (4) before the cap applies again. A loop bound must not be
+  proved with a model that might choose to stop by itself;
+- **routed sub-agent** — a solo Claude session with `subagentRouting: {backend:"claude",
+  model:"haiku"}`: the `PreToolUse` hook rewrites `updatedInput.model` and the stored `subagent`
+  block names a haiku model, `delegated: false` (the CLI still spawned it — capygen only re-homed
+  it);
+- **cross-backend delegation** — the same lead with `subagentRouting: {backend:"codex"}`: no hook
+  can do that, so the lead calls `mcp__capygen__delegate_task` and the block is
+  `backend: "codex", delegated: true`;
+- **agent info drawer** — after one cheap turn, the drawer shows the agent's own description, the
+  generated usage description, the model, the live tool list and the other agent; the same facts
+  are then re-read straight off `agents.describe` so a UI change cannot hide a regression in the
+  channel.
+
 Every run writes screenshots to `e2e-out/`: `landing.png`, `chat.png` (offline),
 `chat-pong.png`, `restored.png`, `chat-question.png`, `codex-pong.png`, `codex-permission.png`,
-`codex-allowed.png`, `slash-menu.png` (live).
+`codex-allowed.png`, `slash-menu.png`, `roundtable.png`, `roundtable-hopcap.png`,
+`roundtable-routed-subagent.png`, `roundtable-delegated.png`, `roundtable-agent-info.png` (live).
 
 Each spec launches into a fresh `mkdtemp` profile and a fresh temp project directory, so the real
 `%APPDATA%\capygen` is never touched.
@@ -193,6 +221,7 @@ logged with its real message before it is re-thrown to the renderer.
 | `CAPYGEN_USER_DATA_DIR` | override Electron's userData dir — database, logs, window state |
 | `CAPYGEN_PROJECT_DIR` / `--project=<dir>` | pre-select a project folder at launch |
 | `CAPYGEN_ENGINE=stub` | run the offline echo double instead of a real backend |
+| `CAPYGEN_ENGINE=stub-roundtable` | the same echo double, but every reply @-mentions the next agent and dispatch goes through the real round table — how the hop cap is proved offline |
 
 ---
 
@@ -221,6 +250,24 @@ logged with its real message before it is re-thrown to the renderer.
   project folder is an 8.3 short path (`C:\Users\TUGAPL~1\...`). capygen expands
   `--project`/`CAPYGEN_PROJECT_DIR` and the picker's answer with `longPath()`; a project row stored
   before that keeps its short form — re-pick the folder.
+- **An agent ignores its `permissionMode` / `approvalPolicy` and still shows a permission card**:
+  check that `SessionRunner.harnessFor` is still reading `agent.config.<backend>.permissionMode`
+  before the global setting. `HarnessAgent.permissionMode` is the *highest* priority a harness
+  knows, so filling it from the global setting unconditionally makes the per-agent override dead.
+- **A routed sub-agent shows no model in the agents pane**: the block is upserted twice — once by
+  the `PreToolUse` hook (which knows the routed model) and once by the assistant `tool_use` frame
+  that follows it. The second must not pass `model: null`, or it erases the first. There is a
+  regression test (`packages/engine/test/ClaudeHarness.test.ts` › "keeps the routed model when the tool_use frame for the same spawn arrives after").
+- **A Claude reply appears twice in the transcript**: block keys are
+  `msg:<messageId>:<kind>:<ordinal within that kind>`, never the raw content index — the delta
+  stream and the settled `assistant` message number their content differently (the settled one
+  drops the thinking block), so an index-keyed block gets written under two keys. And
+  `BlocksRepo.upsert` must update `kind` on conflict, or the stored row keeps the old kind with the
+  new payload and a relaunched session renders the answer as a collapsed thinking card.
+- **The chat header's buttons do nothing**: `.titlebar-drag` is a window-wide fixed strip at
+  `z-index: 40` over the top 36 px, exactly the height of the chat header. A header that lives in
+  that row needs `.titlebar-clearance`, which lifts it above the strip and supplies its own drag
+  region.
 - **The app drove the wrong Codex**: the log line `[codex] app-server <path> (<source>)` says which
   binary answered. It should say `(bundled)`; `(installed)` means the walk-up for
   `node_modules/@openai/codex-sdk` failed and the machine's own CLI — a different protocol version

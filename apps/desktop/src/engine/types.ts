@@ -8,7 +8,7 @@
  */
 import type { CapygenStore } from "@capygen/db";
 import type { KeyProvider } from "@capygen/engine";
-import type { EventChannel, EventInput, SlashCommand } from "@capygen/shared";
+import type { AgentDescribe, EventChannel, EventInput, SlashCommand } from "@capygen/shared";
 import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
 
@@ -108,6 +108,15 @@ export interface Engine {
    * same "stale card" answer `answerPermission`/`answerQuestion` give.
    */
   answerElicitation(requestId: string, answers: Record<string, unknown> | null): boolean;
+  /**
+   * [C] `agents.describe` (SPEC R13). The engine answers rather than the
+   * handler because the interesting two-thirds of the card — capabilities and
+   * the tool list — are facts of the agent's *running* harness, and the
+   * harness registry is the runner's. An agent that has not spoken yet has no
+   * harness and gets the config-only description, which is the honest answer
+   * rather than a guess.
+   */
+  describeAgent(agentId: string): Promise<AgentDescribe>;
   /**
    * The backend's own commands/skills/plugins for the agent that will receive
    * the next message — the session's lead unless `agentId` names another (R14).

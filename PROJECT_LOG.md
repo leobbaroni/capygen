@@ -573,3 +573,59 @@ Not fixed, on purpose
   `parallelAgents`, two hops addressed to the same agent raced, so the runner refused the second
   outright. Blocked chains are now a list resumed together under one notice, and a parallel round
   runs one lane per agent.
+
+## 2026-09-06 — Phase 4 / C: round-table and routing integrated, e2e green
+
+- **The renderer was narrowing round-table dispatch to one agent.** `appStore.dispatchNow` sent
+  `agentId: parseMentions(text)[0]`, but on `chat.send` an `agentId` means "the composer
+  explicitly picked this one", which *overrides* mention parsing in `resolveTargets` — so
+  "@claude … @codex …" reached @claude alone. It now sends `agentId: null` and the main process's
+  dispatcher does the fan-out, which is the only place that parses mentions with code-fence and
+  `user@host` handling. `lib/mentions.ts` keeps the composer's autocomplete and nothing else.
+- **`agents.describe` was a placeholder** (`capabilities: [], tools: []`) with the real engine
+  sitting unwired in `ipc/agentsDescribe.ts`, because the missing input — a *running* harness —
+  is `SessionRunner` state. Closed with `Engine.describeAgent`, `ClaudeHarness.describeSnapshot()`
+  (remembers the last `system/init`), `CodexHarness.describeSnapshot()` (`mcpServerStatus/list` +
+  `skills/list`, best-effort) and `ApiHarness.describeSnapshot()` (the tool list it was built
+  with), narrowed and merged by `apps/desktop/src/engine/describeSnapshot.ts`. An agent that has
+  not spoken still gets the config-only answer rather than a guess. Live output now reads "Lead
+  agent on Claude Code (claude-sonnet-4-5) … use 3 connected MCP servers and use 56 skills across
+  3 plugins", with ten grouped tool badges.
+- **A routed sub-agent lost its model.** The `PreToolUse` hook upserts the `subagent` block with
+  the routed model, then the assistant `tool_use` frame for the same call upserts it again with
+  `model: str(input.model) ?? null` — an explicit `null`, which `upsertSubagent` treats as "clear
+  it". So R12's whole visible effect was erased a beat after it happened. Both call sites now omit
+  `model` when the model itself named none; regression test in `ClaudeHarness.test.ts`.
+- **Per-agent permission modes were dead.** `SessionRunner` filled `HarnessAgent.permissionMode`
+  from the global setting, and that field is the *highest* priority a harness knows
+  (`agent.permissionMode ?? config.permissionMode ?? "default"`), so `config.claude.permissionMode`
+  never applied. The agent's own config now wins.
+- **Every control in the chat header was unclickable.** `.titlebar-drag` is a window-wide fixed
+  strip at `z-index: 40` over the top 36 px — exactly the height of that header, which held only
+  non-interactive text until Phase 4 put the mode picker, the settings gear and the agents toggle
+  in it. `.titlebar-clearance` now lifts the row above the strip and supplies its own drag region,
+  so the buttons work and the empty part still moves the window.
+- **The agents tree never opened for a sub-agent that arrived later**: `useState(subagents.length
+  > 0)` latched the value from the first render, so a pane opened before the spawn showed a
+  disclosure triangle over nothing for the rest of the session.
+- **The info drawer hid whichever description came second**: `info.description || agent.description`
+  meant a user-written note vanished the moment the harness started reporting. The two are
+  different things (R13 asks for both) and are now two sections.
+- `CAPYGEN_ENGINE=stub-roundtable` is the echo double with `peerMentions`: every reply ends
+  "over to @<next agent>" and dispatch runs through the **real** `createRoundTable`. The hop cap is
+  a loop bound, and a loop bound must not be proved with a model that might choose to stop by
+  itself.
+- **Every Claude reply was rendered twice** (found in the round-table screenshot, then measured:
+  one turn, two `text` blocks with identical content). The two representations of one assistant
+  message disagree about content indices — the delta stream sends `[0]=thinking, [1]=text`, and the
+  settled `assistant` message drops the thinking block, so its `content` is `[text]` at index 0.
+  Keyed by the raw index, the settled walk wrote the answer over the thinking block *and* under its
+  own key. Blocks are now keyed `msg:<id>:<kind>:<ordinal within that kind>`, which both views can
+  compute; two regression tests in `ClaudeHarness.test.ts`.
+- …and the same bug had a second half in the database: `BlocksRepo.upsert`'s `ON CONFLICT` updated
+  the payload but **not** `kind`, so the overwritten row kept `thinking` with the answer inside it.
+  The live transcript and the relaunched one disagreed, which R15 forbids. `kind = excluded.kind`.
+- `tests/e2e/roundtable.spec.ts` (5 tests): the two-backend round table with the context delta
+  proved by making Codex quote Claude's first line verbatim; the hop cap offline; the routed
+  sub-agent; cross-backend delegation; the info drawer, asserted in the UI *and* straight off
+  `agents.describe`.

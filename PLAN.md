@@ -128,7 +128,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       fixture = ext-apps basic example; live = user's Higgsfield connector); structured
       interaction cards for AskUserQuestion / permission / elicitation / Codex approvals.
       Covers: R6, R7, R8, R9, R14, R23, R27, R31, R32; checks: A4, A13.
-- [ ] Phase 4: Round-table and orchestration
+- [x] Phase 4: Round-table and orchestration
       Done when: e2e: a session with Claude + Codex, "@codex review what @claude wrote" produces
       two turns in order; hop cap stops a ping-pong at 3; agent tree shows a routed sub-agent;
       Agent info card shows description/tools/model/cost and the other agents.
@@ -136,6 +136,24 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       sub-agent routing policy (PreToolUse hook for Claude `Task`, Codex spawn hook) fail-open;
       agents pane; agent info/hover cards; orchestrator usage descriptions.
       Covers: R10, R11, R12, R13; checks: A7.
+      **Accepted 2026-09-06** — all four Done-when clauses hold live in
+      `tests/e2e/roundtable.spec.ts` (5/5); gate: typecheck, 696 unit tests, build, 16/17
+      Playwright (1 skipped: the API-key case, which has no key on this machine). Deviations:
+      * The **hop cap** is proved offline (`CAPYGEN_ENGINE=stub-roundtable`, an echo double whose
+        every reply @-mentions the next agent) rather than with live models. A loop bound must not
+        be proved with something that may choose to stop by itself; the dispatcher under test is
+        the shipping one, only the models are fake.
+      * The **Codex spawn hook** in the Steps line does not exist and cannot: `codex app-server`
+        takes MCP servers from the user's `~/.codex/config.toml`, and capygen will not write one
+        behind their back. A Codex agent with a cross-backend routing rule fails open onto its own
+        model (R12's own promise). Recorded in ADR-0004; the opt-in config write is Phase 6.
+      * Codex sub-agent blocks carry **no cost**: a sub-agent's `thread/tokenUsage/updated` frames
+        are filtered out upstream, and R23 forbids a guess. Claude's do (`delegate_task` bills the
+        delegated turn to the parent's usage).
+      * `agents.describe`'s `capabilities`/`tools` need a **running** harness, so an agent that has
+        not taken a turn shows "Not reported yet" instead of a config-derived list.
+      * Landed here rather than in Phase 6: `agent.config.<backend>.permissionMode` now outranks the
+        global setting (it was dead — `HarnessAgent.permissionMode` is the higher priority).
 - [ ] Phase 5: Workspace panes and dev servers
       Done when: e2e drags Terminal under Browser, restarts, layout restored; fixture project with
       `dev` script is detected, Start shows logs and the Browser pane loads the URL; files/editor/
@@ -222,7 +240,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
 | A4 | API models need our own tool runtime (no harness) | nature of raw APIs | engine size | Phase 3 |
 | A5 | dockview 8 handles dock/stack/float/persist | npm version | pane layer | Phase 5 |
 | A6 | Omnigent Tailwind 4 tokens copy verbatim | same stack (verified) | look parity | Phase 2 |
-| A7 | Round-table rules: mentions, lead fallback, 3-hop cap | stated in interview, unvetoed | dispatcher | Phase 4 |
+| A7 | Round-table rules: mentions, lead fallback, 3-hop cap | stated in interview, unvetoed | dispatcher | Phase 4 — **held**: shipped and proved e2e; the cap is per-session (`settings.hopCap`) |
 | A8 | Mascot: 8 states, 96 px sprite, CSS steps; generated image or code-drawn | user brief | landing only | Phase 2 |
 | A9 | Plugin/skill management via headless `claude` CLI + file edits is sufficient | CLI exposes `/plugin`; files readable | settings hub | Phase 6 |
 | A10 | Unsigned builds acceptable (SmartScreen warns) | prior project | install UX | Phase 12 |

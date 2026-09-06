@@ -375,6 +375,114 @@ describe("ClaudeHarness — AskUserQuestion is rendered once", () => {
   });
 });
 
+describe("ClaudeHarness — block keys across the two views of a message", () => {
+  /**
+   * [C] Observed live 2026-09-06: a reply whose stream is
+   * `[0]=thinking, [1]=text` arrives settled as `content: [text]` — the SDK
+   * drops the thinking block. Keyed by the raw content index, the settled walk
+   * wrote the answer over the *thinking* block (index 0) as well as under its
+   * own key, and the transcript rendered the whole reply twice.
+   */
+  it("does not duplicate the reply when the settled message omits the thinking block", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "think then answer" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    fake.out.push(initMessage());
+    fake.out.push(messageStart("m1"));
+    fake.out.push(thinkingDelta(0, "weighing it up"));
+    fake.out.push(textDelta(1, "the answer"));
+    // …and the settled message, with the thinking block gone and the text
+    // therefore at index 0.
+    fake.out.push(assistantMessage("m1", [{ type: "text", text: "the answer" }]));
+
+    await vi.waitFor(() => expect(blocks(turn.events, "text").length).toBeGreaterThan(0));
+    const textKeys = new Set(blocks(turn.events, "text").map((b) => b.key));
+    const thinkingKeys = new Set(blocks(turn.events, "thinking").map((b) => b.key));
+    expect([...textKeys]).toEqual(["msg:m1:text:0"]);
+    expect([...thinkingKeys]).toEqual(["msg:m1:thinking:0"]);
+    // The thinking block keeps its own words; nothing overwrote it.
+    expect(blocks(turn.events, "thinking").at(-1)!.patch.text).toBe("weighing it up");
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+
+  it("keys two text blocks of one message apart", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "two paragraphs" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    fake.out.push(initMessage());
+    fake.out.push(messageStart("m1"));
+    fake.out.push(
+      assistantMessage("m1", [
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+      ]),
+    );
+    await vi.waitFor(() => expect(blocks(turn.events, "text")).toHaveLength(2));
+    expect(blocks(turn.events, "text").map((b) => b.key)).toEqual([
+      "msg:m1:text:0",
+      "msg:m1:text:1",
+    ]);
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+});
+
+describe("ClaudeHarness — describeSnapshot (SPEC R13)", () => {
+  it("has nothing before the first init, and the init's own fields after it", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    // `agents.describe` on an agent that has not spoken must not guess.
+    expect(harness.describeSnapshot()).toBeNull();
+
+    const turn = drain(harness.send({ turnId: "trn_1", text: "hi" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.out.push(initMessage({ permissionMode: "bypassPermissions" }));
+    await vi.waitFor(() => expect(harness.describeSnapshot()).not.toBeNull());
+
+    expect(harness.describeSnapshot()).toEqual({
+      model: "claude-sonnet-5",
+      permissionMode: "bypassPermissions",
+      tools: ["Bash", "Read", "Task"],
+      mcpServers: [],
+      skills: ["dataviz", "cockpit:pilot"],
+      // the plugin's filesystem path has no business on an info card
+      plugins: [{ name: "cockpit", version: "3.0.0" }],
+    });
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+
+  it("keeps whatever an init omits from breaking the card", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "hi" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+    fake.out.push(
+      initMessage({ tools: undefined, mcp_servers: undefined, permissionMode: undefined }),
+    );
+    await vi.waitFor(() => expect(harness.describeSnapshot()).not.toBeNull());
+    const snapshot = harness.describeSnapshot()!;
+    expect(snapshot.tools).toEqual([]);
+    expect(snapshot.mcpServers).toEqual([]);
+    expect(snapshot.permissionMode).toBe("default");
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+});
+
 describe("ClaudeHarness — sub-agents (SPEC R12)", () => {
   it("registers the hook on both wire names and fails open by default", async () => {
     const fake = makeFakeSdk();
@@ -408,6 +516,56 @@ describe("ClaudeHarness — sub-agents (SPEC R12)", () => {
         model: null,
       },
     });
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+
+  /**
+   * [C] The hook runs *before* the assistant message carrying the same
+   * `tool_use` is delivered, and both upsert the block. The second used to
+   * pass `model: str(input.model) ?? null` — an explicit `null`, which
+   * `upsertSubagent` treats as "clear it" — so a spawn the policy had just
+   * re-homed onto haiku came back with no model at all and the agents pane
+   * showed the routing as having done nothing (SPEC R12/R13).
+   */
+  it("keeps the routed model when the tool_use frame for the same spawn arrives after", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake, {}, { routeSubagent: () => ({ model: "haiku" }) });
+    const turn = drain(harness.send({ turnId: "trn_1", text: "delegate" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    const hook = fake.options().hooks?.PreToolUse?.[0]?.hooks[0];
+    await hook?.(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "Agent",
+        tool_use_id: "toolu_task",
+        tool_input: { description: "count files", subagent_type: "general-purpose" },
+      } as never,
+      "toolu_task",
+      { signal: new AbortController().signal },
+    );
+
+    // …and now the model's own frame for the very same call, which names no
+    // model because the *policy* chose it, not the model.
+    fake.out.push(
+      assistantMessage("m1", [
+        {
+          type: "tool_use",
+          id: "toolu_task",
+          name: "Agent",
+          input: { description: "count files", subagent_type: "general-purpose" },
+        },
+      ]),
+    );
+
+    await vi.waitFor(() => expect(blocks(turn.events, "subagent").length).toBeGreaterThan(2));
+    const last = blocks(turn.events, "subagent").at(-1)!;
+    expect(last.key).toBe("subagent:toolu_task");
+    expect(last.patch.model).toBe("haiku");
+    expect(last.patch.delegated).toBe(false);
 
     fake.out.push(resultMessage("done"));
     await turn.done;

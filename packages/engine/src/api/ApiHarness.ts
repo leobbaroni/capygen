@@ -199,6 +199,10 @@ export class ApiHarness implements Harness {
   /** Set when `pool` came from `deps.acquirePool` and must be given back. */
   private borrowedPool: AcquiredPool | null = null;
   private tools: ToolDefinition[] | null = null;
+  /** The MCP server configs `ensurePool` resolved, kept only so
+   *  `describeSnapshot` (SPEC R13) can name them; the pool itself owns the
+   *  connections. Empty when a pool was handed in rather than resolved here. */
+  private mcpServerConfigs: readonly McpServerConfig[] = [];
   private toolSchemas: ToolSchema[] = [];
 
   private active: ActiveTurn | null = null;
@@ -259,6 +263,22 @@ export class ApiHarness implements Harness {
 
   listCommands(): SlashCommand[] {
     return [];
+  }
+
+  /**
+   * The live half of an `ApiDescribeSnapshot` (SPEC R13): the tool list this
+   * session was actually built with, and the MCP servers behind it. Both are
+   * empty before the first turn (`ensureTools` runs once, lazily, per R26) —
+   * which is the honest answer for an agent that has not spoken yet, not a
+   * guess assembled from config. `provider`/`model` need no harness at all;
+   * `apps/desktop/src/ipc/agentsDescribe.ts`'s `apiConfigDefaults` reads them
+   * off the agent row.
+   */
+  describeSnapshot(): { tools: string[]; mcpServers: McpServerConfig[] } {
+    return {
+      tools: (this.tools ?? []).map((tool) => tool.name),
+      mcpServers: [...this.mcpServerConfigs],
+    };
   }
 
   /** There is no backend session to resume — the transcript is the state. */
@@ -804,6 +824,7 @@ export class ApiHarness implements Harness {
         ...(this.agent?.config !== undefined ? { agentConfig: this.agent.config } : {}),
         log: this.log,
       }));
+    this.mcpServerConfigs = servers;
     if (servers.length === 0) return null;
     if (this.deps.acquirePool) {
       const borrowed = await this.deps.acquirePool(servers);

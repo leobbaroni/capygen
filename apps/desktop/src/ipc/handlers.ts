@@ -262,31 +262,17 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * A Claude-Code-info-card-style usage description (R13). `capabilities`
-     * and `tools` are best-effort here: they name what a *running* harness
-     * reports, and this handler has no live harness to ask (that seam is
-     * `Engine`, an `apps/desktop`-only concept `@capygen/db` cannot see) — an
-     * agent with no turns run yet, or whose harness has not reported its
-     * tool list, honestly returns both empty rather than a guess.
+     * A Claude-Code-info-card-style usage description (R13).
+     *
+     * [C] Answered by the engine, not here: `capabilities` and `tools` are
+     * facts of the agent's *running* harness (Claude's `system/init`, Codex's
+     * `mcpServerStatus/list`, the API loop's built tool list), and the harness
+     * registry is `SessionRunner`'s. `describeAgent` composes those with the
+     * two things only the database knows — usage totals and the other agents —
+     * and falls back to config-only info for an agent that has not spoken yet
+     * rather than guessing at a tool list.
      */
-    "agents.describe": (args) => {
-      const agent = store.sessions.agent(args.agentId);
-      if (!agent) throw new Error(`unknown agent: ${args.agentId}`);
-      const usage = store.usage.totalsByAgent(agent.id);
-      const others = store.sessions
-        .agents(agent.sessionId)
-        .filter((a) => a.id !== agent.id)
-        .map((a) => ({ agentId: a.id, mentionName: a.mentionName, backend: a.backend, model: a.model }));
-      return {
-        description: agent.description ?? "",
-        capabilities: [],
-        tools: [],
-        model: agent.model,
-        backend: agent.backend,
-        usage,
-        others,
-      };
-    },
+    "agents.describe": (args) => engine.describeAgent(args.agentId),
 
     "turns.list": (args) => ({
       turns: store.turns.list(args.sessionId),

@@ -5,17 +5,55 @@
  * harness uses — block row, `chat.block`, turn status, session status — without
  * a model, a process or a network call. The handler tests run against it; the
  * app runs `createSessionRunner` instead (see `ipc/handlers.ts`).
+ *
+ * [C] `peerMentions` turns it into a *round-table* double: `dispatch` and
+ * `continueChain` are handed to the real `createRoundTable`, and every echoed
+ * reply ends with an `@mention` of another agent in the session. That is what
+ * `CAPYGEN_ENGINE=stub-roundtable` selects, and what `tests/e2e/roundtable.spec.ts`
+ * uses to prove the hop cap (SPEC R11) offline: a ping-pong that would run
+ * forever, stopped at the cap, with the Continue bar granting exactly one more
+ * hop. The dispatcher under test is the shipping one — only the *models* are
+ * fake, which is the whole point of testing a loop bound with a loop.
+ *
+ * Off by default: the handler tests want the single-target echo, and a stub
+ * that started chaining would change every one of their turn counts.
  */
+import { describeAgent as describeAgentInfo } from "../ipc/agentsDescribe.js";
+import { createRoundTable, type RoundTable } from "./RoundTable.js";
 import { emitBlock, finishTurn, openAgentTurn, recordUserTurn, textBlock } from "./persist.js";
 import type { Engine, EngineDeps } from "./types.js";
 
 export const ECHO_DELAY_MS = 300;
 
-export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Engine {
+export interface StubEngineOptions {
+  /** Answer every turn with an `@mention` of another agent, and dispatch
+   *  through the real round table so the mention actually chains. */
+  peerMentions?: boolean;
+}
+
+export function createStubEngine(
+  deps: EngineDeps,
+  delayMs = ECHO_DELAY_MS,
+  options: StubEngineOptions = {},
+): Engine {
   const inFlight = new Map<string, { timer: ReturnType<typeof setTimeout>; turnId: string }>();
 
+  /**
+   * Whom this agent hands the floor to: the next agent in roster order,
+   * wrapping round. With one agent there is nobody, so a solo session under
+   * this option still answers exactly once and stops — a chain needs two.
+   */
+  function peerOf(sessionId: string, agentId: string | null | undefined): string | null {
+    if (!options.peerMentions || !agentId) return null;
+    const agents = deps.store.sessions.agents(sessionId);
+    if (agents.length < 2) return null;
+    const index = agents.findIndex((a) => a.id === agentId);
+    if (index < 0) return null;
+    return agents[(index + 1) % agents.length]!.mentionName;
+  }
+
   const engine: Engine = {
-    send({ sessionId, turnId, text }) {
+    send({ sessionId, turnId, agentId, text }) {
       // One turn at a time per session: a second send supersedes the first.
       const existing = inFlight.get(sessionId);
       if (existing) clearTimeout(existing.timer);
@@ -23,13 +61,14 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
       const timer = setTimeout(() => {
         inFlight.delete(sessionId);
         try {
+          const peer = peerOf(sessionId, agentId ?? deps.store.turns.get(turnId)?.agentId);
           emitBlock(
             deps,
             textBlock(
               sessionId,
               turnId,
               deps.store.blocks.nextIndex(turnId),
-              `echo: ${text}`,
+              peer ? `echo: ${text} — over to @${peer}` : `echo: ${text}`,
             ),
           );
           finishTurn(deps, sessionId, turnId, "done");
@@ -50,6 +89,7 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
      * broadcast sequence without a backend.
      */
     dispatch({ sessionId, text, agentId }) {
+      if (roundTable) return roundTable.dispatch({ sessionId, text, agentId });
       const session = deps.store.sessions.get(sessionId);
       if (!session) throw new Error(`unknown session: ${sessionId}`);
       const userTurn = recordUserTurn(deps, sessionId, text);
@@ -70,6 +110,7 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
     },
 
     continueChain(sessionId) {
+      if (roundTable) return roundTable.continueChain(sessionId);
       const session = deps.store.sessions.get(sessionId);
       if (!session) throw new Error(`unknown session: ${sessionId}`);
       if (deps.store.turns.hasStreaming(sessionId)) return { ok: false, agentTurnId: null };
@@ -89,6 +130,7 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
     },
 
     interrupt(sessionId) {
+      roundTable?.cancel(sessionId);
       const existing = inFlight.get(sessionId);
       if (!existing) return false;
       clearTimeout(existing.timer);
@@ -96,16 +138,72 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
       return true;
     },
 
+    /**
+     * [C] The echo double's `agents.describe` (SPEC R13): config only. There
+     * is no harness to ask, which is exactly the "agent that has not run a
+     * turn yet" case `agentsDescribe.ts` documents — the same honest empty
+     * capabilities/tools the placeholder handler used to return, now through
+     * the one composition path.
+     */
+    describeAgent(agentId) {
+      return Promise.resolve(
+        describeAgentInfo(
+          {
+            getAgent: (id) => deps.store.sessions.agent(id) ?? undefined,
+            listOtherAgents: (sessionId, selfId) =>
+              deps.store.sessions
+                .agents(sessionId)
+                .filter((a) => a.id !== selfId)
+                .map((a) => ({
+                  agentId: a.id,
+                  mentionName: a.mentionName,
+                  backend: a.backend,
+                  model: a.model,
+                })),
+            usageFor: (id) => deps.store.usage.totalsByAgent(id),
+          },
+          agentId,
+        ),
+      );
+    },
+
     answerPermission: () => false,
     answerQuestion: () => false,
     answerElicitation: () => false,
     listCommands: () => [],
 
-    dispose() {
+    async dispose() {
       for (const { timer } of inFlight.values()) clearTimeout(timer);
       inFlight.clear();
+      // A chain still in flight would otherwise leave its rows `streaming`
+      // after the database closes — the same reason `SessionRunner.dispose`
+      // waits for `roundTable.settled()`.
+      await roundTable?.settled();
     },
   };
+
+  /**
+   * The real dispatcher, driven by the echo. `runTurn` resolves when the turn
+   * row settles, which is what the round table chains on — the same contract
+   * `SessionRunner.runTurn` fulfils with a live harness.
+   */
+  const roundTable: RoundTable | null = options.peerMentions
+    ? createRoundTable({
+        ...deps,
+        runTurn: ({ sessionId, turnId, agentId, text }) =>
+          new Promise((resolve) => {
+            engine.send({ sessionId, turnId, agentId, text });
+            const settle = setInterval(() => {
+              const status = deps.store.turns.get(turnId)?.status;
+              if (status && status !== "streaming" && status !== "pending") {
+                clearInterval(settle);
+                resolve({ status });
+              }
+            }, Math.max(5, Math.floor(delayMs / 4)));
+            settle.unref?.();
+          }),
+      })
+    : null;
 
   return engine;
 }

@@ -45,7 +45,6 @@ import {
   type UsageEvent,
 } from "@capygen/shared";
 import { hasBridge, ipc } from "@/lib/ipc";
-import { parseMentions } from "@/lib/mentions";
 
 export interface AppState {
   ready: boolean;
@@ -362,22 +361,19 @@ export const useAppStore = create<AppState>()((set, get) => {
   /**
    * Actually call `chat.send` — the part `send()` defers while busy.
    *
-   * Round-table routing (ADR-0002/SPEC R11): `chat.send`'s IPC contract
-   * accepts one `agentId` per call, so full multi-mention fan-out ("the
-   * @-mentioned agents [plural], in mention order") is the round-table
-   * dispatcher's job, not this store's — see `lib/mentions.ts`'s doc
-   * comment. What this does within that contract: in a round-table session,
-   * route to the *first* agent the text `@mentions`; none mentioned (or a
-   * solo session, where there is only ever the one lead) falls through to
-   * `agentId: null`, which `chat.send` resolves to the lead — exactly
-   * ADR-0002's "none mentioned → the lead".
+   * Round-table routing (ADR-0002/SPEC R11) is the *main process's* — the
+   * dispatcher reads the @-mentions out of `text` and opens one turn per
+   * mentioned agent, in mention order, then follows the chain. `agentId` is
+   * therefore deliberately null: on `chat.send` it means "the composer
+   * explicitly picked this agent", which **overrides** mention parsing, so
+   * sending the first mention here would silently reduce
+   * "@claude … @codex …" to a message for @claude alone. None mentioned
+   * still reaches the lead — that fallback lives in `resolveTargets`, one
+   * code path for solo and round-table alike.
    */
   async function dispatchNow(sessionId: string, text: string): Promise<void> {
-    const session = get().sessions.find((s) => s.id === sessionId);
-    const agentId =
-      session?.mode === "round-table" ? (parseMentions(text, get().agents)[0]?.id ?? null) : null;
     set({ chainStopped: null });
-    await ipc().invoke("chat.send", { sessionId, text, agentId });
+    await ipc().invoke("chat.send", { sessionId, text, agentId: null });
     await refreshTurns(sessionId);
   }
 

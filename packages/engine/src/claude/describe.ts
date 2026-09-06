@@ -12,15 +12,12 @@
  * `mcp_servers` (`{name, status}[]`), `model`, `permissionMode`, `skills`
  * (`string[]`), `plugins` (`{name, version}[]`).
  *
- * `ClaudeHarness` does not cache or expose this snapshot yet — today it only
- * keeps `model`/`session_id`/the slash-command fields off `init`
- * (`ClaudeHarness.routeSystem`). Wiring a getter that also remembers `tools`,
- * `mcp_servers` and `permissionMode` is the integration task that calls this
- * function from `apps/desktop/src/engine/SessionRunner.ts`; it is explicitly
- * out of this file's scope (`packages/engine/src/claude/describe.ts` only —
- * see the B3 task brief). Until that lands, a caller with no live `init` yet
- * (an agent that has not run its first turn) has nothing to pass here and
- * `agentsDescribe.ts` falls back to config-only info instead of guessing.
+ * [C] `ClaudeHarness.describeSnapshot()` is that getter: `routeSystem` now
+ * keeps the whole narrowed `init` (`readInitSnapshot`) beside the
+ * slash-command fields, and `SessionRunner.describeAgent` reads it. A caller
+ * with no live `init` yet — an agent that has not run its first turn, or a
+ * relaunched app — still has nothing to pass here, and `agentsDescribe.ts`
+ * falls back to config-only info instead of guessing.
  */
 import type { AgentRole, Backend } from "@capygen/shared";
 import type { HarnessCapabilities } from "../harness.js";

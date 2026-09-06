@@ -2,14 +2,18 @@
  * `@mention` parsing for round-table dispatch (ADR-0002, SPEC R11) and the
  * composer's autocomplete. Pure functions, unit-tested without React.
  *
- * Scope note: `chat.send`'s IPC contract (`packages/shared/src/ipc.ts`)
- * accepts one `agentId` per call — full multi-agent fan-out ("delivered to
- * the @-mentioned agents [plural], in mention order") is the round-table
- * dispatcher's job (PLAN.md Phase 4's separate dispatcher task), not this
- * package's. What this file gives the renderer is the part expressible
- * against today's contract: read the mentions out of a message so the store
- * can route to the *first* one (`parseMentions(...)[0]`), and drive the
- * composer's live "@" autocomplete as the user types.
+ * Scope note (updated in [C], the Phase 4 integration): dispatch itself is
+ * **not** this file's job. `chat.send` carries the raw text, and the main
+ * process's round-table dispatcher parses it again — with code-fence and
+ * `user@host` handling this simpler regex does not have — to fan the message
+ * out to every mentioned agent in order (`packages/engine/src/roundtable/`).
+ * A renderer-side "route to the first mention" would *narrow* that to one
+ * agent, because `chat.send`'s `agentId` means "the composer explicitly
+ * picked this one", which overrides mention parsing.
+ *
+ * What is left here is the UI half, which is genuinely the renderer's: the
+ * composer's live "@" autocomplete, and a read of the mentions for anything
+ * that wants to show who a draft message will reach.
  */
 import type { Agent } from "@capygen/shared";
 

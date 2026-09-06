@@ -675,6 +675,15 @@ export class BlocksRepo {
    * (R23–R26: persist incrementally, never rebuild the turn), so upsert is the
    * only write path.
    */
+  /**
+   * Upsert by id. `kind` is updated too, deliberately: a block whose kind
+   * changes mid-turn is a real thing (the Claude SDK's settled `assistant`
+   * message can drop a thinking block its own delta stream sent, so the same
+   * block key is re-emitted as `text`). Leaving `kind` alone stored the new
+   * payload under the old kind — the live transcript showed text and the
+   * relaunched one a collapsed "thinking" card with the answer inside, which
+   * SPEC R15 ("relaunching restores the session") forbids.
+   */
   upsert(block: Block): Block {
     const parsed = BlockSchema.parse(block);
     const payload: Record<string, unknown> = {};
@@ -685,6 +694,7 @@ export class BlocksRepo {
       `INSERT INTO blocks (id, turn_id, session_id, kind, block_index, payload_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         kind         = excluded.kind,
          block_index  = excluded.block_index,
          payload_json = excluded.payload_json,
          updated_at   = excluded.updated_at`,

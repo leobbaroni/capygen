@@ -78,9 +78,23 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
 
         {info ? (
           <div className="flex flex-col gap-4">
-            <Section title="Description">
-              <p className="text-foreground">
-                {info.description || agent.description || "No description yet."}
+            {/* Two different things, both of which R13 asks for: the note the
+                user wrote when they added this agent, and the usage
+                description the backend's own facts produce. Folding them into
+                one `||` hid whichever came second — a user who typed "Writes
+                and reviews the prose." never saw it again once the harness
+                started reporting. */}
+            {agent.description ? (
+              <Section title="Description">
+                <p className="text-foreground" data-testid="agent-info-description">
+                  {agent.description}
+                </p>
+              </Section>
+            ) : null}
+
+            <Section title={agent.description ? "What it can do" : "Description"}>
+              <p className="text-foreground" data-testid="agent-info-usage-description">
+                {info.description || "No description yet."}
               </p>
             </Section>
 

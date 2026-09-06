@@ -1383,6 +1383,30 @@ export class CodexHarness implements Harness {
     return this.skills;
   }
 
+  /**
+   * What `agents.describe` (SPEC R13) needs from a *live* Codex thread. The
+   * other three fields of a `CodexDescribeSnapshot` (model, approvalPolicy,
+   * sandbox) come from the agent's own config and need no harness at all —
+   * `apps/desktop/src/ipc/agentsDescribe.ts`'s `codexConfigDefaults` builds
+   * them, and this fills in the halves that only the app-server can answer.
+   *
+   * `listMcpServers` is a request with a timeout, and a Codex that is busy or
+   * shutting down must not make an info card throw: a failed listing degrades
+   * to no servers, which is what the card would honestly show anyway.
+   */
+  async describeSnapshot(): Promise<{
+    mcpServers: CodexMcpServerStatus[];
+    skills: CodexSkill[];
+  }> {
+    let mcpServers: CodexMcpServerStatus[] = [];
+    try {
+      mcpServers = await this.listMcpServers();
+    } catch (err) {
+      this.log.warn("[codex] MCP server listing unavailable for describe", err);
+    }
+    return { mcpServers, skills: this.skills };
+  }
+
   // -------------------------------------------------------------------------
   // interrupt / dispose
   // -------------------------------------------------------------------------

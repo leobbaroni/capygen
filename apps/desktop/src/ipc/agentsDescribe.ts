@@ -10,19 +10,14 @@
  * plain fakes (`apps/desktop/test/agentsDescribe.test.ts`) rather than a real
  * store and a real harness.
  *
- * **Not yet wired into `handlers.ts`.** The existing `agents.describe` handler
- * there is a straightforward placeholder (`capabilities: [], tools: []`,
- * noted in its own comment as best-effort) — this file is the richer engine
- * behind it, built to the shape the task brief specifies
- * (`packages/engine/src/{claude/describe.ts,api/describe.ts,describe/**}` +
- * this file only). Wiring `handlers.ts`'s handler to call `describeAgent`
- * here means passing it a `snapshotFor` that reads the *running* harness for
- * an agent — `Engine`/`SessionRunner.ts` state this file's scope does not
- * include — so that plumbing is left to whoever owns those files, same as
- * `chat.continue`'s mention-parsing was left to the round-table dispatcher
- * task in the Phase 4 contracts report. Until then, `snapshotFor` absent is a
- * legitimate input (an agent that has not run a turn yet) and produces
- * exactly the placeholder's answer, not a crash.
+ * [C] Wired: `ipc/handlers.ts`'s `agents.describe` is one line
+ * (`engine.describeAgent(args.agentId)`), `SessionRunner` supplies the
+ * `snapshotFor` this file could not reach on its own — the agent's *running*
+ * harness, read through `apps/desktop/src/engine/describeSnapshot.ts` — and
+ * the echo double supplies none. `snapshotFor` absent stays a legitimate
+ * input (an agent that has not run a turn yet, or a relaunched app whose
+ * harnesses are cold) and produces the config-only description rather than a
+ * crash or a guess.
  */
 import type {
   Agent,
@@ -56,8 +51,7 @@ export interface AgentsDescribeDeps {
   /** `store.sessions.agent(agentId)`. */
   getAgent(agentId: string): Agent | undefined;
   /** `store.sessions.agents(sessionId)` filtered to everyone but `agentId`,
-   *  already shaped as `AgentDescribeOther` — the same mapping the placeholder
-   *  handler in `handlers.ts` does inline today. */
+   *  already shaped as `AgentDescribeOther`. */
   listOtherAgents(sessionId: string, agentId: string): AgentDescribeOther[];
   /** `store.usage.totalsByAgent(agentId)` — SPEC R13's "cost so far". */
   usageFor(agentId: string): AgentUsageSummary;
@@ -100,9 +94,8 @@ function describeCore(agent: Agent, snapshot: AgentHarnessSnapshot | undefined):
   if (snapshot?.api) {
     return describeApiAgent({ role: agent.role, snapshot: snapshot.api, capabilities });
   }
-  // No live snapshot — the same honest emptiness `handlers.ts`'s placeholder
-  // handler returns today (its own comment: "an agent with no turns run yet…
-  // honestly returns both empty rather than a guess").
+  // No live snapshot: an agent with no turns run yet honestly returns empty
+  // capabilities and tools rather than a list guessed from its config.
   return {
     description: agent.description ?? "",
     capabilities: [],

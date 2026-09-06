@@ -31,6 +31,7 @@ import {
 import {
   newId,
   type Agent,
+  type AgentDescribe,
   type Backend,
   type Block,
   type Session,
@@ -39,7 +40,9 @@ import {
 } from "@capygen/shared";
 import { loadApiHistory } from "./history.js";
 import { emitBlock, errorBlock, finishTurn } from "./persist.js";
+import { describeAgent as describeAgentInfo } from "../ipc/agentsDescribe.js";
 import { createRoundTable, type RoundTable } from "./RoundTable.js";
+import { harnessDescribeSnapshot } from "./describeSnapshot.js";
 import { delegationTarget, promptAdditionFor, resolveSubagentRoute } from "./routing.js";
 import type { Engine, EngineDeps, EnginePermissionAnswer, EngineSendArgs } from "./types.js";
 
@@ -285,7 +288,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       name: agent.name,
       backend: agent.backend,
       model: agent.model,
-      permissionMode: store.settings.all().permissionMode,
+      // [C] The agent's own config wins over the global default (SPEC R19's
+      // "per-agent overrides"). `HarnessAgent.permissionMode` is the highest
+      // priority a harness knows (`ClaudeHarness`: `agent.permissionMode ??
+      // config.permissionMode ?? "default"`), so passing the global setting
+      // unconditionally made `config.claude.permissionMode` dead — an agent
+      // configured `bypassPermissions` still stopped on a permission card.
+      permissionMode: agent.config?.claude?.permissionMode ?? store.settings.all().permissionMode,
       resumeSessionId,
       config: agent.config,
       ...(promptAddition ? { promptAddition } : {}),
@@ -736,6 +745,39 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     dispatch: (args) => roundTable.dispatch(args),
 
     continueChain: (sessionId) => roundTable.continueChain(sessionId),
+
+    /**
+     * [C] SPEC R13. `agentsDescribe.ts` composes; this supplies the one input
+     * it could not reach from `apps/desktop/src/ipc/` — the agent's running
+     * harness. No harness (never spoken, or the app was relaunched) means no
+     * snapshot, and the composer falls back to the agent's config rather than
+     * inventing a tool list.
+     */
+    describeAgent(agentId: string): Promise<AgentDescribe> {
+      const agent = store.sessions.agent(agentId);
+      if (!agent) return Promise.reject(new Error(`unknown agent: ${agentId}`));
+      const harness = harnesses.get(agentKey(agent.sessionId, agent.id));
+      return harnessDescribeSnapshot(harness as never, agent).then((snapshot) =>
+        describeAgentInfo(
+          {
+            getAgent: (id) => store.sessions.agent(id) ?? undefined,
+            listOtherAgents: (sessionId, selfId) =>
+              store.sessions
+                .agents(sessionId)
+                .filter((a) => a.id !== selfId)
+                .map((a) => ({
+                  agentId: a.id,
+                  mentionName: a.mentionName,
+                  backend: a.backend,
+                  model: a.model,
+                })),
+            usageFor: (id) => store.usage.totalsByAgent(id),
+            ...(snapshot ? { snapshotFor: () => snapshot } : {}),
+          },
+          agentId,
+        ),
+      );
+    },
 
     async interrupt(sessionId) {
       // [B1] Stop is a *session* verb: the queued hops go with the running
