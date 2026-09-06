@@ -39,9 +39,6 @@ export interface BackendBlockParity {
  *   MCP `elicitation/create` as a `canUseTool` permission prompt, never as a
  *   separate request, so `ClaudeHarness` has nothing to turn into the block
  *   (docs/spikes/claude-sdk-shapes.md).
- * - **codex** — no sub-agent mapping: app-server's `collabAgentToolCall` /
- *   `subAgentActivity` items are logged and rendered as nothing on purpose,
- *   and `capabilities().subagents` is `false` until Phase 4.
  * - **api** — capygen's own loop has no Task tool yet (so no `subagent`), and
  *   nothing in the built-in tool set raises an elicitation; its MCP clients are
  *   constructed with `capabilities: {}`
@@ -69,6 +66,9 @@ export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>>
     },
   },
   codex: {
+    // Phase 4 (SPEC R12): `collabAgentToolCall`/`subAgentActivity` items map to
+    // `subagent` blocks (`CodexHarness.emitCollabAgentToolCall` /
+    // `.emitSubAgentActivity`), and `capabilities().subagents` is `true`.
     applicable: [
       "text",
       "thinking",
@@ -76,16 +76,13 @@ export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>>
       "diff",
       "permission",
       "question",
+      "subagent",
       "error",
       "usage",
       "widget",
       "elicitation",
     ],
-    inapplicable: {
-      subagent:
-        "app-server's collabAgentToolCall/subAgentActivity items are not mapped yet; " +
-        "CodexHarness.capabilities().subagents is false until Phase 4",
-    },
+    inapplicable: {},
   },
   api: {
     applicable: [

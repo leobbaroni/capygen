@@ -80,6 +80,30 @@ export * from "./mcp/apps/index.js";
  */
 export * from "./api/index.js";
 
+/**
+ * [B3] `agents.describe` (SPEC R13): one pure `describe*Agent` function per
+ * backend, each returning `AgentDescribeCore` (everything but usage/others —
+ * `apps/desktop/src/ipc/agentsDescribe.ts` composes those on top with
+ * `composeAgentDescribe`). Claude's and the API loop's own `describe.ts` sit
+ * next to their harness files, where the wire shapes they read are already
+ * documented; Codex's lives in `./describe/codex.ts` instead (its header
+ * explains why). Named per-file exports, not folded into `api/index.js`,
+ * because `api/index.ts` is itself a curated (non-`export *`) surface this
+ * task does not own.
+ */
+export * from "./claude/describe.js";
+export * from "./api/describe.js";
+export * from "./describe/index.js";
+
+/**
+ * [B1] Round-table dispatch (ADR-0002, SPEC R10-R13, R23) and sub-agent
+ * routing (R12). Both are pure module trees — no database, no Electron — so
+ * `apps/desktop` can own the stateful half (`engine/RoundTable.ts`) while the
+ * rules live next to the harnesses they steer.
+ */
+export * from "./roundtable/index.js";
+export * from "./routing/index.js";
+
 import type { Backend } from "@capygen/shared";
 import { ApiHarness, type ApiHarnessDeps } from "./api/ApiHarness.js";
 import { ClaudeHarness, type ClaudeHarnessDeps } from "./claude/ClaudeHarness.js";

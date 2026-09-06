@@ -47,9 +47,10 @@ describe("createHarnessForBackend", () => {
     const api = createHarnessForBackend("api").capabilities();
 
     expect(claude.subagents).toBe(true);
-    // Codex's collabAgentToolCall items are unmapped, and the API loop has no
-    // Task tool — both are Phase 4, and both say so instead of pretending.
-    expect(codex.subagents).toBe(false);
+    // Phase 4: Codex's collabAgentToolCall/subAgentActivity items now map to
+    // subagent blocks too. The API loop still has no Task tool, and says so
+    // instead of pretending.
+    expect(codex.subagents).toBe(true);
     expect(api.subagents).toBe(false);
     // The API backend has no command list of its own; the composer's built-ins
     // come from the renderer.

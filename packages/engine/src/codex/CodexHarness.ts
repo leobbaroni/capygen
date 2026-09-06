@@ -32,6 +32,8 @@
  * | `fileChange` items + `item/fileChange/patchUpdated` | `tool_call` family `edit`/`write` + one `diff` per change |
  * | `mcpToolCall` items | `tool_call` family `mcp` (+ a `widget` block when the result names a `ui://` resource) |
  * | `webSearch` items | `tool_call` family `web` |
+ * | `collabAgentToolCall` (`spawnAgent` + friends) | `subagent` (`subagent:<agentThreadId>`), one per `receiverThreadIds` entry |
+ * | `subAgentActivity` | updates the same `subagent:<agentThreadId>` block (name from `agentPath`, status from `kind`) |
  * | `error` notification / `turn.error` | `error` + `turn: error` |
  * | `thread/tokenUsage/updated` + `turn/completed` | `usage` event + `usage` block |
  * | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` | `permission` |
@@ -73,6 +75,8 @@ import {
   CODEX_NOTIFICATIONS,
   CODEX_SERVER_REQUESTS,
   type CodexApprovalsReviewer,
+  type CodexCollabAgentState,
+  type CodexCollabAgentToolCallItem,
   type CodexCommandApprovalDecision,
   type CodexCommandApprovalParams,
   type CodexDeltaNotification,
@@ -90,6 +94,7 @@ import {
   type CodexRawItem,
   type CodexSkill,
   type CodexSkillsListResponse,
+  type CodexSubAgentActivityItem,
   type CodexThreadStartResponse,
   type CodexTokenUsageBreakdown,
   type CodexTokenUsageNotification,
@@ -177,6 +182,12 @@ interface ActiveTurn {
   items: Map<string, CodexItem>;
   /** itemId → streamed command output, which the item itself lacks mid-run. */
   streamed: Map<string, string>;
+  /** Sub-agent blocks by their own thread id, keyed for later status updates
+   *  from a later `collabAgentToolCall`/`subAgentActivity` item (Claude's
+   *  `ActiveTurn.subagents` equivalent, keyed by thread rather than tool_use
+   *  id because that is the identifier every Codex item referencing a
+   *  sub-agent shares). */
+  subagents: Map<string, { name: string; description: string; model: string | null }>;
   /** `last` from the most recent `thread/tokenUsage/updated` for this turn. */
   usage: CodexTokenUsageBreakdown | null;
   /** Fatal `error` notification text, used when `turn/completed` says failed. */
@@ -255,10 +266,10 @@ export class CodexHarness implements Harness {
       streamingDeltas: true,
       permissions: true,
       questions: true,
-      // Codex does spawn sub-agents (`collabAgentToolCall` / `subAgentActivity`
-      // items), but this harness does not map them yet — Phase 4 owns that, and
-      // claiming the capability now would put a routing UI in front of nothing.
-      subagents: false,
+      // Phase 4: `collabAgentToolCall` (`spawnAgent`) / `subAgentActivity`
+      // items are now mapped to `subagent` blocks (`emitCollabAgentToolCall`,
+      // `emitSubAgentActivity`), so this is no longer aspirational.
+      subagents: true,
       resume: true,
       interrupt: true,
       slashCommands: true,
@@ -306,6 +317,7 @@ export class CodexHarness implements Harness {
       text: new Map(),
       items: new Map(),
       streamed: new Map(),
+      subagents: new Map(),
       usage: null,
       fatal: null,
       settled: false,
@@ -520,6 +532,12 @@ export class CodexHarness implements Harness {
       // which would hide every approval card from capygen (spike §2).
       approvalsReviewer: reviewer,
       ...(model ? { model } : {}),
+      // [B1] The round table's session-stable prompt addition (ADR-0002,
+      // SPEC R23/R24). `developerInstructions` is a `thread/start` /
+      // `thread/resume` parameter (app-server schema v0.153.4
+      // `ThreadStartParams`), i.e. set once for the thread — nothing per-turn
+      // may go in it, or every turn would re-write the thread's prefix.
+      ...(agent.promptAddition ? { developerInstructions: agent.promptAddition } : {}),
     };
 
     if (this.threadId) {
@@ -780,9 +798,15 @@ export class CodexHarness implements Harness {
       case "webSearch":
         this.emitWebSearch(item);
         return;
+      case "collabAgentToolCall":
+        this.emitCollabAgentToolCall(item);
+        return;
+      case "subAgentActivity":
+        this.emitSubAgentActivity(item);
+        return;
       default:
         // Unreachable for the mapped union; reached at runtime by every other
-        // `ThreadItem` variant (`collabAgentToolCall`, `imageGeneration`, …),
+        // `ThreadItem` variant (`imageGeneration`, `contextCompaction`, …),
         // which is why the cast is a `CodexRawItem` and not a lie about `item`.
         this.log.info(
           `[codex] item type ${(item as CodexRawItem).type} is not mapped to a block`,
@@ -903,6 +927,102 @@ export class CodexHarness implements Harness {
       status: item.results ? "success" : "running",
       toolUseId: item.id,
       ...(truncated ? { truncated: true, fullOutput } : {}),
+    });
+  }
+
+  /**
+   * Codex's multi-agent collaboration mode (SPEC R12): `spawnAgent` and the
+   * other `CollabAgentTool` operations all arrive as one `collabAgentToolCall`
+   * item on the *orchestrating* agent's own thread — never on the sub-agent's
+   * thread, which is why this needs no second app-server connection the way
+   * the widget host does (A13's problem is different: reading a *resource*
+   * hosted by another process, not reading another thread's own items).
+   *
+   * A call with no `receiverThreadIds` (`listAgents`, or a `wait`/`sendMessage`
+   * that named nobody yet) has no sub-agent to render and is dropped — the same
+   * "nothing to show yet" rule `emitCommand`'s siblings apply to an empty item.
+   *
+   * `agentsStates[threadId]` — when app-server has it — is preferred over the
+   * call's own `status` for that thread's block: the call's status describes
+   * whether *issuing the call* succeeded, while `agentsStates` describes the
+   * target agent itself, which is what the block is about.
+   */
+  private emitCollabAgentToolCall(item: CodexItem & { type: "collabAgentToolCall" }): void {
+    const turn = this.active;
+    if (!turn) return;
+    const receivers = item.receiverThreadIds ?? [];
+    if (receivers.length === 0) return;
+    const fallbackStatus = collabToolCallStatus(item.status);
+    const description = item.prompt ? firstLine(item.prompt) : "";
+    for (const agentThreadId of receivers) {
+      if (!agentThreadId) continue;
+      const state = item.agentsStates?.[agentThreadId];
+      this.upsertSubagentBlock(turn, agentThreadId, {
+        model: item.model ?? null,
+        ...(description ? { description } : {}),
+        status: state ? collabAgentStatus(state.status) : fallbackStatus,
+      });
+    }
+  }
+
+  /**
+   * A `subAgentActivity` item is a lifecycle ping for one sub-agent thread,
+   * named by `agentPath` — the only place a human-readable name for the
+   * sub-agent ever appears on the wire (`collabAgentToolCall` only knows the
+   * thread id). It arrives both for agents this harness's own
+   * `collabAgentToolCall` items already know about and, on a resumed thread,
+   * for ones whose spawn call was never replayed — `upsertSubagentBlock`
+   * handles either by keying on `agentThreadId` alone.
+   */
+  private emitSubAgentActivity(item: CodexItem & { type: "subAgentActivity" }): void {
+    const turn = this.active;
+    if (!turn || !item.agentThreadId) return;
+    this.upsertSubagentBlock(turn, item.agentThreadId, {
+      ...(item.agentPath ? { name: item.agentPath } : {}),
+      status: subAgentActivityStatus(item.kind),
+    });
+  }
+
+  /** Same merge-and-emit shape as `ClaudeHarness.upsertSubagent`: only the
+   *  fields a caller actually knows this time are overwritten, so a later
+   *  `subAgentActivity` naming the agent does not blank out the model a
+   *  `collabAgentToolCall` reported earlier, and vice versa. */
+  private upsertSubagentBlock(
+    turn: ActiveTurn,
+    agentThreadId: string,
+    patch: {
+      name?: string;
+      description?: string;
+      model?: string | null;
+      status: "spawned" | "running" | "done" | "error";
+    },
+  ): void {
+    const prev = turn.subagents.get(agentThreadId) ?? {
+      name: "sub-agent",
+      description: "",
+      model: null,
+    };
+    const next = {
+      name: patch.name ?? prev.name,
+      description: patch.description ?? prev.description,
+      model: patch.model !== undefined ? patch.model : prev.model,
+    };
+    turn.subagents.set(agentThreadId, next);
+    this.emitBlock(`subagent:${agentThreadId}`, {
+      kind: "subagent",
+      agentId: null,
+      name: next.name,
+      backend: "codex",
+      model: next.model,
+      description: next.description,
+      status: patch.status,
+      // Not derivable yet: `thread/tokenUsage/updated` for the sub-agent's own
+      // thread id is filtered out at the top of `onNotification` (only frames
+      // for *this* harness's own `threadId` pass), so no token count — and
+      // therefore no cost — ever reaches a `collabAgentToolCall`/
+      // `subAgentActivity` item. Reading it would mean a second subscription
+      // scoped to `agentThreadId`; left as a documented gap rather than a
+      // guessed number (SPEC R23's "never a guess" rule, `pricing.ts`).
     });
   }
 
@@ -1470,6 +1590,66 @@ function patchStatus(status: string | undefined): ToolCallStatus {
 function mcpStatus(status: string | undefined, hasError: boolean): ToolCallStatus {
   if (hasError || status === "failed") return "error";
   return status === "completed" ? "success" : "running";
+}
+
+/**
+ * `CollabAgentStatus` → the four-value `SubagentBlock.status` enum
+ * (`packages/shared/src/domain.ts`), the same target `ClaudeHarness`'s own
+ * `subagentStatus` maps onto. This is the *target agent's* state — preferred
+ * over the tool call's own status whenever `agentsStates` has an entry.
+ */
+function collabAgentStatus(
+  status: CodexCollabAgentState["status"],
+): "spawned" | "running" | "done" | "error" {
+  switch (status) {
+    case "completed":
+      return "done";
+    case "running":
+      return "running";
+    case "pendingInit":
+      return "spawned";
+    case "interrupted":
+    case "errored":
+    case "shutdown":
+    case "notFound":
+    default:
+      return "error";
+  }
+}
+
+/** `CollabAgentToolCallStatus` → the same four-value enum, used only when the
+ *  item carries no `agentsStates` entry for a given receiver yet. */
+function collabToolCallStatus(
+  status: CodexCollabAgentToolCallItem["status"],
+): "spawned" | "running" | "done" | "error" {
+  switch (status) {
+    case "completed":
+      return "done";
+    case "inProgress":
+      return "running";
+    case "failed":
+    case "interrupted":
+    default:
+      return "error";
+  }
+}
+
+/** `SubAgentActivityKind` → the same four-value enum. `interrupted` reads as
+ *  `error` rather than a fifth status the schema does not have — the same
+ *  choice `ClaudeHarness.subagentStatus` makes for `killed`/`failed`. */
+function subAgentActivityStatus(
+  kind: CodexSubAgentActivityItem["kind"],
+): "spawned" | "running" | "done" | "error" {
+  switch (kind) {
+    case "completed":
+      return "done";
+    case "started":
+    case "interacted":
+      return "running";
+    case "interrupted":
+    default:
+      return "error";
+  }
 }
 
 /** Additions/deletions from a unified diff, ignoring the `+++`/`---` headers. */

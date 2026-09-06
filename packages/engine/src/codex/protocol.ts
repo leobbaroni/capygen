@@ -217,15 +217,88 @@ export interface CodexWebSearchItem {
 }
 
 /**
+ * `v2/CollabAgentState.ts` — the last known state app-server has for one
+ * target thread of a `collabAgentToolCall` (its `agentsStates` map is keyed by
+ * thread id).
+ */
+export interface CodexCollabAgentState {
+  /** `v2/CollabAgentStatus.ts`. */
+  status:
+    | "pendingInit"
+    | "running"
+    | "interrupted"
+    | "completed"
+    | "errored"
+    | "shutdown"
+    | "notFound";
+  message: string | null;
+}
+
+/** `v2/CollabAgentTool.ts` — which collaboration-mode operation this call is. */
+export type CodexCollabAgentTool =
+  | "spawnAgent"
+  | "sendInput"
+  | "resumeAgent"
+  | "wait"
+  | "closeAgent"
+  | "sendMessage"
+  | "followupTask"
+  | "interruptAgent"
+  | "listAgents";
+
+/**
+ * `ThreadItem`'s `collabAgentToolCall` variant (Phase 4, SPEC R12) — Codex's
+ * multi-agent collaboration mode routing a tool call (`spawnAgent` and
+ * friends) through the orchestrating agent's own thread. `receiverThreadIds`
+ * names the sub-agent(s) being acted on; for `spawnAgent` that is the newly
+ * created thread.
+ */
+export interface CodexCollabAgentToolCallItem {
+  type: "collabAgentToolCall";
+  id: string;
+  tool: CodexCollabAgentTool;
+  /** `v2/CollabAgentToolCallStatus.ts` — the status of the *call*, not of the
+   *  target agent (that is `agentsStates[threadId].status`). */
+  status: "inProgress" | "completed" | "failed" | "interrupted";
+  senderThreadId: string;
+  receiverThreadIds: string[];
+  prompt: string | null;
+  model: string | null;
+  reasoningEffort?: string | null;
+  agentsStates: Record<string, CodexCollabAgentState | undefined>;
+}
+
+/** `v2/SubAgentActivityKind.ts`. */
+export type CodexSubAgentActivityKind = "started" | "interacted" | "interrupted" | "completed";
+
+/**
+ * `ThreadItem`'s `subAgentActivity` variant — a lifecycle ping for one
+ * sub-agent thread, named by `agentPath` (the collaboration-mode nickname/path
+ * app-server shows in its own UI, e.g. `"explorer"` or a nested path).
+ */
+export interface CodexSubAgentActivityItem {
+  type: "subAgentActivity";
+  id: string;
+  kind: CodexSubAgentActivityKind;
+  agentThreadId: string;
+  agentPath: string;
+}
+
+/**
  * The item variants capygen maps to blocks.
  *
- * `ThreadItem` has ~20 more (`collabAgentToolCall`, `subAgentActivity`,
- * `imageGeneration`, `contextCompaction`, …). They are deliberately **not** in
- * this union: an unrecognised `item.type` arrives as an unchecked cast and
- * falls through `routeItem`'s `default:` to a log line. Widening the union with
- * a `{ type: string }` catch-all instead would destroy the discriminant and
- * make every `item.command` access a compile error, which is exactly the
- * "silent undefined three layers away" this file exists to prevent.
+ * `ThreadItem` has ~18 more (`imageGeneration`, `contextCompaction`, …). They
+ * are deliberately **not** in this union: an unrecognised `item.type` arrives
+ * as an unchecked cast and falls through `routeItem`'s `default:` to a log
+ * line. Widening the union with a `{ type: string }` catch-all instead would
+ * destroy the discriminant and make every `item.command` access a compile
+ * error, which is exactly the "silent undefined three layers away" this file
+ * exists to prevent.
+ *
+ * `collabAgentToolCall` / `subAgentActivity` joined this union in Phase 4
+ * (SPEC R12) — see `CodexHarness.emitCollabAgentToolCall` /
+ * `.emitSubAgentActivity`, mapped to `subagent` blocks the same way Claude's
+ * `Task` sub-agent notifications are.
  */
 export type CodexItem =
   | CodexUserMessageItem
@@ -234,7 +307,9 @@ export type CodexItem =
   | CodexCommandExecutionItem
   | CodexFileChangeItem
   | CodexMcpToolCallItem
-  | CodexWebSearchItem;
+  | CodexWebSearchItem
+  | CodexCollabAgentToolCallItem
+  | CodexSubAgentActivityItem;
 
 /** Any item off the wire, before `routeItem` decides whether it is mapped. */
 export interface CodexRawItem {
