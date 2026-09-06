@@ -4,13 +4,13 @@ One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contrac
 
 ## Current State
 
-- Phases 1–2 done (verified 2026-09-06): the monorepo builds, the app launches on the New Session
-  landing, a live Claude turn streams into the transcript with a usage/cost line, and the session
-  survives a relaunch out of SQLite. `pnpm typecheck` clean · `pnpm test` 142 passed ·
-  `pnpm build` clean · `pnpm e2e` 7 passed (5 offline + 2 live). How to run any of it:
-  `docs/RUN.md`.
-- Not built yet: everything from Phase 3 on — Codex and API harnesses, panes, settings hub,
-  round-table, packaging. Machine facts: SPEC.md §Current State.
+- Phases 1–6 were accepted historically at `067a7dc` (2026-09-06); Phases 7–12 remain open.
+- Astra's new review identifies integration gaps in MCP resolution/pool identity, settings
+  consumption and project scope. Historical acceptance does not close these findings.
+- Review and imported context: `docs/reviews/phase1-6.md`. Concrete next-phase task briefs,
+  dependencies and acceptance: `docs/plans/phases7-12.md`. Start Phase 7 with its corrective batch.
+- Fresh verification is recorded in PROJECT_LOG.md. Opus independently reviewed the findings and Fable debated core decisions after the
+  user restored the Claude connection. Runtime fixes still require implementation and gates.
 
 ## Approach
 
@@ -40,19 +40,20 @@ capygen/
 Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) · `pnpm e2e`
 (Playwright Electron) · `pnpm build:win` (electron-builder NSIS + portable).
 
-## Crew (user rule, 2026-09-06: "from Phase 7 the project is led by GPT Astra; Fable 5.1 / Opus review alongside for dev")
+## Crew (user instruction, 2026-09-06)
 
-| Role | Model | Used for |
+| Role | Model | Responsibility |
 |---|---|---|
-| Lead / task setter | **GPT Astra** (Codex, `gpt-6-astra`) — reads `AGENTS.md` | decomposition, task briefs, acceptance, merges |
-| Hard implementation | GPT Astra, or Opus 5 when the lead delegates through Claude Code | engine, dispatcher, routing, packaging, anything that failed once |
-| Mechanical | Codex on a smaller GPT-5.6 tier, or Sonnet 5 via Claude Code | page ports from the reference, boilerplate, docs, fixtures |
-| Review (dev) | **Claude Fable 5.1 / Opus 5** — always a different model from the implementer | adversarial review waves before every phase tick; findings ranked, `file:line`, concrete failure scenario |
+| Lead / designer / decision maker | **GPT Astra**, medium (`gpt-6-astra`) | plans, design, core decisions, task briefs, final acceptance |
+| Hard and medium tasks | **Opus 5** | implementation and substantive reviews |
+| Simple tasks | **GPT Luna** (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
+| Core-decision debate | **Fable 5.1**, medium | challenge frameworks, architecture and core policy changes; Astra decides |
+| Independent review | different model from implementer | verify concrete findings and fixes before phase acceptance |
 
-Phases 1–6 were orchestrated by Claude Fable 5.1 with Opus 5 (hard) / Sonnet 5 (mechanical) subagents
-and cross-model review; that crew is retired. The per-phase workflow scripts under
-`.claude/workflows/` document the exact task briefs that produced each phase and are the template
-for Phases 7–12 (`docs/HANDOFF.md` §How to run a phase).
+The original Fable/Opus/Sonnet crew built Phases 1–6. Its workflow scripts remain historical
+records, not a current model-routing configuration. Preflight actual availability and never
+silently substitute models. Review status and failed Claude attempts are recorded in
+`docs/reviews/phase1-6.md`; the next-phase execution sequence is in `docs/plans/phases7-12.md`.
 
 ## Build Phases
 
@@ -236,7 +237,7 @@ for Phases 7–12 (`docs/HANDOFF.md` §How to run a phase).
       process** (`cleanEnv`) see the temp homes. The app logs the mapping once and (a) asserts on
       that line, so a run that quietly used the real `~/.claude` cannot pass as an isolated one.
       Deviations, recorded rather than hidden:
-      * **The one live Claude case skips on this machine.** e2e (b2) — "a new Claude session's
+      * **At Phase 6 acceptance, the live Claude case skipped on this machine.** e2e (b2) — "a new Claude session's
         tool list contains the server's tools" — needs a signed-in Claude, and a sign-in cannot be
         isolated: `CLAUDE_CONFIG_DIR` relocates `.credentials.json` too. Copying the real one into
         a temp home is *worse* than a config write — the SDK refreshes it there, the refresh
@@ -259,12 +260,11 @@ for Phases 7–12 (`docs/HANDOFF.md` §How to run a phase).
         Consequence for the suite: the Claude-dependent tests in `harnesses`/`roundtable` and (new
         here) `skeleton`/`widget` now **skip in seconds with the reason** instead of failing after
         a 150 s timeout — `tests/e2e/claudeAvailability.ts`.
-      * **Dev servers has no `GlobalSettings.devServers` field**, so that section keeps its
-        preferences in `localStorage` with an on-page note. Adding the field is a shared-contract
-        change nobody in this phase owned.
-      * **Codex has no per-tool permission list** (`v2/Config.ts` 0.153.4 has neither), so a
-        `codex`/`api` tool policy is capygen's own SQLite row enforced by capygen's permission
-        cards, and a re-sync never prunes it.
+      * **Dev servers has no `GlobalSettings.devServers` field**; review commit `2222cd6`
+        removed its inactive localStorage controls. The section now names the future phase.
+      * **Codex/API local per-tool policy rows are not enforced yet.** Review commit
+        `2222cd6` replaced their editors with a Phase 9 note. Native permission modes still
+        apply; do not describe persisted local policy rows as an enforcement mechanism.
       * **`integrations.list` takes no `projectId`**, so project-scope rows are read for the
         most-recently-touched project (`projects.list()` is `updated_at DESC`); the watchers
         re-point when it changes.
@@ -276,6 +276,8 @@ for Phases 7–12 (`docs/HANDOFF.md` §How to run a phase).
         that fills them (7, 12, 9) — R19 asks for the ids, and inventing behaviour those phases
         own would be worse than saying so.
 - [ ] Phase 7: Projects, worktrees, git, imports (M2)
+      Prerequisite: corrective batch R-A–R-E in `docs/plans/phases7-12.md`; close runtime
+      settings/MCP and project-scope gaps before widening project/worktree operations.
       Done when: create a worktree from the composer chip, session runs in it, diff pane shows
       changes, commit from the UI; import a Claude Code and a Codex transcript into sessions.
       Steps: projects store; worktree ops (simple-git); git status/commit UI; import parsers.

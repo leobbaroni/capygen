@@ -258,7 +258,7 @@ machine's real file has ~80 literal-quoted `[projects.'…']` headers to lose.
 | top-level `model`, `model_reasoning_effort`, `approval_policy`, `sandbox_mode` | `v2/Config.ts` in the 0.153.4 bindings, plus this machine's file | `CodexConfigStore.defaults()` / `.setDefaults()` | a *new* root key is inserted **above the first table header**, or it would silently become a key of that table |
 | `[projects.'<path>'] trust_level`, `[features]`, `[windows]`, `notify = [ … ]` | read from this machine | nothing — but they must survive every write | the patcher's whole reason to exist; `configStores.test.ts` asserts each one after an edit |
 | skills at `<CODEX_HOME>/skills/<name>/SKILL.md`, `<project>/.codex/skills`, `plugins/cache/<marketplace>/<plugin>/<version>/skills` | the cache layout on this machine | `SkillEntry` | a plugin whose cache is absent is listed `installed: false`, not hidden |
-| **Codex has no per-tool permission list** | `v2/Config.ts` (0.153.4) has neither an allow/deny list nor a permissions table; `ExecPolicyAmendment` is a runtime proposal, not a config key | `readToolPolicies()` returns `[]`; a `codex` tool policy is capygen's own SQLite row, enforced by capygen's permission cards | if Codex grows one, the row moves from the DB into the file and `BackendSyncSource.toolPolicyScopes` stops being empty |
+| **Codex has no per-tool permission list** | `v2/Config.ts` (0.153.4) has neither an allow/deny list nor a permissions table; `ExecPolicyAmendment` is a runtime proposal, not a config key | `readToolPolicies()` returns `[]`; local Codex/API policy rows await Phase 9 enforcement; current UI disables their editors | if Codex grows one, the row moves from the DB into the file and `BackendSyncSource.toolPolicyScopes` stops being empty |
 | skill enable/disable is a **rename**: `SKILL.md` ⇄ `SKILL.md.disabled` | capygen's own convention (`CODEX_DISABLED_SKILL_FILE`) | `CodexConfigStore.setSkillEnabled` | the app-server's `skills/config/write {name\|path, enabled}` is the alternative, but it needs a running server and picks its own destination. The rename is reversible, visible in a diff, and cannot lose the file — `FileIo` deliberately has **no delete**, so a rename is the only way anything in this module makes a path stop existing |
 
 ### Watchers and refresh (SPEC R29)
@@ -348,3 +348,19 @@ failures if missed:
    bundle and find nothing.
 3. Nothing else here needs unpacking: `chokidar`, `simple-git`, `dockview` and `xterm` are pure
    JS and ride inside the asar, and the SQLite driver is `node:sqlite` (ADR-0003), not an addon.
+
+## Review caveat — 2026-09-06
+
+The historical API MCP inheritance, project-recency and settings-projection rows above describe
+intended or partial behavior. Shipping gaps are verified in `docs/reviews/phase1-6.md` R-A–R-D:
+API/widget discovery bypasses isolated homes and API-owned settings; MCP pool keys omit env/headers;
+global backend defaults are not fully consumed; recency is not reliable active-project identity.
+Do not rely on those rows as proof of complete runtime integration until the corrective tests pass.
+
+## Pixel mascot asset contract (2026-09-06)
+
+`assets/mascot/capybara-states.json` now describes 72px logical cells, 4x exported pixels,
+four frame columns and eight state rows in shared `MASCOT_STATES` order. Renderer staging
+copies `pixel-animations.png`; CSS uses `steps(4, end)` and a relative file-compatible URL.
+`capybara-states-256.png` retains its legacy filename but its cell size is 288px; consumers
+must use the manifest. The generator uses existing Python/Pillow only, never installs it.

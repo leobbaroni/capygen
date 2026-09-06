@@ -301,3 +301,13 @@ SQL; rollback = restore the pre-migration backup the migrator writes next to the
 | P18 | Dictation | M7 |
 | P19 | Hosts page (local machine only; remote hosts parked), terminal attach | M7 |
 | P20 | Extensions (canvas-style page extensions) | M7 |
+
+## Corrections — 2026-09-06, Astra handoff review
+
+- User assigns GPT Astra medium to lead/design/decisions, Opus 5 to hard/medium tasks, GPT Luna
+  to simple work, and Fable 5.1 medium to core-decision debate. The latest PLAN crew supersedes
+  historical workflow routing. Model availability is reported honestly.
+- Mascot direction is the user's attached tan capybara with orange and pink outfit, with
+  larger sharp pixel art and drawn animation frames. This supersedes the earlier visor-face
+  description and static-image motion treatment. Keep all eight reactive states and reduced
+  motion support; app UI and reference tokens retain their existing design.

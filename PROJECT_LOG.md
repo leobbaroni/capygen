@@ -1056,3 +1056,50 @@ Not fixed, on purpose
   99 files / 1296 passed, 4 skipped; `corepack pnpm build` clean; `corepack pnpm exec playwright
   test` 34 tests — 24 passed, 10 skipped (Claude sign-in), 0 failed. COMPAT.md's headless-CLI
   section records `showConsole` and `assertCliPositional`.
+
+## 2026-09-06 — Astra takeover review and next-phase preparation
+
+- Read/imported the relevant context from both local Claude Code transcripts named
+  “Omnigent Windows app bootstrap”; source sessions/timestamps/message UUIDs recorded in
+  `docs/reviews/phase1-6.md`. Raw transcripts, credentials and tool payloads were not imported
+  into git or the app DB. App transcript importing remains Phase 7.
+- Crew confirmed: GPT Astra medium lead/design/decisions, Luna simple inventory/docs check,
+  Opus 5 independent substantive review, Fable 5.1 medium core-decision debate. Claude's first
+  attempts failed on login; after the user's reauthentication, Opus completed review and Fable
+  completed two debate rounds. No silent model substitution.
+- Confirmed open: API/widget MCP discovery diverges from Settings and ignores isolated homes;
+  MCP pool identity omits env/headers; Codex/global backend defaults aren't consumed by the
+  harness; project settings use recency rather than active project identity. Opus independently
+  confirmed all four. Focused mocked probes confirmed the isolation and pool-key cases without
+  reading real config or starting servers. A reviewer argument-joining false positive was
+  challenged and withdrawn (the delimiter is U+0001, not the empty string).
+- Corrected stale plan/handoff/policy-enforcement prose; updated persistent crew instructions.
+  Retained the stack after Fable debate. Added `docs/plans/phases7-12.md`: corrective batch
+  first, combined runtime wiring ownership, explicit repo/worktree identity, inert bounded
+  imports, persistent isolated live-test identity, automation lifecycle, permissions/shares,
+  dictation/extension decision gates, byte-cap correction, compaction implementation and
+  measured efficiency, native packaging/parity acceptance. No later phase ticked or implemented.
+- Baseline checks run through native Windows Node 22.16 from WSL:
+
+```text
+corepack pnpm typecheck
+  packages/shared typecheck: Done
+  packages/db typecheck: Done
+  packages/engine typecheck: Done
+  apps/renderer typecheck: Done
+  apps/desktop typecheck: Done
+corepack pnpm test
+  Test Files 99 passed (99)
+  Tests 1296 passed | 4 skipped (1300)
+corepack pnpm build
+  Done in 273ms
+  [build] desktop bundle written to .../apps/desktop/dist
+```
+
+- First full e2e baseline under explicitly isolated backend homes: 21 passed, 12 skipped,
+  1 failed. The existing real-plugin-inventory case compares a personal registry to the app's
+  isolated list. Final verification mirrors only `installed_plugins.json` (non-secret inventory)
+  into the temporary Claude fixture; no auth or settings copied. This is a fixture-environment
+  accommodation, not a runtime fix. Final complete gate is recorded with the mascot task below.
+- Review artifacts/logs retained locally in ignored `e2e-out/review/`; runtime findings remain
+  open, with acceptance tests assigned to their implementation tasks. Nothing pushed.

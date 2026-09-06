@@ -1,7 +1,8 @@
-# capygen — AGENTS.md (project lead: GPT Astra via Codex)
+# capygen — AGENTS.md (project lead: GPT Astra medium via Codex)
 
-You lead this project from Phase 7 onward. Claude Fable 5.1 / Opus 5 review your work and take
-delegated tasks; a different model from the implementer always reviews. Read in this order:
+You lead this project from Phase 7 onward. Opus 5 handles hard/medium tasks; GPT Luna handles simple tasks. Fable 5.1 (medium) debates
+core decisions with Astra; Astra owns design and final decisions. A different model from
+the implementer always reviews. Read in this order:
 `SPEC.md` (the contract: goals, numbered requirements R1–R32, parity inventory P1–P20),
 `PLAN.md` (build phases 7–12 with Done-when checks, assumptions ledger, crew),
 `docs/HANDOFF.md` (current state, how to run/verify/revert, how a phase was run),

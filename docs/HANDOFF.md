@@ -16,7 +16,7 @@ subagents with cross-model review waves.
 | 6 Settings hub, two-way config sync, prerequisites | ✅ | `settings.spec.ts` |
 | 7–12 | open | `PLAN.md` |
 
-Last gate run by the orchestrator (2026-09-06, commit `2222cd6`): typecheck 5/5 packages;
+Historical gate on parent revision `2222cd6` (2026-09-06; handoff committed as `067a7dc`): typecheck 5/5 packages;
 vitest 99 files, 1296 passed, 4 skipped; build ok; Playwright 24 passed, 10 skipped. The skips
 are every live-Claude test (Claude Code's OAuth session on this machine is expired — `claude -p
 "say ok"` answers "OAuth session expired"; run `claude` in a terminal to sign in, then they run
@@ -49,13 +49,15 @@ e2e and runs the full gate, then a four-lens review wave (correctness, security,
 
 Every task is one commit on `main` (52+ commits, linear). `git log --oneline` names them
 "Phase N: …". To back out a phase: `git revert <range>` newest-first; migrations are forward-only
-numbered SQL — reverting a phase that added a migration requires deleting
-`%APPDATA%\capygen\capygen.db` (the migrator writes a backup next to it before each migration).
+numbered SQL. For a schema rollback, close the app and preserve the current database and
+its sidecars, then restore a verified compatible pre-migration backup together with the matching
+app revision. Do not delete the user's database as a default revert step.
 No pushes were made; origin is not configured.
 
 ## Open items (carry into Phases 7–12)
 
-- Claude sign-in expired on this machine (user action); API key never stored, so the `api`
+- At the Phase 6 handoff Claude sign-in was expired. The user later reauthenticated the
+  review worker; isolated app test homes still have no login. API key never stored, so the `api`
   backend has never made a real call — the live e2e unskips when a key is set in Settings ▸ API
   keys. `api` model list is curated; prices `[assumed 2026-09-06]`.
 - Codex cannot receive `delegate_task` (app-server takes MCP servers only from `config.toml`);
@@ -63,7 +65,8 @@ No pushes were made; origin is not configured.
   server in the isolated Codex config at session start.
 - Codex cost is estimated (tokens only from app-server); Codex sub-agent blocks carry no cost.
 - `harness.list` spawns a Codex probe child every 60 s of use; TTL/refresh button if it shows.
-- Dev-servers settings section writes `localStorage` (no `GlobalSettings.devServers` yet);
+- Dev-server preferences are unimplemented (no `GlobalSettings.devServers` yet); the inactive
+  localStorage controls were removed by `2222cd6`;
   `PrereqsSection`/`PrereqPanel` duplicated; `import`/`updates`/`members`/`policies`/`sharing`
   sections are reference-layout placeholders until Phases 7/9/12.
 - Live e2e flake: cross-backend delegation depends on the lead choosing `delegate_task`; harden
@@ -80,3 +83,12 @@ No pushes were made; origin is not configured.
 `SPEC.md` (R1–R32, P1–P20) · `PLAN.md` (phases, assumptions A1–A14, crew) · `CONTEXT.md` ·
 `docs/POLICIES.md` · `docs/adr/0001–0005` · `COMPAT.md` · `docs/RUN.md` · `docs/spikes/*` ·
 `PROJECT_LOG.md` (per-task entries with command output) · `e2e-out/*.png` (latest screenshots).
+
+## Astra review addendum — 2026-09-06
+
+See `docs/reviews/phase1-6.md` for recovered session provenance and confirmed open findings.
+See `docs/plans/phases7-12.md` for the corrective prerequisite batch and next-phase briefs.
+The latest crew is Astra medium / Opus hard+medium / Luna simple / Fable medium core debate.
+Initial Claude dispatches failed; after reauthentication Opus reviewed the findings and Fable
+debated the plan in two rounds. Four runtime findings remain open corrective tasks.
+Phases 7–12 are not implemented or newly accepted by this review.
