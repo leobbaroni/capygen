@@ -219,6 +219,25 @@
   background: var(--background);
 }
 
+/* Sidebar/settings rows: the reference pins the line box so `py-1` yields a
+   28px row instead of following the body line-height (index.css:300-302). */
+.sidebar-row {
+  line-height: 20px;
+}
+
+/* Edge treatment is mode-specific but palette-independent
+   (reference index.css:341-349): a soft inset shadow in light mode instead of
+   a hairline border, and a barely-there border in dark. */
+html:not(.dark) .conversations-sidebar {
+  border-right: none;
+  box-shadow: inset -8px 0 12px -8px rgb(0 0 0 / 5%);
+}
+
+.dark .conversations-sidebar {
+  border-right: 1px solid rgb(255 255 255 / 2%);
+  box-shadow: inset -8px 0 12px -8px rgb(0 0 0 / 5%);
+}
+
 /* Fixed default icon geometry: a 14px glyph centred in a 16px SVG box. */
 .ui-icon {
   box-sizing: border-box;
@@ -250,6 +269,12 @@
 /* Anything living in the top-right corner keeps clear of the caption buttons. */
 .titlebar-clearance {
   padding-right: var(--caption-width);
+}
+
+/* …and anything at the very top of a column keeps clear of the drag strip,
+   which is fixed above the whole window and would otherwise swallow the click. */
+.titlebar-top-clearance {
+  padding-top: var(--titlebar-height);
 }
 
 /* Thin, unobtrusive scrollbars matching the palette. */

@@ -48,7 +48,12 @@ export interface Engine {
   answerQuestion(requestId: string, answers: Record<string, string>): boolean;
   /** The backend's own commands/skills/plugins for this session (R14). */
   listCommands(sessionId?: string): SlashCommand[];
-  dispose(): void;
+  /**
+   * Release every backend. Resolves only once each harness is down *and* the
+   * final status of any turn it was running has been written, so a caller can
+   * close the database straight afterwards without losing that write.
+   */
+  dispose(): void | Promise<void>;
 }
 
 export type EngineFactory = (deps: EngineDeps) => Engine;

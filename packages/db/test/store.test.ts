@@ -412,3 +412,32 @@ describe("restart persistence (R15)", () => {
     ]);
   });
 });
+
+describe("reopening after a crash", () => {
+  it("closes out turns and sessions the previous run left in flight", () => {
+    const { session } = seedSession();
+    const turn = store.turns.create({ sessionId: session.id, role: "agent", status: "streaming" });
+    const done = store.turns.create({ sessionId: session.id, role: "user", status: "done" });
+    store.sessions.setStatus(session.id, "running");
+    expect(store.turns.hasStreaming(session.id)).toBe(true);
+    store.close();
+
+    // A `streaming` row can only be a crash or a quit mid-turn: nothing is
+    // writing to it at the moment the file is opened. Left alone it locks the
+    // session's composer forever (`isBusy` stays true, Stop has nothing to stop).
+    store = open();
+    expect(store.reconciled).toEqual({ turns: 1, sessions: 1 });
+    expect(store.turns.get(turn.id)?.status).toBe("interrupted");
+    expect(store.turns.get(done.id)?.status).toBe("done");
+    expect(store.sessions.get(session.id)?.status).toBe("idle");
+    expect(store.turns.hasStreaming(session.id)).toBe(false);
+  });
+
+  it("leaves a healthy database alone", () => {
+    const { session } = seedSession();
+    store.close();
+    store = open();
+    expect(store.reconciled).toEqual({ turns: 0, sessions: 0 });
+    expect(store.sessions.get(session.id)?.status).toBe("idle");
+  });
+});

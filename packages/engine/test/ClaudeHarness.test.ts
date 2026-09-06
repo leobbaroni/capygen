@@ -612,3 +612,61 @@ describe("pure mappers", () => {
     });
   });
 });
+
+describe("ClaudeHarness — large tool output (R25)", () => {
+  it("keeps the whole value on the block while sending a stub as the output", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake, {}, { maxToolOutputChars: 32 });
+    const turn = drain(harness.send({ turnId: "trn_big", text: "read a big file" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    fake.out.push(initMessage());
+    fake.out.push(
+      assistantMessage("m1", [
+        { type: "tool_use", id: "toolu_big", name: "Read", input: { file_path: "big.txt" } },
+      ]),
+    );
+    const whole = `${"a".repeat(64)}THE-TAIL`;
+    fake.out.push(toolResultMessage("toolu_big", whole));
+
+    await vi.waitFor(() =>
+      expect(blocks(turn.events, "tool_call").some((b) => b.patch.truncated === true)).toBe(true),
+    );
+    const call = blocks(turn.events, "tool_call").at(-1)!.patch;
+    expect(String(call.output)).toContain("more characters");
+    expect(String(call.output)).not.toContain("THE-TAIL");
+    // SPEC §Edge Cases: "stored whole, sent to the model truncated with a
+    // stub" — without this the rest of the value exists nowhere in capygen
+    // and R25's expandable stub has nothing to expand into.
+    expect(call.fullOutput).toBe(whole);
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    await harness.dispose();
+  });
+
+  it("forgets a turn's tool bookkeeping once it settles", async () => {
+    const fake = makeFakeSdk();
+    const harness = await start(fake);
+    const turn = drain(harness.send({ turnId: "trn_leak", text: "use a tool" }));
+    await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
+
+    fake.out.push(initMessage());
+    fake.out.push(
+      assistantMessage("m1", [
+        { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "a.md" } },
+      ]),
+    );
+    await vi.waitFor(() => expect(blocks(turn.events, "tool_call")).toHaveLength(1));
+
+    const inner = harness as unknown as { toolNames: Map<string, string> };
+    expect(inner.toolNames.has("toolu_1")).toBe(true);
+
+    fake.out.push(resultMessage("done"));
+    await turn.done;
+    // A harness outlives every turn of a session (R15); these entries are only
+    // needed while their turn is live.
+    expect(inner.toolNames.has("toolu_1")).toBe(false);
+    await harness.dispose();
+  });
+});

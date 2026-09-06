@@ -178,9 +178,15 @@ export interface AttachDeps {
 export function attach(win: BrowserWindow, { isDark, log = () => {} }: AttachDeps): void {
   const wc = win.webContents;
   let timer: NodeJS.Timeout | null = null;
+  // The one-shot re-blend has to be cancellable too: left running it fires
+  // after the window is gone — and, at shutdown, after the store it reads the
+  // theme from is closed.
+  let settleTimer: NodeJS.Timeout | null = null;
   const stop = (): void => {
     if (timer) clearInterval(timer);
+    if (settleTimer) clearTimeout(settleTimer);
     timer = null;
+    settleTimer = null;
   };
 
   wc.on("did-finish-load", () => {
@@ -197,11 +203,13 @@ export function attach(win: BrowserWindow, { isDark, log = () => {} }: AttachDep
         if (color) log(`[win] caption overlay blended to ${color}`);
       });
     void blend();
-    setTimeout(() => void blend(), 1200).unref?.();
+    settleTimer = setTimeout(() => void blend(), 1200);
+    settleTimer.unref?.();
     timer = setInterval(() => void blend(), 4000);
     timer.unref?.();
   });
 
+  win.once("close", stop);
   win.once("closed", stop);
   syncOverlay(win, isDark());
 }

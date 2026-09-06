@@ -574,7 +574,7 @@ export class ClaudeHarness implements Harness {
       const key = turn.toolKeys.get(toolUseId) ?? `tool:${toolUseId}`;
       turn.toolKeys.set(toolUseId, key);
       const structured = message.tool_use_result;
-      const { output, truncated } = this.clampOutput(
+      const { output, truncated, fullOutput } = this.clampOutput(
         structured !== undefined ? structured : (block.content ?? null),
       );
       const status: ToolCallStatus = block.is_error ? "error" : "success";
@@ -585,7 +585,7 @@ export class ClaudeHarness implements Harness {
         output,
         status,
         toolUseId,
-        ...(truncated ? { truncated: true } : {}),
+        ...(truncated ? { truncated: true, fullOutput } : {}),
       });
     }
   }
@@ -891,14 +891,25 @@ export class ClaudeHarness implements Harness {
     });
   }
 
-  /** SPEC R25: keep the whole output in the row, send a stub when it is huge. */
-  private clampOutput(value: unknown): { output: unknown; truncated: boolean } {
+  /**
+   * SPEC R25: keep the whole output in the row, show a stub when it is huge.
+   *
+   * `output` is the stub the transcript renders; `fullOutput` carries the
+   * original value so the row still holds it whole (SPEC §Edge Cases) and the
+   * stub can be expanded. Both are only set when the value actually overflows.
+   */
+  private clampOutput(value: unknown): {
+    output: unknown;
+    truncated: boolean;
+    fullOutput?: unknown;
+  } {
     const limit = this.deps.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS;
     if (typeof value === "string") {
       if (value.length <= limit) return { output: value, truncated: false };
       return {
         output: `${value.slice(0, limit)}\n… ${value.length - limit} more characters`,
         truncated: true,
+        fullOutput: value,
       };
     }
     if (value === null || value === undefined) return { output: value ?? null, truncated: false };
@@ -912,6 +923,7 @@ export class ClaudeHarness implements Harness {
     return {
       output: `${serialised.slice(0, limit)}\n… ${serialised.length - limit} more characters`,
       truncated: true,
+      fullOutput: value,
     };
   }
 
@@ -919,6 +931,13 @@ export class ClaudeHarness implements Harness {
     if (turn.settled) return;
     turn.settled = true;
     if (turn.interruptTimer) clearTimeout(turn.interruptTimer);
+    // `toolNames`/`toolInputs` only exist to rebuild a tool_call block while its
+    // turn is live. A harness outlives every turn in a session (R15), so keeping
+    // them would grow without bound over a long-running conversation.
+    for (const toolUseId of turn.toolKeys.keys()) {
+      this.toolNames.delete(toolUseId);
+      this.toolInputs.delete(toolUseId);
+    }
     turn.out.push({ type: "turn", status, ...(error ? { error } : {}) });
     turn.out.close();
     if (this.active === turn) this.active = null;

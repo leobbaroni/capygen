@@ -56,6 +56,24 @@ interface ActiveTurn {
   blocks: Map<string, BlockSlot>;
 }
 
+/** The key both `harnesses` and `active` are stored under. */
+function agentKey(sessionId: string, agentId: string): string {
+  return `${sessionId}:${agentId}`;
+}
+
+/** How long shutdown waits for a backend to settle before giving up on it. */
+const DISPOSE_DEADLINE_MS = 2_000;
+
+function withDeadline(work: Promise<unknown>, ms: number): Promise<unknown> {
+  return Promise.race([
+    work,
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    }),
+  ]);
+}
+
 export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   const { store, broadcast, log } = deps;
   const makeHarness =
@@ -63,13 +81,20 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
 
   /** `sessionId:agentId` → harness. */
   const harnesses = new Map<string, Harness>();
-  /** One in-flight turn per session (round-table queuing lands in Phase 4). */
+  /**
+   * `sessionId:agentId` → the turn that agent is running. Keyed the same way
+   * as `harnesses`, not by session: a second `send` on another agent of the
+   * same session (round-table, Phase 4) must not evict the first agent's turn
+   * and take `interrupt` with it.
+   */
   const active = new Map<string, ActiveTurn>();
   /** requestId → the harness waiting for that answer. */
   const awaiting = new Map<string, Harness>();
+  /** Every `consume()` still running, so `dispose()` can wait for their writes. */
+  const consuming = new Set<Promise<void>>();
 
   function harnessFor(session: Session, agent: Agent): Harness {
-    const key = `${session.id}:${agent.id}`;
+    const key = agentKey(session.id, agent.id);
     const existing = harnesses.get(key);
     if (existing) return existing;
 
@@ -171,18 +196,34 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         }
         case "usage": {
           const agentId = store.turns.get(turn.turnId)?.agentId ?? null;
-          store.usage.record({
-            sessionId: turn.sessionId,
-            agentId,
-            turnId: turn.turnId,
-            backend: event.backend,
-            model: event.model,
-            inputTokens: event.usage.inputTokens,
-            outputTokens: event.usage.outputTokens,
-            cacheReadTokens: event.usage.cacheReadTokens,
-            cacheCreationTokens: event.usage.cacheCreationTokens,
-            costUsd: event.usage.costUsd,
-          });
+          // `byModel` is the split the harness went to the trouble of
+          // computing (a Task sub-agent may run on a different model than the
+          // agent that spawned it). Recording only `event.usage` under
+          // `event.model` would file the sub-agent's tokens under the lead's
+          // model and break R23's per-model aggregation. The single-row path
+          // is the fallback for harnesses that report no split.
+          const perModel = Object.entries(event.byModel).filter(
+            ([, u]) => u.inputTokens + u.outputTokens + u.cacheReadTokens +
+              u.cacheCreationTokens + u.costUsd > 0,
+          );
+          const rows =
+            perModel.length > 0
+              ? perModel.map(([model, usage]) => ({ model, usage }))
+              : [{ model: event.model, usage: event.usage }];
+          for (const { model, usage } of rows) {
+            store.usage.record({
+              sessionId: turn.sessionId,
+              agentId,
+              turnId: turn.turnId,
+              backend: event.backend,
+              model,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              cacheReadTokens: usage.cacheReadTokens,
+              cacheCreationTokens: usage.cacheCreationTokens,
+              costUsd: usage.costUsd,
+            });
+          }
           break;
         }
         case "session": {
@@ -211,6 +252,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       return;
     }
 
+    // One turn per agent. Letting a second send through would hand the harness
+    // a prompt it is bound to refuse and — worse — replace the entry
+    // `interrupt()` needs for the turn that is genuinely still streaming.
+    const key = agentKey(session.id, agent.id);
+    if (active.has(key)) {
+      const message = "this agent is already running a turn";
+      log.warn(`[engine] refused a second turn ${args.turnId} for ${key}`);
+      errorBlock(deps, session.id, args.turnId, message);
+      finishTurn(deps, session.id, args.turnId, "error", message);
+      return;
+    }
+
     // Anything that goes wrong before the stream exists must still close the
     // turn: a row left `streaming` is a composer that never unlocks.
     let harness: Harness;
@@ -224,26 +277,30 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         harness,
         blocks: new Map(),
       };
-      active.set(session.id, turn);
+      active.set(key, turn);
       events = harness.send({ turnId: args.turnId, text: args.text });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`[engine] could not start turn ${args.turnId}`, err);
-      active.delete(session.id);
+      active.delete(key);
       errorBlock(deps, session.id, args.turnId, message);
       finishTurn(deps, session.id, args.turnId, "error", message);
       return;
     }
 
-    void consume(turn, events)
+    const running = consume(turn, events)
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         log.error(`[engine] turn ${args.turnId} failed`, err);
+        // Nothing is reading this harness's stream any more, so a permission
+        // or question it asks next can never be answered and the backend would
+        // wait on it forever — taking every later turn on this agent with it.
+        void turn.harness.interrupt().catch(() => undefined);
         errorBlock(deps, session.id, args.turnId, message);
         finishTurn(deps, session.id, args.turnId, "error", message);
       })
       .finally(() => {
-        if (active.get(session.id) === turn) active.delete(session.id);
+        if (active.get(key) === turn) active.delete(key);
         // A stream that ended without a final status would leave the row
         // `streaming` and the composer locked; close it loudly instead.
         if (store.turns.get(turn.turnId)?.status === "streaming") {
@@ -256,15 +313,21 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           if (waiting === turn.harness) awaiting.delete(requestId);
         }
       });
+    consuming.add(running);
+    void running.finally(() => consuming.delete(running));
   }
 
   return {
     send,
 
     async interrupt(sessionId) {
-      const turn = active.get(sessionId);
-      if (!turn) return false;
-      return turn.harness.interrupt();
+      // Every agent of this session, not just one: in round-table mode more
+      // than one can be mid-turn and the user asked the *session* to stop.
+      const prefix = `${sessionId}:`;
+      const turns = [...active].filter(([key]) => key.startsWith(prefix)).map(([, t]) => t);
+      if (turns.length === 0) return false;
+      const results = await Promise.all(turns.map((t) => t.harness.interrupt()));
+      return results.some(Boolean);
     },
 
     answerPermission(requestId: string, answer: EnginePermissionAnswer): boolean {
@@ -290,13 +353,26 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       return [];
     },
 
-    dispose() {
-      for (const harness of harnesses.values()) {
-        void harness.dispose().catch(() => undefined);
-      }
+    /**
+     * Shutdown is a two-step wait, and both steps matter. Disposing a harness
+     * only *enqueues* the turn's final `interrupted` event; the `consume()`
+     * loop writes it a microtask later. Returning before those writes land is
+     * how a turn ends up frozen at `streaming` in SQLite, so `will-quit` can
+     * await this before closing the database.
+     */
+    async dispose() {
+      await withDeadline(
+        Promise.allSettled([...harnesses.values()].map((h) => h.dispose())),
+        DISPOSE_DEADLINE_MS,
+      );
+      // Bounded on purpose: a backend that never settles its turn must not be
+      // able to hang the app's shutdown (the same rule ClaudeHarness.dispose
+      // follows when it refuses to await the SDK's own teardown).
+      await withDeadline(Promise.allSettled([...consuming]), DISPOSE_DEADLINE_MS);
       harnesses.clear();
       active.clear();
       awaiting.clear();
+      consuming.clear();
     },
   };
 }

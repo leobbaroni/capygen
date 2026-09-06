@@ -44,6 +44,7 @@ import {
   type InvokeChannel,
 } from "@capygen/shared";
 import { createLogger, type Logger } from "./win/logger.js";
+import { isAppUrl } from "./win/navigation.js";
 import { attach as attachChrome, windowOptions } from "./win/chrome.js";
 import { createTrayIntegration, type TrayIntegration } from "./win/tray.js";
 import {
@@ -100,7 +101,15 @@ app.setName("capygen");
 const shellWindows = new Set<BrowserWindow>();
 
 function isDark(): boolean {
-  const theme = store?.settings.all().theme ?? "system";
+  // Never let a theme read decide the app's fate: this runs from timers that
+  // can outlive the database by a tick during shutdown, and `node:sqlite`
+  // throws "database is not open" rather than returning nothing.
+  let theme: string = "system";
+  try {
+    theme = store?.settings.all().theme ?? "system";
+  } catch {
+    /* store closed or mid-migration — fall back to the OS preference */
+  }
   if (theme === "dark") return true;
   if (theme === "light") return false;
   return nativeTheme.shouldUseDarkColors;
@@ -110,6 +119,30 @@ function rendererUrl(): { kind: "url" | "file"; value: string } {
   const devUrl = process.env[DEV_URL_ENV];
   if (devUrl) return { kind: "url", value: devUrl };
   return { kind: "file", value: RENDERER_INDEX };
+}
+
+/** Is this URL our own SPA? (`win/navigation.ts` holds the rule and its test.) */
+function isRendererUrl(raw: string): boolean {
+  return isAppUrl(raw, rendererUrl());
+}
+
+/**
+ * Refuse any top-level navigation away from the SPA; open real links outside.
+ *
+ * Without this a plain link inside model or tool output — clicked in the main
+ * frame — replaces the SPA with somebody else's page, and Electron re-runs the
+ * preload against it, handing that page the whole typed IPC client outside the
+ * renderer's own CSP.
+ */
+function guardNavigation(win: BrowserWindow): void {
+  const deny = (event: { preventDefault: () => void }, url: string): void => {
+    if (isRendererUrl(url)) return;
+    event.preventDefault();
+    log.warn(`[main] blocked in-window navigation to ${url}`);
+    if (url.startsWith("https://") || url.startsWith("http://")) void shell.openExternal(url);
+  };
+  win.webContents.on("will-navigate", (event, url) => deny(event, url));
+  win.webContents.on("will-redirect", (event, url) => deny(event, url));
 }
 
 function createWindow(): BrowserWindow {
@@ -132,7 +165,10 @@ function createWindow(): BrowserWindow {
       preload: PRELOAD,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // The preload only uses `contextBridge`/`ipcRenderer`, both available in
+      // a sandboxed preload, so there is no reason to give the renderer process
+      // Node's full API surface.
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -158,6 +194,7 @@ function createWindow(): BrowserWindow {
     void shell.openExternal(url);
     return { action: "deny" };
   });
+  guardNavigation(win);
 
   const target = rendererUrl();
   log.info(`[main] loading renderer from ${target.kind}: ${target.value}`);
@@ -230,8 +267,14 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   });
 
   for (const channel of INVOKE_CHANNEL_NAMES) {
-    ipcMain.handle(channel, async (_event, raw: unknown) => {
+    ipcMain.handle(channel, async (event, raw: unknown) => {
       try {
+        // Defence in depth behind `guardNavigation`: only a frame showing our
+        // own SPA may drive these channels.
+        const sender = event.senderFrame;
+        if (sender && !isRendererUrl(sender.url)) {
+          throw new Error(`capygen: ${channel} refused for ${sender.url}`);
+        }
         const args = parseInvokeArgs(channel, raw);
         const handler = context.handlers[channel] as (a: unknown) => unknown;
         const result = await handler(args);
@@ -267,6 +310,12 @@ app.whenReady().then(() => {
     onMigrate: (applied) => log.info(`[db] migrations applied: ${applied.join(", ")}`),
   });
   log.info(`[db] open at ${dbFile}`);
+  if (store.reconciled.turns > 0 || store.reconciled.sessions > 0) {
+    log.warn(
+      `[db] closed ${store.reconciled.turns} turn(s) and ${store.reconciled.sessions} session(s)` +
+        " left in flight by the previous run",
+    );
+  }
 
   // `--project=<dir>` / CAPYGEN_PROJECT_DIR pre-selects a folder so the landing
   // page can start a session without opening the picker. Never implicit: with
@@ -317,13 +366,42 @@ app.on("before-quit", () => {
   tray?.markQuitting();
 });
 
-app.on("will-quit", () => {
-  try {
-    ipc?.dispose();
-    tray?.destroy();
-    store?.close();
-    log?.info("[main] shut down cleanly");
-  } catch (err) {
-    log?.error("[main] shutdown error", err);
-  }
+/**
+ * Shutdown has to wait for the engine.
+ *
+ * Disposing a harness only *queues* the turn's final `interrupted` event; the
+ * runner writes it a microtask later. Closing SQLite in the same tick — which
+ * a synchronous `will-quit` handler does — makes that write throw, and the
+ * turn stays `streaming` in the database forever. So the first `will-quit`
+ * defers the quit, drains the engine, and only then closes the store and quits
+ * for real.
+ */
+let shuttingDown = false;
+
+app.on("will-quit", (event) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  event.preventDefault();
+  void (async () => {
+    try {
+      await ipc?.dispose();
+    } catch (err) {
+      log?.error("[main] engine shutdown error", err);
+    }
+    try {
+      tray?.destroy();
+      store?.close();
+      // Nulled, not just closed: anything still holding a timer (the caption
+      // blend, geometry persistence) reads `store?.` and must find nothing
+      // rather than a closed handle that throws.
+      store = null;
+      log?.info("[main] shut down cleanly");
+    } catch (err) {
+      log?.error("[main] shutdown error", err);
+    }
+    // `exit`, not `quit`: the quit we deferred above was cancelled, and asking
+    // for another one only re-runs this sequence. Everything a clean quit does
+    // — engine drained, tray gone, database closed — has already happened.
+    app.exit(0);
+  })();
 });

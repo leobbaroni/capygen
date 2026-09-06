@@ -24,11 +24,20 @@ export function TurnRail({ turns }: { turns: Turn[] }) {
       className="pointer-events-auto fixed top-1/2 right-1.5 z-10 hidden -translate-y-1/2 flex-col items-center gap-1 lg:flex"
     >
       {turns.map((turn) => (
-        <a
+        <button
           key={turn.id}
-          href={`#turn-${turn.id}`}
+          type="button"
+          // Not an `<a href="#turn-…">`: the shell runs under a HashRouter,
+          // where that hash is a *route* — clicking one navigated out of the
+          // session to the landing page instead of scrolling.
+          onClick={() =>
+            document
+              .getElementById(`turn-${turn.id}`)
+              ?.scrollIntoView({ block: "start", behavior: "smooth" })
+          }
           data-testid="turn-rail-dot"
           title={`${turn.role} turn — ${turn.status}`}
+          aria-label={`Scroll to the ${turn.role} turn (${turn.status})`}
           className={cn(
             "size-1.5 shrink-0 rounded-full transition-transform hover:scale-150",
             STATUS_CLASS[turn.status],

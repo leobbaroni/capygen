@@ -189,6 +189,45 @@
 - Checks: `pnpm typecheck` clean · `pnpm test` 142 passed (13 files) · `pnpm build` clean ·
   `pnpm e2e` 7 passed (5 offline + 2 live, 1.0 min, ~$0.02). `docs/RUN.md` written.
 
+## 2026-09-06 — Phase 2 / D: review fixes
+
+- The Phase 2 adversarial review's verified findings are fixed. Correctness: the runner's `active`
+  map is keyed `sessionId:agentId` like `harnesses` (a second `send` no longer evicts the turn
+  `interrupt` needs) and a send to a busy agent is refused before it reaches the harness; a failure
+  inside `consume()` now interrupts the harness, so a permission nobody can answer cannot wedge the
+  agent for the rest of the run; `Engine.dispose()` is async and `will-quit` awaits it before
+  closing SQLite, so a turn's final status is written instead of thrown away; usage rows are split
+  by `event.byModel`, so a sub-agent on another model is not billed to the lead.
+- Security: every window guards `will-navigate`/`will-redirect` (`win/navigation.ts`, unit-tested) —
+  a link in model output could otherwise replace the SPA and be handed the preload's IPC client —
+  `sandbox: true` (the preload only requires `electron`, verified in the bundle), the IPC handlers
+  check the sender frame, and the log redactor now also matches the JSON form `fmt()` actually
+  writes (`"token":"…"` was going to disk in the clear).
+- UX parity: the slash menu is out of the `overflow-hidden` wrapper (it was clipped to nothing while
+  Enter still picked an invisible command), picking a command inserts it instead of sending it (so
+  `/model opus` is reachable), filtering is substring, Escape dismisses; the turn rail's dots are
+  buttons (an `#turn-…` anchor navigated out of the session under HashRouter); a failed send
+  restores the draft and shows the error; the transcript only follows a stream while it is pinned to
+  the bottom and offers a jump-to-bottom button; `AskUserQuestion` cards take free text (R32) and
+  render option descriptions; permission/question answers report whether the backend actually took
+  them and say so on the card when it did not; the settings nav clears the drag strip (its first
+  link was unclickable). A turn left `streaming` by a crash is reconciled when the store opens, and
+  `chat.interrupt` flips a stale row even with nothing to stop — that pair was a permanently locked
+  composer after any quit mid-turn.
+- R25: `clampOutput` keeps the whole value on the block (`fullOutput`) instead of discarding it, and
+  the tool card's stub expands. Also from the low-severity list: the harness evicts per-turn tool
+  bookkeeping on settle, `.sidebar-row` and the reference's sidebar edge treatment are in `index.css`,
+  the mascot cross-fade animates (a transition could never run on a layer mounted at opacity 0), and
+  the attach button is disabled rather than accepting files it drops.
+- Fell out of the shutdown fix: the caption-blend timers outlived the window and read a closed
+  database (`uncaughtException: database is not open`), which stopped the app exiting at all —
+  `win/chrome.ts` now clears its one-shot timer, `isDark()` tolerates a closed store, and the
+  deferred quit ends in `app.exit(0)` (a re-`quit()` after a prevented one never terminated).
+- Checks: `pnpm typecheck` clean · `pnpm test` 166 passed (14 files) · `pnpm build` clean ·
+  `pnpm e2e` 7 passed (5 offline + 2 live, 58.6 s). Deferred: an AskUserQuestion reject path (no
+  deny route exists through IPC → engine → `canUseTool` yet — Phase 3) and `remark-breaks` for
+  multi-line user messages (needs a new dependency).
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.

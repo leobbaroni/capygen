@@ -75,7 +75,7 @@ describe("Composer", () => {
     expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
   });
 
-  it("filters the slash menu as the user types and sends the selected command", async () => {
+  it("filters the slash menu as the user types and inserts the selected command", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderComposer({ commands: COMMANDS });
     const input = screen.getByTestId("composer-input");
@@ -88,8 +88,74 @@ describe("Composer", () => {
 
     await user.click(screen.getByText("/compact"));
 
-    expect(onSubmit).toHaveBeenCalledWith("/compact");
-    expect(input).toHaveValue("");
+    // Inserted, not sent: `/model opus` and `/cockpit:pilot <task>` need their
+    // argument typed after the command before it goes anywhere.
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveValue("/compact ");
+    expect(screen.queryByTestId("slash-menu")).not.toBeInTheDocument();
+
+    await user.type(input, "now{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith("/compact now");
+  });
+
+  it("matches a namespaced command on a substring, not just its prefix", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      commands: [
+        ...COMMANDS,
+        { name: "/cockpit:pilot", description: "Phase pilot", source: "plugin" },
+      ],
+    });
+
+    await user.type(screen.getByTestId("composer-input"), "/pilot");
+
+    const items = screen.getAllByTestId("slash-menu-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("/cockpit:pilot");
+  });
+
+  it("dismisses the slash menu on Escape and reopens it as the query changes", async () => {
+    const user = userEvent.setup();
+    renderComposer({ commands: COMMANDS });
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "/co");
+    expect(screen.getByTestId("slash-menu")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("slash-menu")).not.toBeInTheDocument();
+
+    await user.type(input, "n");
+    expect(screen.getByTestId("slash-menu")).toBeInTheDocument();
+  });
+
+  it("restores the draft and shows the error when the send fails", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockRejectedValue(new Error("unknown session"));
+    render(
+      <MemoryRouter>
+        <Composer onSubmit={onSubmit} testId="composer" />
+      </MemoryRouter>,
+    );
+    const input = screen.getByTestId("composer-input");
+
+    await user.type(input, "keep me{Enter}");
+
+    expect(onSubmit).toHaveBeenCalledWith("keep me");
+    expect(input).toHaveValue("keep me");
+    expect(screen.getByTestId("composer-error")).toHaveTextContent("unknown session");
+  });
+
+  it("renders the slash menu outside the clipping wrapper, as a child of the form", async () => {
+    const user = userEvent.setup();
+    renderComposer({ commands: COMMANDS });
+
+    await user.type(screen.getByTestId("composer-input"), "/co");
+
+    // The textarea wrapper is `overflow-hidden`, and the menu sits above the
+    // composer — inside it, the popup is clipped away entirely.
+    const menu = screen.getByTestId("slash-menu");
+    expect(menu.parentElement).toBe(screen.getByTestId("composer"));
   });
 
   it("does not open the slash menu for text that merely contains a slash", async () => {

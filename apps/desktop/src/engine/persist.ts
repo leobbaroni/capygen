@@ -58,6 +58,10 @@ export function errorBlock(
  * Move a turn (and with it the session) to its final state and tell every
  * renderer. `error` marks the session errored; anything else leaves it idle so
  * the composer unlocks.
+ *
+ * The session only follows the turn once nothing else in it is still
+ * streaming: a second agent turn ending — or being refused — must not declare
+ * the session idle or errored while a healthy turn is still producing blocks.
  */
 export function finishTurn(
   deps: EngineDeps,
@@ -67,7 +71,9 @@ export function finishTurn(
   error?: string,
 ): void {
   deps.store.turns.setStatus(turnId, status);
-  deps.store.sessions.setStatus(sessionId, status === "error" ? "error" : "idle");
+  if (!deps.store.turns.hasStreaming(sessionId)) {
+    deps.store.sessions.setStatus(sessionId, status === "error" ? "error" : "idle");
+  }
   deps.broadcast("chat.turnStatus", {
     sessionId,
     turnId,

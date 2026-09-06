@@ -50,8 +50,21 @@
   opacity: 1;
 }
 
+/* The outgoing frame is mounted only once the state has already changed, so it
+   has no previous opacity to transition *from* — a `transition` would never
+   run and the mascot would hard-cut. An animation plays on mount instead. */
 .capygen-mascot__layer--out {
   opacity: 0;
+  animation: capygen-mascot-out 150ms ease forwards;
+}
+
+@keyframes capygen-mascot-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 .capygen-mascot__img {
@@ -195,5 +208,6 @@
   }
   .capygen-mascot__layer {
     transition: none !important;
+    animation: none !important;
   }
 }

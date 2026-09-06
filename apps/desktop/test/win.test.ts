@@ -23,6 +23,7 @@ import {
 } from "../src/win/windowState.js";
 import { createTrayIntegration } from "../src/win/tray.js";
 import { resolveInitialProjectDir } from "../src/win/projectArg.js";
+import { isAppUrl } from "../src/win/navigation.js";
 
 const tempDirs: string[] = [];
 function tempDir(): string {
@@ -43,6 +44,35 @@ describe("logger", () => {
     expect(redact("ANTHROPIC_API_KEY=sk-ant-0123456789abcdef")).toContain("[redacted]");
     expect(redact("api_key: hunter2")).toBe("api_key: [redacted]");
     expect(redact("nothing to hide here")).toBe("nothing to hide here");
+  });
+
+  it("redacts the JSON form the logger actually writes", () => {
+    // `fmt()` serialises any non-string argument with JSON.stringify, which
+    // puts a closing quote between the key and its colon — the name rules have
+    // to survive that or every logged object goes to disk in the clear.
+    const line = redact(
+      JSON.stringify({
+        token: "t0psecret",
+        password: "hunter2",
+        api_key: "ak_live_1234",
+        cookie: "sid=abc",
+        sessionId: "ses_private",
+        keep: "visible",
+      }),
+    );
+    for (const secret of ["t0psecret", "hunter2", "ak_live_1234", "ses_private"]) {
+      expect(line).not.toContain(secret);
+    }
+    expect(line).toContain('"keep":"visible"');
+  });
+
+  it("writes a logged object redacted", () => {
+    const dir = tempDir();
+    const log = createLogger({ dir, fileName: "t.log" });
+    log.info("creds", { token: "t0psecret" });
+    const text = fs.readFileSync(path.join(dir, "t.log"), "utf8");
+    expect(text).not.toContain("t0psecret");
+    expect(text).toContain("[redacted]");
   });
 
   it("writes timestamped, levelled lines to its file", () => {
@@ -337,5 +367,40 @@ describe("launch-time project folder", () => {
     expect(
       resolveInitialProjectDir({ argv: ["--project"], env: {}, isDirectory }),
     ).toBeNull();
+  });
+});
+
+describe("navigation guard", () => {
+  const file = { kind: "file", value: "C:\\app\\renderer\\dist\\index.html" } as const;
+  const dev = { kind: "url", value: "http://localhost:5173/" } as const;
+
+  it("accepts only the built index file", () => {
+    expect(isAppUrl("file:///C:/app/renderer/dist/index.html", file)).toBe(true);
+    // The SPA is a HashRouter, so its routes are the same document.
+    expect(isAppUrl("file:///C:/app/renderer/dist/index.html#/settings/general", file)).toBe(
+      true,
+    );
+    expect(isAppUrl("file:///C:/app/renderer/dist/evil.html", file)).toBe(false);
+    expect(isAppUrl("file:///C:/Windows/System32/drivers/etc/hosts", file)).toBe(false);
+  });
+
+  it("refuses every remote origin, which is what carries the preload away", () => {
+    for (const url of [
+      "https://evil.example/steal",
+      "http://127.0.0.1:9/",
+      "data:text/html,<script>1</script>",
+      "javascript:alert(1)",
+      "about:blank",
+      "not a url",
+    ]) {
+      expect(isAppUrl(url, file)).toBe(false);
+      expect(isAppUrl(url, dev)).toBe(false);
+    }
+  });
+
+  it("accepts the dev server's own origin while `pnpm dev` runs", () => {
+    expect(isAppUrl("http://localhost:5173/index.html", dev)).toBe(true);
+    expect(isAppUrl("http://localhost:5174/index.html", dev)).toBe(false);
+    expect(isAppUrl("https://localhost:5173/", dev)).toBe(false);
   });
 });

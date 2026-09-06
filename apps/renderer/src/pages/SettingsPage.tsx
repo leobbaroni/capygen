@@ -41,7 +41,10 @@ export function SettingsPage() {
       <nav
         aria-label="Settings sections"
         data-testid="settings-nav"
-        className="w-56 shrink-0 overflow-y-auto border-r border-border-weak p-2"
+        // The drag strip is fixed across the top 36px of the window, so the
+        // first link would sit under it and clicking it would drag the window
+        // instead of navigating.
+        className="titlebar-top-clearance w-56 shrink-0 overflow-y-auto border-r border-border-weak p-2"
       >
         {SETTINGS_SECTIONS.map((s) => (
           <NavLink

@@ -51,7 +51,8 @@ export type IpcHandlers = {
 export interface IpcContext {
   handlers: IpcHandlers;
   engine: Engine;
-  dispose(): void;
+  /** Resolves once every backend is down and its last turn status is written. */
+  dispose(): void | Promise<void>;
 }
 
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
@@ -182,23 +183,30 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return { userTurnId: userTurn.id, agentTurnId: agentTurn.id };
     },
 
+    /**
+     * Stop whatever the engine is running, then make sure no row is left
+     * `streaming` either way. The second half is not redundant: a row can
+     * outlive the engine that wrote it (a crash, or a quit mid-turn), and
+     * while it says `streaming` the renderer keeps the composer locked with a
+     * Stop button that would otherwise do nothing at all.
+     */
     "chat.interrupt": async (args) => {
       const stopped = await engine.interrupt(args.sessionId);
-      if (stopped) {
-        const turns = store.turns.list(args.sessionId);
-        const live = [...turns].reverse().find((t) => t.status === "streaming");
-        if (live) {
-          store.turns.setStatus(live.id, "interrupted");
-          broadcast("chat.turnStatus", {
-            sessionId: args.sessionId,
-            turnId: live.id,
-            status: "interrupted",
-          });
-        }
+      const stale = store.turns.list(args.sessionId).filter((t) => t.status === "streaming");
+      for (const turn of stale) {
+        store.turns.setStatus(turn.id, "interrupted");
+        broadcast("chat.turnStatus", {
+          sessionId: args.sessionId,
+          turnId: turn.id,
+          status: "interrupted",
+        });
+      }
+      const flipped = stale.length > 0;
+      if (stopped || flipped) {
         store.sessions.setStatus(args.sessionId, "idle");
         emitSession(args.sessionId);
       }
-      return { ok: stopped };
+      return { ok: stopped || flipped };
     },
 
     /**
@@ -225,6 +233,12 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     /**
      * Unblocks the backend first — the agent is what is actually waiting — then
      * records the decision on the block so a relaunch can still show it.
+     *
+     * `ok` is whether the backend actually took the answer. Nothing is waiting
+     * on a request whose turn has ended (or whose engine is from a previous
+     * launch), and marking such a card "Allowed" would tell the user their
+     * click reached an agent that no longer exists — so the row is left
+     * undecided and the renderer says the request is stale.
      */
     "permission.answer": (args) => {
       const delivered = engine.answerPermission(args.requestId, {
@@ -232,8 +246,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         ...(args.updatedInput !== undefined ? { updatedInput: args.updatedInput } : {}),
         ...(args.message !== undefined ? { message: args.message } : {}),
       });
+      if (!delivered) return { ok: false };
       const block = findBlockByRequestId(store, args.requestId, "permission");
-      if (!block || block.kind !== "permission") return { ok: delivered };
+      if (!block || block.kind !== "permission") return { ok: true };
       emitBlock({
         ...block,
         decision: {
@@ -250,8 +265,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
 
     "question.answer": (args) => {
       const delivered = engine.answerQuestion(args.requestId, args.answers);
+      if (!delivered) return { ok: false };
       const block = findBlockByRequestId(store, args.requestId, "question");
-      if (!block || block.kind !== "question") return { ok: delivered };
+      if (!block || block.kind !== "question") return { ok: true };
       emitBlock({ ...block, answers: args.answers, updatedAt: Date.now() });
       return { ok: true };
     },

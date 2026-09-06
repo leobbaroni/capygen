@@ -170,6 +170,13 @@ export const ToolCallBlockSchema = z.object({
   toolUseId: z.string().optional(),
   /** Set when `output` is the truncated stub of a larger result (R25). */
   truncated: z.boolean().optional(),
+  /**
+   * The whole result when `output` is only its stub. SPEC §Edge Cases requires
+   * a big tool output to be "stored whole, sent to the model truncated with a
+   * stub", and R25's stub is "expandable" — neither is possible if the rest of
+   * the value is dropped at the harness boundary.
+   */
+  fullOutput: z.unknown().optional(),
 });
 
 export const DiffBlockSchema = z.object({

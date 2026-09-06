@@ -347,6 +347,16 @@ export class TurnsRepo {
     this.db.run("UPDATE turns SET status = ? WHERE id = ?", status, id);
     return this.get(id);
   }
+
+  /** Is any turn in this session still `streaming`? */
+  hasStreaming(sessionId: string): boolean {
+    return (
+      this.db.get<Row>(
+        "SELECT 1 AS n FROM turns WHERE session_id = ? AND status = 'streaming' LIMIT 1",
+        sessionId,
+      ) !== undefined
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

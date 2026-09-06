@@ -6,7 +6,7 @@
  * ExitPlanMode / AskUserQuestion special-casing here because those already
  * arrive as their own block kinds (`question`) in our contract.
  */
-import { CheckIcon, ShieldQuestionIcon, XIcon } from "lucide-react";
+import { CheckIcon, CircleSlashIcon, ShieldQuestionIcon, XIcon } from "lucide-react";
 import type { PermissionBlock } from "@capygen/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { toPrettyJson } from "./blockFormat";
 export function PermissionCard({ block }: { block: PermissionBlock }) {
   const answerPermission = useAppStore((s) => s.answerPermission);
   const { request, decision } = block;
+  const stale = useAppStore((s) => s.staleRequests.includes(request.requestId));
   const inputPreview = toPrettyJson(request.input);
 
   if (decision) {
@@ -36,6 +37,25 @@ export function PermissionCard({ block }: { block: PermissionBlock }) {
           <span className="font-mono text-xs text-muted-foreground">{request.toolName}</span>
         </AlertTitle>
         {decision.message ? <AlertDescription>{decision.message}</AlertDescription> : null}
+      </Alert>
+    );
+  }
+
+  // The answer went nowhere: no agent is waiting on this request any more (its
+  // turn ended, or it belongs to a previous launch of the app). Saying so beats
+  // showing "Allowed" for a decision nothing acted on.
+  if (stale) {
+    return (
+      <Alert data-testid="block-permission" data-state="stale" variant="default">
+        <CircleSlashIcon className="size-4 text-muted-foreground" />
+        <AlertTitle>
+          No longer waiting
+          <span className="font-mono text-xs text-muted-foreground">{request.toolName}</span>
+        </AlertTitle>
+        <AlertDescription>
+          This request is not live any more, so the answer was not delivered. Send a new
+          message to ask the agent again.
+        </AlertDescription>
       </Alert>
     );
   }

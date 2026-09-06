@@ -36,6 +36,7 @@ function renderBlock(block: Block, isUser = false) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  useAppStore.setState({ staleRequests: [] });
 });
 
 describe("BlockRenderer", () => {
@@ -170,6 +171,92 @@ describe("BlockRenderer", () => {
     const block: ErrorBlock = { ...base, id: "b8", kind: "error", message: "boom" };
     renderBlock(block);
     expect(screen.getByTestId("block-error")).toHaveTextContent("boom");
+  });
+
+  it("expands a truncated tool output back to the whole value (R25)", async () => {
+    const user = userEvent.setup();
+    const whole = `${"x".repeat(64)}TAIL`;
+    const block: ToolCallBlock = {
+      ...base,
+      id: "b3t",
+      kind: "tool_call",
+      name: "Read",
+      input: { path: "big.txt" },
+      output: `${"x".repeat(64)}
+… 4 more characters`,
+      truncated: true,
+      fullOutput: whole,
+      status: "success",
+    };
+    renderBlock(block);
+    await user.click(screen.getByText("Read"));
+    const card = screen.getByTestId("block-tool-call");
+    expect(card).toHaveTextContent("truncated");
+    expect(card).not.toHaveTextContent("TAIL");
+    await user.click(screen.getByTestId("tool-output-expand"));
+    expect(card).toHaveTextContent("TAIL");
+  });
+
+  it("says a permission answer went nowhere instead of showing it as decided", () => {
+    useAppStore.setState({ staleRequests: ["req-stale"] });
+    const block: PermissionBlock = {
+      ...base,
+      id: "b5c",
+      kind: "permission",
+      request: { requestId: "req-stale", toolName: "Bash", input: {}, suggestions: [] },
+      decision: null,
+    };
+    renderBlock(block);
+    const card = screen.getByTestId("block-permission");
+    expect(card).toHaveAttribute("data-state", "stale");
+    expect(card).toHaveTextContent("not live any more");
+    expect(screen.queryByTestId("block-permission-allow")).not.toBeInTheDocument();
+  });
+
+  it("answers a question with free text when no option fits (R32)", async () => {
+    const user = userEvent.setup();
+    const answerQuestion = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerQuestion });
+    const block: QuestionBlock = {
+      ...base,
+      id: "b6b",
+      kind: "question",
+      requestId: "req-3",
+      questions: [
+        {
+          question: "Which framework?",
+          multiSelect: false,
+          options: [
+            { label: "Vite", description: "The bundler" },
+            { label: "Next" },
+          ],
+        },
+      ],
+      answers: null,
+    };
+    renderBlock(block);
+    // Option descriptions are rendered, not hidden in a tooltip.
+    expect(screen.getByTestId("block-question")).toHaveTextContent("The bundler");
+
+    await user.click(screen.getByTestId("block-question-other"));
+    await user.type(screen.getByTestId("block-question-other-input"), "Astro");
+    await user.click(screen.getByTestId("block-question-submit"));
+    expect(answerQuestion).toHaveBeenCalledWith("req-3", { "Which framework?": "Astro" });
+  });
+
+  it("says an AskUserQuestion answer went nowhere when nothing was waiting", () => {
+    useAppStore.setState({ staleRequests: ["req-4"] });
+    const block: QuestionBlock = {
+      ...base,
+      id: "b6c",
+      kind: "question",
+      requestId: "req-4",
+      questions: [{ question: "Which?", multiSelect: false, options: [{ label: "A" }] }],
+      answers: null,
+    };
+    renderBlock(block);
+    expect(screen.getByTestId("block-question")).toHaveAttribute("data-state", "stale");
+    expect(screen.queryByTestId("block-question-submit")).not.toBeInTheDocument();
   });
 
   it("renders a usage block's totals", () => {

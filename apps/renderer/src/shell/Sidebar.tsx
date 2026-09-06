@@ -63,7 +63,7 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
     <aside
       aria-label="Sessions"
       data-testid="sidebar"
-      className="conversations-sidebar flex w-[260px] shrink-0 flex-col border-r border-border bg-card select-none"
+      className="conversations-sidebar flex w-[260px] shrink-0 flex-col bg-card select-none"
     >
       {/* Sits under the caption buttons only on the right edge of the window;
           the sidebar is on the left, so it just needs the title-bar height.

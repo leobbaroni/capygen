@@ -98,8 +98,15 @@ class FakeHarness implements Harness {
     return null;
   }
 
+  /**
+   * Mirrors `ClaudeHarness.dispose`: settle the live turn (the queue is what
+   * the runner is iterating) and only then go away. The runner's shutdown
+   * contract depends on that event being pushed.
+   */
   async dispose(): Promise<void> {
     this.disposed += 1;
+    this.events.push({ type: "turn", status: "interrupted" });
+    this.events.close();
   }
 }
 
@@ -157,8 +164,8 @@ beforeEach(() => {
   ipc = makeContext();
 });
 
-afterEach(() => {
-  ipc.dispose();
+afterEach(async () => {
+  await ipc.dispose();
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -249,6 +256,50 @@ describe("streaming into rows", () => {
     expect(store.usage.totalsBySession(sessionId).costUsd).toBeCloseTo(0.161, 10);
   });
 
+  it("splits a usage event by model so a sub-agent is not billed to the lead (R23)", async () => {
+    const { sessionId } = await newSession();
+    const turnId = await send(sessionId, "spawn a sub-agent");
+
+    harness.events.push({
+      type: "usage",
+      backend: "claude",
+      model: "claude-sonnet-5",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 30,
+        cacheReadTokens: 100,
+        cacheCreationTokens: 0,
+        costUsd: 0.3,
+      },
+      byModel: {
+        "claude-sonnet-5": {
+          inputTokens: 4,
+          outputTokens: 10,
+          cacheReadTokens: 100,
+          cacheCreationTokens: 0,
+          costUsd: 0.1,
+        },
+        "claude-opus-5": {
+          inputTokens: 6,
+          outputTokens: 20,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          costUsd: 0.2,
+        },
+      },
+    });
+    harness.events.push({ type: "turn", status: "done" });
+    harness.events.close();
+
+    await vi.waitFor(() => expect(store.usage.listBySession(sessionId)).toHaveLength(2));
+    const rows = store.usage.listBySession(sessionId);
+    const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
+    expect(byModel["claude-sonnet-5"]).toMatchObject({ turnId, outputTokens: 10, costUsd: 0.1 });
+    expect(byModel["claude-opus-5"]).toMatchObject({ turnId, outputTokens: 20, costUsd: 0.2 });
+    // The session total still adds up to what the harness reported.
+    expect(store.usage.totalsBySession(sessionId).costUsd).toBeCloseTo(0.3, 10);
+  });
+
   it("marks the turn errored and keeps the message when the harness throws", async () => {
     const { sessionId } = await newSession();
     const turnId = await send(sessionId, "hi");
@@ -303,11 +354,14 @@ describe("permission and question round-trips", () => {
     const saved = store.blocks.get(asked.blockId);
     expect(saved?.kind === "permission" && saved.decision?.behavior).toBe("allow");
 
-    // A second answer for the same request has nothing left to unblock.
+    // A second answer for the same request has nothing left to unblock, and
+    // says so instead of overwriting the decision that did land.
     expect(await call("permission.answer", { requestId: "req_1", behavior: "deny" })).toEqual({
-      ok: true,
+      ok: false,
     });
     expect(harness.answers).toHaveLength(1);
+    const again = store.blocks.get(asked.blockId);
+    expect(again?.kind === "permission" && again.decision?.behavior).toBe("allow");
   });
 
   it("delivers AskUserQuestion answers keyed by question text", async () => {
@@ -364,7 +418,7 @@ describe("backend session lifecycle", () => {
     expect(seenAgents[0]?.resumeSessionId).toBeNull();
 
     // Relaunch: new context, same database, nothing in memory.
-    ipc.dispose();
+    await ipc.dispose();
     expect(harness.disposed).toBe(1);
     ipc = makeContext();
 
@@ -412,6 +466,63 @@ describe("backend session lifecycle", () => {
     expect(commands.at(-1)).toMatchObject({ name: "/cockpit:pilot", source: "plugin" });
     // Without a session there is no backend to ask.
     expect((await call("chat.listCommands", {})) as SlashCommand[]).toHaveLength(7);
+  });
+});
+
+describe("one turn per agent, and shutdown", () => {
+  it("refuses a second turn while one is streaming and keeps interrupt pointed at the live one", async () => {
+    const { sessionId } = await newSession();
+    const first = await send(sessionId, "long job");
+
+    // A double Enter, a retried IPC call, or (Phase 4) a second agent: the
+    // second send must not evict the entry `interrupt` needs.
+    const second = (await call("chat.send", { sessionId, text: "again" })) as {
+      agentTurnId: string;
+    };
+    await vi.waitFor(() =>
+      expect(store.turns.get(second.agentTurnId)?.status).toBe("error"),
+    );
+    expect(harness.prompts).toEqual(["long job"]);
+    // The healthy turn is untouched, and so is the session it belongs to.
+    expect(store.turns.get(first)?.status).toBe("streaming");
+    expect(store.sessions.get(sessionId)?.status).toBe("running");
+
+    expect(await call("chat.interrupt", { sessionId })).toEqual({ ok: true });
+    expect(harness.interrupted).toBe(1);
+    await vi.waitFor(() => expect(store.turns.get(first)?.status).toBe("interrupted"));
+  });
+
+  it("interrupts the harness when the stream itself fails, so it is not left waiting", async () => {
+    const { sessionId } = await newSession();
+    const turnId = await send(sessionId, "hi");
+    harness.events.fail(new Error("BlockSchema.parse: bad row"));
+
+    await vi.waitFor(() => expect(store.turns.get(turnId)?.status).toBe("error"));
+    // Nothing is reading the harness's events any more: without this it would
+    // sit forever on a `canUseTool` answer nobody can deliver, and every later
+    // turn on that agent would fail with "already running a turn".
+    await vi.waitFor(() => expect(harness.interrupted).toBe(1));
+  });
+
+  it("finishes writing the last turn status before dispose() resolves (shutdown)", async () => {
+    const { sessionId } = await newSession();
+    const turnId = await send(sessionId, "streaming when the app quits");
+    expect(store.turns.get(turnId)?.status).toBe("streaming");
+
+    // `will-quit` closes SQLite straight after this resolves; a turn still
+    // `streaming` here is one the next launch shows as running forever.
+    await ipc.dispose();
+    expect(store.turns.get(turnId)?.status).not.toBe("streaming");
+    expect(store.sessions.get(sessionId)?.status).toBe("idle");
+  });
+
+  it("flips a turn left streaming by a crash, even with nothing to stop", async () => {
+    const { sessionId } = await newSession();
+    // What a relaunch sees: a row from a previous process, no engine behind it.
+    const orphan = store.turns.create({ sessionId, role: "agent", status: "streaming" });
+    expect(await call("chat.interrupt", { sessionId })).toEqual({ ok: true });
+    expect(store.turns.get(orphan.id)?.status).toBe("interrupted");
+    expect(store.sessions.get(sessionId)?.status).toBe("idle");
   });
 });
 

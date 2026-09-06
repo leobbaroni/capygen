@@ -40,20 +40,26 @@ const DEFAULTS = { maxBytes: 2 * 1024 * 1024, keep: 5, fileName: "capygen-deskto
  * Mask secret-shaped values before a line reaches disk: bearer tokens,
  * `token=` / `password=` pairs, session cookies, and any long opaque value
  * after `=`.
+ *
+ * The name rules have to survive JSON too, because `fmt()` below serialises
+ * every non-string, non-Error argument with `JSON.stringify` — which puts a
+ * closing quote between the key and its separator (`"token":"…"`). Matching
+ * only `token=` / `token:` would leave every logged object in the clear, so
+ * the optional quote is part of each pattern.
  */
+const NAMED_SECRET = /((?:token|password|passwd|secret|api[_-]?key|cookie)"?\s*[=:]\s*"?)[^\s&"',;}\]]+/gi;
+// `name=value`, or the JSON form `"name": "value"` — but not a bare
+// `Authorization: …` header line, whose value the Bearer rule already handles.
+const SESSION_LIKE =
+  /(\b[A-Za-z0-9_\-]*(?:sess|session|csrf|auth)[A-Za-z0-9_\-]*(?:"\s*:\s*"?|=))[^;\s"',}\]]+/gi;
+
 export function redact(line: unknown): string {
   return String(line)
     .replace(/(Bearer\s+)[A-Za-z0-9._\-]+/gi, "$1[redacted]")
-    .replace(
-      /((?:token|password|passwd|secret|api[_-]?key|cookie)\s*[=:]\s*)[^\s&"',;]+/gi,
-      "$1[redacted]",
-    )
+    .replace(NAMED_SECRET, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9_\-]{8,})/g, "[redacted]")
     .replace(/("?set-cookie"?\s*[:=]\s*\[?\s*"?)([^"\]]+)/gi, (_m, prefix: string) => `${prefix}[redacted]`)
-    .replace(
-      /\b([A-Za-z0-9_\-]*(?:sess|session|csrf|auth)[A-Za-z0-9_\-]*=)[^;\s"']+/gi,
-      "$1[redacted]",
-    )
+    .replace(SESSION_LIKE, "$1[redacted]")
     .replace(/(=)[A-Za-z0-9%._\-]{40,}/g, "$1[redacted]");
 }
 

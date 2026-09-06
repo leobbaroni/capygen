@@ -4,9 +4,9 @@
  * (`TurnRail`) and a queued-messages strip for text typed while a turn is
  * still streaming.
  */
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { XIcon } from "lucide-react";
+import { ArrowDownIcon, XIcon } from "lucide-react";
 import { Mascot } from "@/brand/Mascot";
 import { Composer } from "@/components/Composer";
 import { Transcript } from "@/components/Transcript";
@@ -25,19 +25,36 @@ export function ChatPage() {
   const session = useAppStore((s) => s.sessions.find((x) => x.id === sessionId));
   const commands = useAppStore((s) => s.commands);
   const queuedMessages = useAppStore((s) => s.queuedMessages);
+  const error = useAppStore((s) => s.error);
   // Subscribing to the map (not a derived array) keeps the component re-rendering
   // as blocks stream in; ordering is done by the selector below.
   const blocks = useAppStore((s) => s.blocks);
   const bottom = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  /** False once the user scrolls up: streaming must not yank them back down. */
+  const [pinned, setPinned] = useState(true);
   const mascotState = useMascotState();
 
   useEffect(() => {
     if (sessionId) void openSession(sessionId);
   }, [sessionId, openSession]);
 
+  const nearBottom = useCallback((el: HTMLDivElement): boolean => {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }, []);
+
+  // A token arrives many times a second while an agent replies. Following it
+  // is right only while the reader is already at the bottom; otherwise they
+  // are re-reading something and being scrolled away from it is the bug.
   useEffect(() => {
+    if (!pinned) return;
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [turns.length, blocks]);
+  }, [turns.length, blocks, pinned]);
+
+  // A new session (or a switch) starts pinned again.
+  useEffect(() => {
+    setPinned(true);
+  }, [sessionId]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="chat-page">
@@ -57,7 +74,13 @@ export function ChatPage() {
 
       <TurnRail turns={turns} />
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scroller}
+        onScroll={(e) => setPinned(nearBottom(e.currentTarget))}
+        className="min-h-0 flex-1 overflow-y-auto"
+        data-testid="transcript-scroller"
+        data-pinned={pinned || undefined}
+      >
         <div className="mx-auto w-full max-w-[840px] px-10 py-6">
           <Transcript
             turns={turns}
@@ -67,7 +90,32 @@ export function ChatPage() {
         </div>
       </div>
 
-      <div className="shrink-0 px-10 pb-6">
+      <div className="relative shrink-0 px-10 pb-6">
+        {error ? (
+          <div className="mx-auto mb-2 w-full max-w-[840px]">
+            <p
+              role="alert"
+              data-testid="chat-error"
+              className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-sm text-destructive"
+            >
+              {error}
+            </p>
+          </div>
+        ) : null}
+        {!pinned && turns.length > 0 ? (
+          <button
+            type="button"
+            data-testid="scroll-to-bottom"
+            aria-label="Scroll to the newest message"
+            onClick={() => {
+              setPinned(true);
+              bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+            }}
+            className="absolute -top-5 left-1/2 z-20 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-popover text-muted-foreground shadow-menu transition-colors hover:text-foreground"
+          >
+            <ArrowDownIcon className="size-4" />
+          </button>
+        ) : null}
         <div className="mx-auto flex w-full max-w-[840px] flex-col gap-2">
           {queuedMessages.length > 0 ? (
             <ul data-testid="queued-messages" className="flex flex-col gap-1">

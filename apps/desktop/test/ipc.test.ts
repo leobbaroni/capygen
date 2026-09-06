@@ -209,7 +209,7 @@ describe("chat.send (the Phase 2 echo path)", () => {
 });
 
 describe("permission and question answers", () => {
-  it("records a permission decision on the block and re-broadcasts it", async () => {
+  it("reports an undelivered permission answer and leaves the card undecided", async () => {
     const { sessionId } = await newSession();
     const turn = store.turns.create({ sessionId, role: "agent" });
     const ts = Date.now();
@@ -226,19 +226,22 @@ describe("permission and question answers", () => {
     });
     expect(block.kind).toBe("permission");
 
+    // The echo double has no backend waiting on anything, which is exactly the
+    // state a relaunched app is in for a card left over from a previous run:
+    // `ok` says the answer went nowhere, and the row stays undecided rather
+    // than showing the user a decision no agent ever received.
     expect(await call("permission.answer", { requestId: "req_9", behavior: "deny" })).toEqual({
-      ok: true,
+      ok: false,
     });
     const saved = store.blocks.get("blk_perm");
-    expect(saved?.kind === "permission" && saved.decision?.behavior).toBe("deny");
-    expect(saved?.kind === "permission" && saved.decision?.scope).toBe("once");
+    expect(saved?.kind === "permission" && saved.decision).toBeNull();
 
     expect(await call("permission.answer", { requestId: "nope", behavior: "allow" })).toEqual({
       ok: false,
     });
   });
 
-  it("records AskUserQuestion answers keyed by question text", async () => {
+  it("reports an undelivered AskUserQuestion answer and leaves the card open", async () => {
     const { sessionId } = await newSession();
     const turn = store.turns.create({ sessionId, role: "agent" });
     const ts = Date.now();
@@ -257,14 +260,14 @@ describe("permission and question answers", () => {
       updatedAt: ts,
     });
 
-    await call("question.answer", {
-      requestId: "req_q",
-      answers: { "Which backend?": "Claude" },
-    });
+    expect(
+      await call("question.answer", {
+        requestId: "req_q",
+        answers: { "Which backend?": "Claude" },
+      }),
+    ).toEqual({ ok: false });
     const saved = store.blocks.get("blk_q");
-    expect(saved?.kind === "question" && saved.answers).toEqual({
-      "Which backend?": "Claude",
-    });
+    expect(saved?.kind === "question" && saved.answers).toBeNull();
   });
 });
 

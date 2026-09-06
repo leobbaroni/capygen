@@ -12,6 +12,7 @@ import {
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
+import { useState } from "react";
 import type { ToolCallBlock } from "@capygen/shared";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,14 @@ export function ToolCallCard({ block }: { block: ToolCallBlock }) {
       : typeof block.output === "string"
         ? block.output
         : toPrettyJson(block.output);
+  // R25's stub is expandable: the harness keeps the whole result on the row
+  // when it clamps `output`, so "Show all" has something to show.
+  const fullText =
+    block.truncated && block.fullOutput !== undefined
+      ? typeof block.fullOutput === "string"
+        ? block.fullOutput
+        : toPrettyJson(block.fullOutput)
+      : null;
 
   return (
     <Collapsible
@@ -45,7 +54,12 @@ export function ToolCallCard({ block }: { block: ToolCallBlock }) {
       <CollapsibleContent className="mt-1 ml-2 flex flex-col gap-2 border-l border-border-weak py-1 pl-3">
         <CodePanel title="Parameters" text={inputJson} />
         {outputText !== null ? (
-          <CodePanel title="Output" text={outputText} truncated={block.truncated} />
+          <CodePanel
+            title="Output"
+            text={outputText}
+            truncated={block.truncated}
+            {...(fullText !== null ? { fullText } : {})}
+          />
         ) : block.status === "running" || block.status === "pending" ? (
           <div className="flex items-center gap-2 rounded-md border border-dashed border-border-weak bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
             <Loader2Icon className="size-3.5 shrink-0 animate-spin text-info" />
@@ -80,23 +94,38 @@ function CodePanel({
   title,
   text,
   truncated,
+  fullText,
 }: {
   title: string;
   text: string;
   truncated?: boolean;
+  /** The untruncated value, when the row kept one (R25). */
+  fullText?: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded && fullText !== undefined ? fullText : text;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
         {title}
         {truncated ? <span className="normal-case text-warning">truncated</span> : null}
+        {truncated && fullText !== undefined ? (
+          <button
+            type="button"
+            data-testid="tool-output-expand"
+            onClick={() => setExpanded((v) => !v)}
+            className="normal-case text-info hover:underline"
+          >
+            {expanded ? "Show less" : `Show all ${fullText.length} characters`}
+          </button>
+        ) : null}
       </div>
       <pre
         className={cn(
           "max-h-80 overflow-auto rounded-md bg-code-bg px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words text-foreground",
         )}
       >
-        {text || "(empty)"}
+        {shown || "(empty)"}
       </pre>
     </div>
   );

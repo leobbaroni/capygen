@@ -60,6 +60,12 @@ export interface AppState {
   lastDoneAt: number | null;
   /** Sessions list includes archived rows when true (Sidebar's toggle). */
   showArchived: boolean;
+  /**
+   * Request ids whose card the user answered after nothing was listening any
+   * more (the turn ended, or the answer belongs to a previous launch). The
+   * card says so instead of pretending the decision reached an agent.
+   */
+  staleRequests: string[];
 
   init(): Promise<void>;
   pickProject(): Promise<Project | null>;
@@ -199,6 +205,21 @@ export const useAppStore = create<AppState>()((set, get) => {
     await refreshTurns(sessionId);
   }
 
+  /**
+   * Record whether an answer actually reached a backend. `ok: false` means
+   * nothing was waiting on it any more, so the card has to say so rather than
+   * flip to "Allowed"/"Submitted" (the main process leaves the row undecided
+   * in that case).
+   */
+  function markStale(requestId: string, delivered: boolean): void {
+    if (delivered) return;
+    set((s) =>
+      s.staleRequests.includes(requestId)
+        ? s
+        : { staleRequests: [...s.staleRequests, requestId] },
+    );
+  }
+
   /** Pop and send the next queued message, if the session is free and one is waiting. */
   function drainQueue(sessionId: string): void {
     if (get().activeSessionId !== sessionId) return;
@@ -206,7 +227,14 @@ export const useAppStore = create<AppState>()((set, get) => {
     const [next, ...rest] = get().queuedMessages;
     if (next === undefined) return;
     set({ queuedMessages: rest });
-    void dispatchNow(sessionId, next);
+    // Nobody is awaiting this one — a failure has to land somewhere visible,
+    // and the message goes back in the queue rather than disappearing.
+    void dispatchNow(sessionId, next).catch((err: unknown) => {
+      set((s) => ({
+        queuedMessages: [next, ...s.queuedMessages],
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    });
   }
 
   return {
@@ -227,6 +255,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     lastActivityAt: Date.now(),
     lastDoneAt: null,
     showArchived: false,
+    staleRequests: [],
 
     async init() {
       if (!hasBridge()) {
@@ -276,6 +305,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         turnStatus: {},
         queuedMessages: [],
         lastDoneAt: null,
+        staleRequests: [],
       }));
       return session;
     },
@@ -289,6 +319,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         turnStatus: {},
         queuedMessages: [],
         lastDoneAt: null,
+        staleRequests: [],
       });
       const [loaded, commands] = await Promise.all([
         ipc().invoke("sessions.get", { sessionId }),
@@ -333,18 +364,20 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     async answerPermission(requestId, behavior, opts) {
       touchActivity();
-      await ipc().invoke("permission.answer", {
+      const { ok } = await ipc().invoke("permission.answer", {
         requestId,
         behavior,
         scope: opts?.scope ?? "once",
         ...(opts?.updatedInput !== undefined ? { updatedInput: opts.updatedInput } : {}),
         ...(opts?.message !== undefined ? { message: opts.message } : {}),
       });
+      markStale(requestId, ok);
     },
 
     async answerQuestion(requestId, answers) {
       touchActivity();
-      await ipc().invoke("question.answer", { requestId, answers });
+      const { ok } = await ipc().invoke("question.answer", { requestId, answers });
+      markStale(requestId, ok);
     },
 
     async archiveSession(sessionId, archived) {

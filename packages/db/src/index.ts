@@ -31,12 +31,33 @@ export interface CapygenStore {
   settings: SettingsRepo;
   /** Migrations applied by this open, and the backup taken beforehand. */
   migration: { applied: string[]; backupFile: string | null };
+  /** Turns/sessions this open had to close because the last run did not. */
+  reconciled: { turns: number; sessions: number };
   close(): void;
+}
+
+/**
+ * Close out anything the previous run left mid-flight.
+ *
+ * Nothing in the process can still be streaming into a turn the moment the
+ * database is opened, so a `streaming` row is the fingerprint of a crash or a
+ * quit during a turn. Left alone it locks that session's composer forever: the
+ * renderer seeds `turnStatus` from these rows, `isBusy` stays true, and
+ * `chat.interrupt` has no live turn to stop.
+ */
+function reconcileInFlight(db: Database): { turns: number; sessions: number } {
+  const turns = db.run("UPDATE turns SET status = 'interrupted' WHERE status = 'streaming'");
+  const sessions = db.run(
+    "UPDATE sessions SET status = 'idle' WHERE status IN ('running', 'waiting')",
+  );
+  return { turns, sessions };
 }
 
 export function openStore(file: string, options: OpenDatabaseOptions = {}): CapygenStore {
   const { db, result } = openDatabase(file, options);
+  const reconciled = reconcileInFlight(db);
   return {
+    reconciled,
     db,
     projects: new ProjectsRepo(db),
     sessions: new SessionsRepo(db),

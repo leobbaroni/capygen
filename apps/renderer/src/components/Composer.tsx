@@ -9,13 +9,18 @@
  * pointer exception in the reference does not apply to a Windows app.
  *
  * Slash menu (R14): typing `/` at the start of an empty line filters
- * `commands` as you type; Up/Down move the highlight, Enter or a click sends
- * the picked command straight through (matching the reference: "selecting
- * one sends it to the backend").
+ * `commands` as you type (substring, so `pilot` finds `/cockpit:pilot`);
+ * Up/Down move the highlight, Escape dismisses, Enter or a click writes the
+ * command into the composer with the caret after it — the reference's
+ * `applySlashSelection`, and the only way a command that takes an argument
+ * (`/model opus`, `/cockpit:pilot what's next`) can be dispatched at all.
+ * It lives outside the textarea's `overflow-hidden` wrapper, as a direct
+ * child of the form, or the popup would be clipped away above it.
  *
- * Attach and mic are visual affordances for now: `chat.send` only carries
- * text (packages/shared/src/ipc.ts), so there is nowhere to put an
- * attachment yet — the chip list is kept locally and cleared on send. The
+ * Attach is disabled until `chat.send` can carry a file
+ * (packages/shared/src/ipc.ts): taking one, showing a chip and then dropping
+ * it on send is worse than saying it is not available yet. The chip list and
+ * `addFiles` stay so the panes phase only has to re-enable the button. The
  * mic toggles the store's `listening` flag, which is real: it drives the
  * mascot's `listening` state (`hooks/useMascotState.ts`) even though actual
  * speech-to-text is Phase 10 (R18/P18).
@@ -67,6 +72,9 @@ export function Composer({
   const [files, setFiles] = useState<File[]>([]);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
+  /** The exact draft Escape closed the menu for; editing it reopens the menu. */
+  const [slashDismissedFor, setSlashDismissedFor] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -90,11 +98,17 @@ export function Composer({
   // (route change) while the mic is toggled on.
   useEffect(() => () => setListening(false), [setListening]);
 
-  const slashActive = value.startsWith("/") && !value.slice(1).includes(" ") && !disabled;
+  const slashActive =
+    value.startsWith("/") &&
+    !value.slice(1).includes(" ") &&
+    !disabled &&
+    value !== slashDismissedFor;
   const filteredCommands = useMemo(() => {
     if (!slashActive) return [];
+    // Substring, not prefix: plugin commands are namespaced (`/cockpit:pilot`),
+    // so typing what you remember of the name has to find them.
     const query = value.slice(1).toLowerCase();
-    return commands.filter((c) => c.name.slice(1).toLowerCase().startsWith(query));
+    return commands.filter((c) => c.name.slice(1).toLowerCase().includes(query));
   }, [slashActive, value, commands]);
   const slashMenuOpen = slashActive && commands.length > 0;
 
@@ -102,21 +116,43 @@ export function Composer({
     setHighlighted(0);
   }, [value]);
 
+  /**
+   * Send, and put the message back if it could not go.
+   *
+   * The draft is cleared first so the composer feels instant, which means a
+   * rejected `chat.send` (an unknown session, a backend that refused) would
+   * otherwise destroy what the user typed with nothing shown anywhere.
+   */
   async function submit(): Promise<void> {
     const text = value.trim();
     if (text === "" || disabled) return;
+    const keptFiles = files;
     setValue("");
     setFiles([]);
-    await onSubmit(text);
+    setSendError(null);
+    try {
+      await onSubmit(text);
+    } catch (err) {
+      setValue((current) => (current === "" ? text : current));
+      setFiles(keptFiles);
+      setSendError(err instanceof Error ? err.message : String(err));
+      ref.current?.focus();
+    }
   }
 
+  /** Write the command into the composer so arguments can be typed after it. */
   function selectCommand(command: SlashCommand): void {
-    setValue("");
-    void onSubmit(command.name);
+    setValue(`${command.name} `);
+    ref.current?.focus();
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     if (slashMenuOpen && filteredCommands.length > 0) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissedFor(value);
+        return;
+      }
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setHighlighted((h) => (h + 1) % filteredCommands.length);
@@ -157,15 +193,16 @@ export function Composer({
         "transition-shadow duration-150 has-[textarea:focus]:shadow-[var(--composer-shadow-focus)]",
       )}
     >
+      {slashMenuOpen ? (
+        <SlashMenu
+          commands={filteredCommands}
+          highlightedIndex={highlighted}
+          onHover={setHighlighted}
+          onSelect={selectCommand}
+        />
+      ) : null}
+
       <div className="relative overflow-hidden px-4 pt-3">
-        {slashMenuOpen ? (
-          <SlashMenu
-            commands={filteredCommands}
-            highlightedIndex={highlighted}
-            onHover={setHighlighted}
-            onSelect={selectCommand}
-          />
-        ) : null}
         <Textarea
           ref={ref}
           value={value}
@@ -180,6 +217,16 @@ export function Composer({
           className="max-h-[220px] min-h-[24px] overflow-y-auto"
         />
       </div>
+
+      {sendError ? (
+        <p
+          role="alert"
+          data-testid={`${testId}-error`}
+          className="px-4 pt-1 text-xs text-destructive"
+        >
+          Could not send: {sendError}
+        </p>
+      ) : null}
 
       {files.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 px-4 pb-1">
@@ -215,13 +262,15 @@ export function Composer({
             }}
             data-testid={`${testId}-file-input`}
           />
+          {/* Disabled on purpose: `chat.send` carries only text, so accepting
+              a file here would show a chip and then drop it silently. */}
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            disabled={disabled}
+            disabled
             onClick={() => fileInputRef.current?.click()}
-            title="Attach files"
+            title="Attachments arrive with the file panes (Phase 5)"
             aria-label="Attach files"
             data-testid={`${testId}-attach`}
           >
