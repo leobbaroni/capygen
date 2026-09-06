@@ -120,6 +120,9 @@ Not fixed, on purpose
   main process probe harnesses inside a synchronous handler would put a `codex app-server` spawn
   in front of session creation.
 
+## 2026-09-06 — Phase 3 accepted by the orchestrator
+- Re-ran the full gate independently: typecheck 5/5, vitest 537/537, build ok, Playwright 11 passed / 1 skipped (API key). Screens checked: widget card (fixture MCP App), Codex permission card, slash menu with plugin commands. Key findings kept: Higgsfield/claude.ai proxy connectors carry no ui:// resource (fallback rich card is the normal path); Claude SDK strips tool _meta, so widget HTML comes from capygen's own MCP client; Codex app-server exposes appContext.resourceUri + mcpServer/resource/read.
+
 ## Open / next (superseded — see the entry for Task B1 below)
 - ~~Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
