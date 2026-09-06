@@ -8,6 +8,7 @@
  */
 import type { CapygenStore } from "@capygen/db";
 import type { EventChannel, EventInput, SlashCommand } from "@capygen/shared";
+import type { WidgetHostHandlers } from "../ipc/widgets.js";
 
 export type Broadcast = <E extends EventChannel>(event: E, payload: EventInput<E>) => void;
 
@@ -21,6 +22,14 @@ export interface EngineDeps {
   store: CapygenStore;
   broadcast: Broadcast;
   log: EngineLogger;
+  /**
+   * [B3] The MCP Apps widget host (SPEC R31), when one is wired. The runner
+   * asks it, after every finished MCP tool call, whether that tool declares a
+   * `ui://` resource; if it does, the tool_call card is joined by a widget
+   * block. Optional because the echo double and the handler tests have no MCP
+   * client at all.
+   */
+  widgets?: WidgetHostHandlers;
 }
 
 export interface EngineSendArgs {

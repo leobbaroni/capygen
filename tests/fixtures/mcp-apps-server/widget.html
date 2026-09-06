@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>capygen fixture card</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        padding: 12px;
+        font: 13px/1.45 var(--font-sans, system-ui, sans-serif);
+        color: var(--color-text-primary, #111);
+        background: var(--color-background-primary, transparent);
+      }
+      h1 { margin: 0 0 6px; font-size: 15px; }
+      #note { margin: 0 0 10px; color: var(--color-text-secondary, #555); }
+      button {
+        font: inherit;
+        padding: 5px 10px;
+        border-radius: var(--border-radius-md, 6px);
+        border: 1px solid var(--color-border-primary, #bbb);
+        background: var(--color-background-secondary, #f3f3f3);
+        color: inherit;
+        cursor: pointer;
+      }
+      #echo { margin-top: 10px; font-family: var(--font-mono, monospace); }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">(waiting for tool input)</h1>
+    <p id="note"></p>
+    <button id="ping" type="button">Ping through the host</button>
+    <div id="echo" data-testid="echo-result"></div>
+    <!--
+      The app (View) side of the MCP Apps bridge, written by hand against
+      specification/2026-01-26 (the same messages @modelcontextprotocol/ext-apps
+      declares in dist/src/spec.types.d.ts). Hand-written on purpose: the fixture
+      must not need a bundler, and pairing a hand-written View with capygen's
+      real `AppBridge` host proves the wire format rather than an SDK talking to
+      itself.
+    -->
+    <script>
+      (function () {
+        var nextId = 1;
+        var pending = new Map();
+        var target = window.parent;
+
+        function send(msg) {
+          target.postMessage(msg, "*");
+        }
+        function request(method, params) {
+          var id = nextId++;
+          send({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+          return new Promise(function (resolve, reject) {
+            pending.set(id, { resolve: resolve, reject: reject });
+          });
+        }
+        function notify(method, params) {
+          send({ jsonrpc: "2.0", method: method, params: params || {} });
+        }
+
+        function applyStyles(styles) {
+          if (!styles || !styles.variables) return;
+          var root = document.documentElement;
+          Object.keys(styles.variables).forEach(function (key) {
+            var value = styles.variables[key];
+            if (typeof value === "string") root.style.setProperty(key, value);
+          });
+        }
+
+        function render(args) {
+          if (!args) return;
+          if (typeof args.title === "string") {
+            document.getElementById("title").textContent = args.title;
+          }
+          if (typeof args.note === "string") {
+            document.getElementById("note").textContent = args.note;
+          }
+        }
+
+        window.addEventListener("message", function (event) {
+          if (event.source !== target) return;
+          var msg = event.data;
+          if (!msg || msg.jsonrpc !== "2.0") return;
+          if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+            var slot = pending.get(msg.id);
+            if (!slot) return;
+            pending.delete(msg.id);
+            if (msg.error) slot.reject(new Error(msg.error.message || "host error"));
+            else slot.resolve(msg.result);
+            return;
+          }
+          if (msg.method === "ui/notifications/tool-input") {
+            render(msg.params && msg.params.arguments);
+            document.body.setAttribute("data-tool-input", "1");
+          } else if (msg.method === "ui/notifications/tool-result") {
+            document.body.setAttribute("data-tool-result", "1");
+          } else if (msg.method === "ui/notifications/host-context-changed") {
+            if (msg.params) {
+              if (msg.params.theme) document.documentElement.dataset.theme = msg.params.theme;
+              applyStyles(msg.params.styles);
+            }
+          } else if (msg.id !== undefined && msg.method === "ping") {
+            send({ jsonrpc: "2.0", id: msg.id, result: {} });
+          }
+        });
+
+        document.getElementById("ping").addEventListener("click", function () {
+          request("tools/call", { name: "echo", arguments: { text: "from the widget" } })
+            .then(function (result) {
+              var first = result && result.content && result.content[0];
+              document.getElementById("echo").textContent =
+                first && first.text ? first.text : JSON.stringify(result);
+            })
+            .catch(function (err) {
+              document.getElementById("echo").textContent = "error: " + err.message;
+            });
+        });
+
+        request("ui/initialize", {
+          appInfo: { name: "capygen-fixture-card", version: "1.0.0" },
+          appCapabilities: {},
+          protocolVersion: "2026-01-26",
+        }).then(function (result) {
+          notify("ui/notifications/initialized", {});
+          document.body.setAttribute("data-initialized", "1");
+          if (result && result.hostContext) {
+            if (result.hostContext.theme) {
+              document.documentElement.dataset.theme = result.hostContext.theme;
+            }
+            applyStyles(result.hostContext.styles);
+          }
+          // Report our height so the host can size the iframe (ui/notifications/size-changed).
+          var report = function () {
+            notify("ui/notifications/size-changed", {
+              height: Math.ceil(document.documentElement.scrollHeight),
+            });
+          };
+          report();
+          if (window.ResizeObserver) new ResizeObserver(report).observe(document.body);
+        });
+      })();
+    </script>
+  </body>
+</html>

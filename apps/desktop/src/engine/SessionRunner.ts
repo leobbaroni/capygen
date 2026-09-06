@@ -160,11 +160,89 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     return emitBlock(deps, block);
   }
 
+  /**
+   * [B3] MCP Apps (SPEC R31): a finished MCP tool call may have a widget.
+   *
+   * The Claude Agent SDK strips a tool's `_meta` from the stream, so there is
+   * nothing on the wire that says "this one has a UI" (docs/spikes/mcp-apps.md
+   * §b2) — the host has to ask the server itself, which is one cached
+   * `tools/list` per server. That is why this runs *after* the result lands
+   * (a widget with no result has nothing to render) and why it is fire and
+   * forget: the turn must never wait on an MCP server to keep streaming.
+   *
+   * The widget block is written twice: `pending` as soon as we know there is
+   * one — so the transcript shows a placeholder in the right position rather
+   * than the card appearing late — and then `ready`/`unavailable` once the
+   * document has been read.
+   */
+  function maybeOpenWidget(turn: ActiveTurn, patch: BlockPatch): void {
+    const widgets = deps.widgets;
+    if (!widgets || patch.kind !== "tool_call") return;
+    if (patch.status !== "success" && patch.status !== "error") return;
+    if (!patch.name.startsWith("mcp__") || patch.toolUseId === undefined) return;
+    const toolCallId = patch.toolUseId;
+    // One widget per tool call, however many times its row is rewritten.
+    const widgetKey = `widget:${toolCallId}`;
+    if (turn.blocks.has(widgetKey)) return;
+    turn.blocks.set(widgetKey, {
+      id: newId("block"),
+      index: store.blocks.nextIndex(turn.turnId),
+      createdAt: Date.now(),
+    });
+
+    const agentId = store.turns.get(turn.turnId)?.agentId ?? "";
+    const toolResult = asToolResult(patch.output);
+    const call = {
+      sessionId: turn.sessionId,
+      agentId,
+      toolCallId,
+      toolName: patch.name,
+      toolInput: patch.input,
+      toolResult,
+    };
+    void (async (): Promise<void> => {
+      const target = await widgets.detect(call);
+      if (!target?.resourceUri) {
+        // No widget after all — drop the slot again so the index it reserved
+        // is not left as a hole in the transcript.
+        turn.blocks.delete(widgetKey);
+        return;
+      }
+      const blockId = turn.blocks.get(widgetKey)?.id;
+      if (!blockId) return;
+      writeBlock(turn, widgetKey, {
+        kind: "widget",
+        toolCallId,
+        serverName: target.serverName,
+        toolName: target.toolName,
+        resourceUri: target.resourceUri,
+        html: null,
+        htmlStatus: "pending",
+        toolInput: patch.input,
+        toolResult,
+        meta: null,
+      });
+      const { patch: resolved } = await widgets.open({
+        ...call,
+        ...target,
+        resourceUri: target.resourceUri,
+        blockId,
+        toolResult,
+      });
+      writeBlock(turn, widgetKey, resolved);
+      log.info(`[engine] widget ${target.serverName}/${target.toolName} for block ${blockId}`);
+    })().catch((err: unknown) => {
+      turn.blocks.delete(widgetKey);
+      log.warn(`[engine] widget resolution failed for ${patch.name}`, err);
+    });
+  }
+
   async function consume(turn: ActiveTurn, events: AsyncIterable<EngineEvent>): Promise<void> {
     for await (const event of events) {
       switch (event.type) {
         case "block": {
           writeBlock(turn, event.key, event.patch);
+          maybeOpenWidget(turn, event.patch);
           break;
         }
         case "permission": {
@@ -374,5 +452,33 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       awaiting.clear();
       consuming.clear();
     },
+  };
+}
+
+/**
+ * A tool_call block's `output` back into the MCP `CallToolResult` shape the
+ * widget bridge delivers to a view. Claude's stream gives the *settled*
+ * `tool_use_result` here, which already carries `content`/`structuredContent`
+ * for an MCP tool; anything else is wrapped as one text block so a widget
+ * always receives a well-formed result.
+ */
+function asToolResult(
+  output: unknown,
+): { content: unknown[]; structuredContent?: unknown; isError?: boolean } | null {
+  if (output === undefined || output === null) return null;
+  if (typeof output === "object" && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>;
+    if (Array.isArray(record.content) || record.structuredContent !== undefined) {
+      return {
+        content: Array.isArray(record.content) ? record.content : [],
+        ...(record.structuredContent !== undefined
+          ? { structuredContent: record.structuredContent }
+          : {}),
+        ...(typeof record.isError === "boolean" ? { isError: record.isError } : {}),
+      };
+    }
+  }
+  return {
+    content: [{ type: "text", text: typeof output === "string" ? output : JSON.stringify(output) }],
   };
 }

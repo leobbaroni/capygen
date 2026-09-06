@@ -55,6 +55,17 @@ export {
 } from "./codex/pricing.js";
 export * from "./codex/protocol.js";
 
+/**
+ * [B3] The MCP Apps widget host (SPEC R31). Exported from the package root
+ * because `apps/desktop` consumes it and `@capygen/engine` declares a single
+ * `"."` entry point. It *uses* the generic client's `MCP_TOOL_PREFIX` /
+ * `sanitizeSegment` without re-declaring them, so adding
+ * `export * from "./mcp/client/index.js"` here later cannot make either name
+ * ambiguous.
+ */
+export * from "./mcp/client/index.js";
+export * from "./mcp/apps/index.js";
+
 import type { Backend } from "@capygen/shared";
 import { ClaudeHarness, type ClaudeHarnessDeps } from "./claude/ClaudeHarness.js";
 import { CodexHarness, type CodexHarnessDeps } from "./codex/CodexHarness.js";

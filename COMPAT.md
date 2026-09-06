@@ -104,6 +104,54 @@ Keys: `${ANTHROPIC_API_KEY}` / `${OPENAI_API_KEY}` / `${OPENROUTER_API_KEY}` as 
 In the app they arrive through the injected `KeyProvider` (Electron `safeStorage`); the engine
 never reads a key from disk and never logs one (`maskKey` is the only form allowed in a log).
 
+## MCP Apps widget host — `@modelcontextprotocol/ext-apps` (SPEC R31)
+
+Evidence for every row: `docs/spikes/mcp-apps.md` (run 2026-09-06). The widget *host* lives in
+`packages/engine/src/mcp/apps/**` (main-process resolution) and `apps/renderer/src/widgets/**`
+(the sandboxed frame and the bridge); it sits on top of the generic MCP client above.
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| package version | `@modelcontextprotocol/ext-apps` **1.7.5** | `mcp/apps/protocol.ts`, `widgets/bridge.ts` | re-run `SPIKE_STEPS=client corepack pnpm --dir packages/engine exec tsx scripts/spike-mcp-apps.ts` |
+| protocol version **`2026-01-26`** (`LATEST_PROTOCOL_VERSION`) | `spec.types.d.ts:16` | `AppBridge` negotiates it | `packages/engine/test/mcpApps.test.ts` asserts our copied constants against the real package and fails on drift |
+| `_meta.ui.resourceUri`, deprecated `_meta["ui/resourceUri"]`, on the **tool definition** | verified live against the fixture server | `readUiResourceUri` | a third form would send every widget to the fallback card |
+| `_meta.ui.visibility` `["model"]` / `["app"]` (default both) | `McpUiToolMeta` | `WidgetHostBridge.callTool` refuses a model-only tool to a widget | a widget could call tools the server meant for the model alone |
+| resource `_meta.ui` = `{csp, permissions, domain, prefersBorder}`; the **tool's** `csp` is `never` and is ignored | `McpUiResourceMeta` | `buildWidgetCsp`, `buildAllowAttribute` | a widget with remote assets would be served under the deny-all default |
+| host↔view messages implemented: `ui/initialize`, `ui/notifications/initialized`, `ui/notifications/tool-input`, `ui/notifications/tool-result`, `ui/notifications/host-context-changed`, `ui/notifications/size-changed`, `tools/call`, `resources/read`, `ui/open-link`, `ui/download-file`, `ui/request-display-mode`, `notifications/message`, `ping` | the package's own `AppBridge` + `PostMessageTransport` | `apps/renderer/src/widgets/bridge.ts` | ext-apps *is* the reference implementation, so a protocol change arrives as a version bump here |
+| host capabilities advertised: `openLinks`, `downloadFile`, `serverTools`, `serverResources`, `logging` | — | `HOST_CAPABILITIES` | `message`, `updateModelContext` and `sampling` are withheld on purpose: third-party HTML must not write the model's context or spend tokens (R27) |
+| theme variables = the spec's fixed `McpUiStyleVariableKey` names | `spec.types.d.ts` | `widgets/hostContext.ts` maps capygen's tokens onto them | widgets fall back to their own defaults; nothing breaks |
+| client capability `capabilities.extensions["io.modelcontextprotocol/ui"]` | `server/index.d.ts:315` `EXTENSION_ID` | **not sent yet** — `MCP_APPS_CLIENT_CAPABILITY` is ready for the pool to take | a server that gates App tools on it hides them from our listing → fallback card |
+
+### The Claude Agent SDK as a widget host
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| the stream carries **no** tool `_meta` for an MCP tool call | verified live 2026-09-06, spike §b2 | why the host re-reads the URI over its own MCP client | if `_meta` appeared, resolution gets cheaper — the host already checks the result `_meta` first |
+| `Query.mcpServerStatus()` → `{name, status, scope, config}`; `config.type` ∈ `stdio` / `http` / `claudeai-proxy` | spike §b1 | how a CLI-hosted server's config is recovered; `claudeai-proxy` is the unreachable class | a new `type` lands in the fallback card, not in a bad connection |
+| its `tools[]` entries are `{name, annotations}` — no `_meta` | spike §b1 | the URI is deliberately *not* taken from there | — |
+| `tool_use_result._meta` **is** passed through (Higgsfield's `io.modelcontextprotocol/serverInfo`) | spike §c | a result-side `ui.resourceUri` is honoured when a server offers one | — |
+| assistant `tool_use_meta[] = {id, display_name, server_display_name, icon_url?}` | verified live | available for card headers (not used yet) | cosmetic |
+| project `.mcp.json` + `.claude/settings.local.json` `enableAllProjectMcpServers` | `tests/e2e/widget.spec.ts` | one registration that both the CLI and capygen's own client read | the widget e2e stops seeing the fixture server |
+| claude.ai connectors (Higgsfield included) declare **no** `ui://` resource | spike §c, `balance` and `generate_image{get_cost:true}` | the fallback rich card is the normal rendering for that whole class | if one ever does, it is still unreadable without the connector's OAuth |
+
+### Codex app-server as a widget host (schema-verified, not yet wired)
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `ThreadItem` `mcpToolCall.appContext = {connectorId, linkId, resourceUri, appName, actionName}` | bindings v0.153.4 | Codex needs no second MCP client — the URI is stated outright | fall back to `mcpServerStatus/list`, whose `Tool`/`Resource` do carry `_meta` |
+| `McpToolCallResult {content, structuredContent, _meta}` | bindings v0.153.4 | result `_meta` survives | — |
+| `mcpServer/resource/read` → `{contents: ResourceContent[]}`; `mcpServer/tool/call` | bindings v0.153.4 | the Codex implementation of `WidgetMcpAccess` | — |
+
+### capygen's own widget surface
+
+| Item | Value | Why |
+|---|---|---|
+| widget scheme | `capygen-widget://<blockid>/index.html`, registered `standard` + `secure` **before** `app.ready` | a `srcdoc` / `data:` / `blob:` frame inherits the renderer's CSP and cannot run a widget at all — measured, spike §a4 |
+| renderer CSP | `frame-src capygen-widget:` added to `apps/renderer/index.html` | without it Chromium refuses the frame outright (`ERR_BLOCKED_BY_CSP`) |
+| iframe sandbox | `allow-scripts allow-forms` — never `allow-same-origin` | opaque origin: `window.origin === "null"` and `localStorage` throws (measured) |
+| per-widget response CSP | `default-src 'none'` plus only the resource's declared domains | the spec's stated secure default |
+| widget document cap | 4 MB (`DEFAULT_MAX_WIDGET_HTML_BYTES`) | a hostile server must not be able to exhaust the main process's heap |
+
 ## Internal seams
 
 | Seam | Meaning |

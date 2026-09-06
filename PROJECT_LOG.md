@@ -325,6 +325,32 @@
   desktop must also inject `keys` (safeStorage `KeyProvider`) and `loadHistory` (turns → messages);
   without the latter an `api` session starts each app run with an empty transcript.
 
+## 2026-09-06 — Phase 3 / B3: MCP Apps widget host + spike
+
+- Spike first (`docs/spikes/mcp-apps.md`, evidence in `mcp-apps.evidence.json`): the Claude Agent
+  SDK's stream carries an MCP tool call and its `structuredContent` but **strips the tool's
+  `_meta`**, so the `ui://` URI is never on the wire. `Query.mcpServerStatus()` does give a locally
+  hosted server's `config`, so capygen opens **its own MCP client to the same server** and reads
+  `tools/list` `_meta` → `resources/read`. A `claudeai-proxy` connector has only an upstream URL
+  and an Anthropic-side id — unreachable, so it falls back to a rich result card. Higgsfield
+  (`balance`, and `generate_image{get_cost:true}`, both free) declares no MCP App UI at all.
+  Codex's app-server is the easy case: `mcpToolCall.appContext.resourceUri` plus
+  `mcpServer/resource/read`.
+- Measured, not assumed: an `<iframe srcdoc>` inherits the renderer's CSP, so a widget's inline
+  script never runs. Widgets are therefore served by the main process from a privileged
+  `capygen-widget://<block>/index.html` scheme with the resource's own CSP, framed
+  `sandbox="allow-scripts allow-forms"` (opaque origin: `window.origin === "null"`, `localStorage`
+  throws). `apps/renderer/index.html` gains `frame-src capygen-widget:` and nothing else.
+- Built: `packages/engine/src/mcp/apps/**` (`WidgetHostBridge` + protocol readers + a pool-backed
+  `WidgetMcpAccess`), `apps/desktop/src/ipc/widgets.ts` (one bridge per project, the scheme
+  handler, `widget.callTool` / `widget.event` / `mcp.readResource`), `apps/renderer/src/widgets/**`
+  (ext-apps `AppBridge` over `postMessage`, theme passthrough, size negotiation, rich fallback) and
+  `WidgetCard`. A widget may only call tools on its own server, and never one the server marked
+  `visibility:["model"]`.
+- Proven live: `tests/e2e/widget.spec.ts` — a real Sonnet turn calls the fixture MCP Apps server
+  registered through the project's `.mcp.json`, the widget renders inside the transcript with the
+  tool's arguments, and its button round-trips `echo` back through the host (`e2e-out/widget.png`).
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.

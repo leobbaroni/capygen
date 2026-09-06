@@ -4,10 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- The renderer only ever loads its own bundle and local assets: no remote
-         scripts, styles, images or connections. -->
+         scripts, styles, images or connections. The one exception is
+         `frame-src capygen-widget:` — MCP App widgets (SPEC R31) are
+         third-party HTML served by the main process from that privileged
+         scheme, each frame sandboxed without `allow-same-origin` and governed
+         by the CSP its own `ui://` resource declared. They cannot be inlined
+         with `srcdoc`: a srcdoc frame inherits *this* policy, which blocks
+         every widget's inline script (docs/spikes/mcp-apps.md §a4). -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; frame-src capygen-widget:"
     />
     <!-- Staged into public/ from assets/icons by scripts/sync-assets.ts. -->
     <link rel="icon" href="./favicon.ico" />

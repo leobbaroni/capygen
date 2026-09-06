@@ -1,0 +1,219 @@
+{
+  "client": {
+    "toolNames": [
+      "show_card",
+      "echo"
+    ],
+    "showCardMeta": {
+      "ui": {
+        "resourceUri": "ui://capygen-fixture/card.html",
+        "visibility": [
+          "model",
+          "app"
+        ]
+      },
+      "ui/resourceUri": "ui://capygen-fixture/card.html"
+    },
+    "resourceUri": "ui://capygen-fixture/card.html",
+    "resourceMimeType": "text/html;profile=mcp-app",
+    "resourceMeta": {
+      "ui": {
+        "csp": {},
+        "prefersBorder": true
+      }
+    },
+    "htmlBytes": 5789,
+    "htmlHead": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <title>capygen fixture card</title>\n    <styl",
+    "showCardResult": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Showing card \"Spike card\"."
+        }
+      ],
+      "structuredContent": {
+        "title": "Spike card",
+        "note": "from the client step"
+      }
+    },
+    "echoResult": {
+      "content": [
+        {
+          "type": "text",
+          "text": "echo: ping"
+        }
+      ]
+    }
+  },
+  "mcpServerStatus": [
+    {
+      "name": "capyfixture",
+      "status": "connected",
+      "scope": "dynamic",
+      "config": {
+        "type": "stdio",
+        "command": "C:\\Program Files\\nodejs\\node.exe",
+        "args": [
+          "C:/Users/TugaPlayz/Desktop/GITHUB/capygen/tests/fixtures/mcp-apps-server/server.mjs"
+        ]
+      },
+      "toolCount": 2,
+      "toolKeys": [
+        "name",
+        "annotations"
+      ],
+      "firstToolHasMeta": false
+    },
+    {
+      "name": "claude.ai Higgsfield",
+      "status": "pending",
+      "scope": "claudeai",
+      "config": {
+        "type": "claudeai-proxy",
+        "url": "https://mcp.higgsfield.ai/mcp",
+        "id": "<31-char id>"
+      },
+      "toolCount": null,
+      "toolKeys": null,
+      "firstToolHasMeta": false
+    },
+    {
+      "name": "claude.ai Gmail",
+      "status": "connected",
+      "scope": "claudeai",
+      "config": {
+        "type": "claudeai-proxy",
+        "url": "https://gmailmcp.googleapis.com/mcp/v1",
+        "id": "<31-char id>"
+      },
+      "toolCount": 29,
+      "toolKeys": [
+        "name",
+        "annotations"
+      ],
+      "firstToolHasMeta": false
+    },
+    {
+      "name": "claude.ai Context7",
+      "status": "pending",
+      "scope": "claudeai",
+      "config": {
+        "type": "claudeai-proxy",
+        "url": "https://mcp.context7.com/mcp",
+        "id": "<31-char id>"
+      },
+      "toolCount": null,
+      "toolKeys": null,
+      "firstToolHasMeta": false
+    },
+    {
+      "name": "claude.ai Microsoft 365",
+      "status": "needs-auth",
+      "scope": "claudeai",
+      "config": {
+        "type": "claudeai-proxy",
+        "url": "https://microsoft365.mcp.claude.com/mcp",
+        "id": "<31-char id>"
+      },
+      "toolCount": null,
+      "toolKeys": null,
+      "firstToolHasMeta": false
+    }
+  ],
+  "claudeFixture": {
+    "mcpServersFromInit": null,
+    "toolNameOnTheWire": "mcp__capyfixture__show_card",
+    "toolUseMeta": null,
+    "toolResultContent": "{\"title\":\"Hello from capygen\",\"note\":\"spike\"}",
+    "toolResultMeta": null,
+    "toolUseResult": {
+      "content": "{\"title\":\"Hello from capygen\",\"note\":\"spike\"}",
+      "structuredContent": {
+        "title": "Hello from capygen",
+        "note": "spike"
+      }
+    },
+    "structuredContent": {
+      "title": "Hello from capygen",
+      "note": "spike"
+    },
+    "resourceLinks": null,
+    "error": null
+  },
+  "higgsfield": {
+    "servers": [],
+    "toolNameOnTheWire": "mcp__claude_ai_Higgsfield__balance",
+    "toolUseMeta": null,
+    "toolUseMetaFrame": {
+      "id": "toolu_01JZhXHM1utDkpBWSrMZ6CN5",
+      "display_name": "Balance",
+      "server_display_name": "Higgsfield",
+      "icon_url": "https://www.google.com/s2/favicons?domain=higgsfield.ai&sz=64"
+    },
+    "toolResultContent": "{\"credits\":196,\"subscription_plan_type\":\"free\"}",
+    "toolResultMeta": null,
+    "toolUseResult": {
+      "content": "{\"credits\":196,\"subscription_plan_type\":\"free\"}",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "Higgsfield AI",
+          "version": "1.0.0",
+          "description": "Higgsfield creative platform for image, video, and audio generation, marketing asset workflows, and Virality Predictor video analysis for attention, engagement, and audience response."
+        }
+      },
+      "structuredContent": {
+        "credits": 196,
+        "subscription_plan_type": "free"
+      }
+    },
+    "structuredContent": {
+      "credits": 196,
+      "subscription_plan_type": "free"
+    },
+    "resourceLinks": null,
+    "error": null
+  },
+  "higgsfieldGenerateImageCost": {
+    "toolNameOnTheWire": "mcp__claude_ai_Higgsfield__generate_image",
+    "input": {
+      "params": {
+        "prompt": "a capybara wearing a pink hoodie",
+        "get_cost": true,
+        "model": "nano_banana_pro"
+      }
+    },
+    "toolUseMeta": null,
+    "toolUseMetaFrame": {
+      "id": "toolu_01T1VYnrpHZTH1c2CrbGamy4",
+      "display_name": "Generate Image",
+      "server_display_name": "Higgsfield",
+      "icon_url": "https://www.google.com/s2/favicons?domain=higgsfield.ai&sz=64"
+    },
+    "toolResultContent": "{\"cost\":{\"credits\":2,\"credits_exact\":2}}",
+    "toolResultMeta": null,
+    "toolUseResult": {
+      "content": "{\"cost\":{\"credits\":2,\"credits_exact\":2}}",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "Higgsfield AI",
+          "version": "1.0.0",
+          "description": "Higgsfield creative platform for image, video, and audio generation, marketing asset workflows, and Virality Predictor video analysis for attention, engagement, and audience response."
+        }
+      },
+      "structuredContent": {
+        "cost": {
+          "credits": 2,
+          "credits_exact": 2
+        }
+      }
+    },
+    "structuredContent": {
+      "cost": {
+        "credits": 2,
+        "credits_exact": 2
+      }
+    },
+    "resourceLinks": null,
+    "error": null
+  }
+}
