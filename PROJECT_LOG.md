@@ -126,7 +126,12 @@ Not fixed, on purpose
 ## 2026-09-06 — Phase 4 accepted by the orchestrator
 - Re-ran the full gate independently: typecheck 5/5, vitest 731/731, build ok, Playwright 16 passed / 1 skipped (API key). Round-table (Claude → Codex quoting Claude's line), hop cap + Continue, haiku-routed Task sub-agent, Claude→Codex delegate_task, agent info drawer all proven live. Review fixes in f7110a6 (19 fixed, 1 deferred: per-harness avatar glyphs).
 
-## Open / next (superseded — see the entry for Task B1 below)
+## 2026-09-06 — Phase 5 accepted by the orchestrator
+- Re-ran the full gate independently: typecheck 5/5, vitest 967/967, build ok, Playwright 22 passed / 1 skipped (API key) / 1 failed — the live cross-backend delegation test (roundtable.spec.ts "Claude lead delegates to Codex") failed once and passed on an isolated re-run (1.1 m): model-choice flake, not a regression; tracked below. Workspace proven: files→editor→save, diff, TodoWrite→tasks, terminal echo, drag-restore layout, dev server detect→start→Browser pane, overlay tracking. Review fixes in b958927 (junction-escape write, permission handlers on browser views, git `--`, ref-counted watchers, zero-panel layout, per-window browser views, editor dirty guard/stale file, terminal orphan ptys, and more).
+- A separate user-started session is adding a `tasks.create` IPC channel in this worktree (8 uncommitted files); left untouched.
+
+## Open / next
+- Flaky live e2e: cross-backend delegation depends on the lead choosing delegate_task; harden the prompt or assert on the routed policy instead of the model's choice (Phase 11/12 hygiene). (superseded — see the entry for Task B1 below)
 - ~~Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the
   same `Engine` interface (`apps/desktop/src/engine/stub.ts`), block streaming, permission and
   AskUserQuestion cards.~~ Done in Task B1.
