@@ -1,5 +1,5 @@
 /*
- * capygen brand assets — mascot animation and wordmark type.
+ * capygen brand assets — mascot states and wordmark type.
  *
  * Self-contained on purpose: everything the components in this folder need
  * lives here, so `apps/renderer/src/brand/**` stays a single owned unit
@@ -25,7 +25,7 @@
   line-height: 1;
 }
 
-/* Each step selects one drawn atlas cell. The element itself never moves. */
+/* Static state image; keep the source pixels sharp at any display size. */
 .capygen-mascot {
   display: inline-block;
   flex-shrink: 0;
@@ -33,26 +33,4 @@
   background-repeat: no-repeat;
   background-position-x: 0;
   image-rendering: pixelated;
-  animation: capygen-frames 1.6s steps(4, end) infinite;
-}
-
-@keyframes capygen-frames {
-  from { background-position-x: 0; }
-  to { background-position-x: calc(var(--mascot-size) * -4); }
-}
-
-.capygen-mascot--working { animation-duration: 0.8s; }
-.capygen-mascot--waiting { animation-duration: 2.4s; }
-.capygen-mascot--success { animation-duration: 1.2s; }
-.capygen-mascot--error { animation-duration: 1.6s; }
-.capygen-mascot--sleeping { animation-duration: 3.2s; }
-.capygen-mascot--listening { animation-duration: 1.2s; }
-
-@media (prefers-reduced-motion: reduce) {
-  .capygen-mascot { animation: none; background-position-x: 0; }
-}
-
-:root:has(#capygen-reduced-motion) .capygen-mascot {
-  animation: none;
-  background-position-x: 0;
 }

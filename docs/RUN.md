@@ -415,7 +415,7 @@ Use `python scripts/mascot-pixels.py` from the repo root with the existing Pytho
 installation, then `corepack pnpm build`. No install occurs in the generator. The source,
 frame layout and preview are documented in `assets/mascot/README.md`; generated assets are
 committed under `assets/mascot`, while renderer/public remains staged output.
-`corepack pnpm exec playwright test tests/e2e/mascot.spec.ts` checks real frame changes,
-sharp rendering, the larger landing mascot, and OS/app reduced-motion behavior on isolated
+`corepack pnpm exec playwright test tests/e2e/mascot.spec.ts` checks static PNG loading,
+sharp rendering, the larger landing mascot, and absence of animation on isolated
 backend homes. It runs offline. The desktop's minimum window width remains the supported
 layout; a 380px renderer screenshot is a stress check, not a mobile-support claim.

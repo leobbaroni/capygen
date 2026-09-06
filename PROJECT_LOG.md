@@ -1165,3 +1165,23 @@ ok 35 ... (g) the native overlay tracks its placeholder through maximise and a w
   full gate is green with those explicit skips; it does not re-prove the historical live phases.
 - Local review/preparation commit: `7f94de2`. Mascot task committed separately. No pushes.
   Phases 7–12 remain open, and R-A–R-D remain reviewed corrective implementation tasks.
+
+## 2026-09-06 — static PNG mascots (user correction)
+
+- Replaced frame animation with one static PNG per reactive state. Kept the 144px landing
+  mascot, sharp pixel rendering and accessible labels. Removed animation CSS and atlas staging;
+  historical authoring assets remain available. Luna implemented; Astra integrated and verified.
+- Updated the asset contract, run instructions and existing mascot/skeleton assertions.
+- Windows validation: brand unit tests, workspace typecheck, build, and isolated offline mascot
+  Electron e2e passed. Desktop screenshot reviewed. No phase completion claim or push.
+
+```text
+Test Files 3 passed (3)
+Tests 10 passed (10)
+apps/renderer typecheck: Done
+apps/desktop typecheck: Done
+[build] desktop bundle written to .../apps/desktop/dist
+1 passed (4.4s)
+```
+
+- Opus 5 independently reviewed the static conversion: approved, no high/medium findings.

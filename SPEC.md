@@ -311,3 +311,9 @@ SQL; rollback = restore the pre-migration backup the migrator writes next to the
   larger sharp pixel art and drawn animation frames. This supersedes the earlier visor-face
   description and static-image motion treatment. Keep all eight reactive states and reduced
   motion support; app UI and reference tokens retain their existing design.
+
+## Correction — 2026-09-06, static mascots
+
+The user requests PNGs only for now. Show one static PNG per reactive mascot state with no
+animation or fades; preserve the larger size and sharp pixels. This supersedes the animated
+mascot direction above.

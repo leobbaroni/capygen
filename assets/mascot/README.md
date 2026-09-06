@@ -20,8 +20,9 @@ palette membership and four distinct frames for every state, then writes:
 - `capybara-states.json`: atlas layout and logical/output sizes.
 - `pixel-preview.gif`: animated review board showing all eight states.
 
-The app stages these from assets; never edit renderer/public. `Mascot.tsx` reads the atlas in
-CSS steps, labelled for accessibility, with a stationary first frame for OS/app reduced motion.
+The app stages only `states/*.png` for mascots; never edit renderer/public. `Mascot.tsx`
+shows one static PNG for the current state, labelled for accessibility. Animation and fades
+are disabled at the user’s request. The atlas and GIF are retained as authoring history.
 The landing is 144px (exact 2× logical pixels). Small existing brand/header marks retain their
 layout size. Old generated sheets are historical source assets, not the current atlas.
 

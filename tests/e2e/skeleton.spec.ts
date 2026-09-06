@@ -118,15 +118,22 @@ test.describe("live Claude walking skeleton", () => {
       await expect(page.getByTestId("landing-heading")).toHaveText("What should we build?");
       const mascot = page.getByTestId("mascot");
       await expect(mascot).toHaveAttribute("data-state", "idle");
-      // Decode the real sprite atlas used by the CSS frame animation.
+      // Decode the static PNG state used by the mascot.
       await expect(mascot).toHaveAccessibleName("capygen mascot, idle");
       expect(await mascot.evaluate(async (el) => {
         const background = getComputedStyle(el).backgroundImage;
         const image = new Image();
         image.src = background.slice(5, -2);
         await image.decode();
-        return image.naturalWidth;
-      })).toBeGreaterThan(0);
+        return {
+          width: image.naturalWidth,
+          animation: getComputedStyle(el).animationName,
+          animations: el.getAnimations().length,
+        };
+      })).toEqual({ width: 288, animation: "none", animations: 0 });
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await expect.poll(() => mascot.evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+      await page.emulateMedia({ reducedMotion: "no-preference" });
       await expect(page.getByTestId("project-chip")).toContainText(path.basename(projectDir));
 
       // Everything above is R1 and runs anywhere. Everything below costs a

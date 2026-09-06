@@ -1,9 +1,6 @@
-/** Reactive, hand-drawn pixel frames. Source: scripts/mascot-pixels.py.
- * Four columns per state, eight rows, 72 logical pixels per square.
- * CSS steps advances actual drawings; no blur, fading, or subpixel motion.
- */
+/** Static, hand-drawn pixel mascot states. Source: scripts/mascot-pixels.py. */
 import type { CSSProperties } from "react";
-import { MASCOT_STATES, type MascotState } from "@capygen/shared";
+import { type MascotState } from "@capygen/shared";
 import { cn } from "../lib/utils";
 import "./brand.css";
 
@@ -31,11 +28,9 @@ export function Mascot({ state = "idle", size = 144, className, testId = "mascot
   const style = {
     width: size,
     height: size,
-    "--mascot-size": `${size}px`,
     // Relative URL also works in the packaged file:// renderer.
-    backgroundImage: 'url("./mascot/pixel-animations.png")',
-    backgroundSize: `${size * 4}px ${size * 8}px`,
-    backgroundPositionY: -MASCOT_STATES.indexOf(state) * size,
+    backgroundImage: `url("./mascot/${state}.png")`,
+    backgroundSize: "100% 100%",
   } as CSSProperties;
 
   return (

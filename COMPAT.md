@@ -361,6 +361,7 @@ Do not rely on those rows as proof of complete runtime integration until the cor
 
 `assets/mascot/capybara-states.json` now describes 72px logical cells, 4x exported pixels,
 four frame columns and eight state rows in shared `MASCOT_STATES` order. Renderer staging
-copies `pixel-animations.png`; CSS uses `steps(4, end)` and a relative file-compatible URL.
+copies the eight `states/*.png` files; each state uses a static PNG with a relative
+file-compatible URL and pixelated rendering. The animation atlas is authoring history only.
 `capybara-states-256.png` retains its legacy filename but its cell size is 288px; consumers
 must use the manifest. The generator uses existing Python/Pillow only, never installs it.

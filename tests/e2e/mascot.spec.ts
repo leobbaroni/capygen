@@ -6,7 +6,7 @@ import { _electron as electron, expect, test } from "@playwright/test";
 
 const root = path.resolve(__dirname, "../..");
 
-test("pixel mascot draws distinct sharp frames and respects reduced motion", async () => {
+test("pixel mascot draws a sharp static state and has no animation", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-pixel-"));
   const dirs = Object.fromEntries(["profile", "project", "claude", "codex"].map(name => {
     const dir = path.join(temp, name);
@@ -30,34 +30,31 @@ test("pixel mascot draws distinct sharp frames and respects reduced motion", asy
     const mascot = page.getByTestId("mascot");
     await expect(mascot).toHaveAccessibleName("capygen mascot, idle");
     await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect.poll(() => mascot.evaluate(el => getComputedStyle(el).animationName)).toBe("none");
     await mascot.evaluate(async el => {
       const url = getComputedStyle(el).backgroundImage.slice(5, -2);
       const image = new Image();
       image.src = url;
       await image.decode();
+      if (!url.endsWith("/mascot/idle.png") && !url.endsWith("./mascot/idle.png")) {
+        throw new Error(`unexpected mascot asset: ${url}`);
+      }
     });
     expect(await mascot.evaluate(el => ({
       width: el.getBoundingClientRect().width,
       rendering: getComputedStyle(el).imageRendering,
-      easing: getComputedStyle(el).animationTimingFunction,
-    }))).toEqual({ width: 144, rendering: "pixelated", easing: "steps(4)" });
-
-    const frames: Buffer[] = [];
-    for (const time of [0, 450, 850, 1250]) {
-      await mascot.evaluate((el, currentTime) => {
-        const animation = el.getAnimations()[0]!;
-        animation.pause();
-        animation.currentTime = currentTime;
-      }, time);
-      frames.push(await mascot.screenshot());
-    }
-    expect(new Set(frames.map(frame => frame.toString("base64"))).size).toBe(4);
+      animation: getComputedStyle(el).animationName,
+      animations: el.getAnimations().length,
+    }))).toEqual({ width: 144, rendering: "pixelated", animation: "none", animations: 0 });
     fs.mkdirSync(path.join(root, "e2e-out"), { recursive: true });
     await page.screenshot({ path: path.join(root, "e2e-out/mascot-desktop.png") });
 
     await page.emulateMedia({ reducedMotion: "reduce" });
-    expect(await mascot.evaluate(el => getComputedStyle(el).animationName)).toBe("none");
-    expect(await mascot.evaluate(el => getComputedStyle(el).backgroundPositionX)).toBe("0px");
+    expect(await mascot.evaluate(el => ({
+      animation: getComputedStyle(el).animationName,
+      animations: el.getAnimations().length,
+    }))).toEqual({ animation: "none", animations: 0 });
+    await expect(mascot).toHaveAttribute("data-state", "idle");
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.evaluate(async () => {
       const bridge = (window as unknown as {
