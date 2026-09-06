@@ -1252,3 +1252,68 @@ Duration 822ms
 ```
 
 The second suite checks dedicated test-home guards; no model/network calls.
+
+### Phase 7-P0 — explicit project context (Opus 5)
+
+Every `integrations.*` channel now carries an optional explicit `projectId`
+(`packages/shared/src/ipc.ts`). Omitted means **global only**, never the
+most-recently-touched project; an unknown id is refused before any read, write,
+probe or shell open; a project/local mutation requires one. `IntegrationsService`
+resolves the id once per request into an immutable `ProjectScope` and threads it
+through the Claude/Codex/API stores (the mutable "active project" and its
+`retargetIfProjectMoved` are gone). `SyncCoordinator` keys its cache, in-flight
+reads, watchers and debounce timers by `(backend, scope)`; only the **global**
+read is projected into the SQLite cache tables, so a project read can no longer
+overwrite the global rows, and app-owned policy rows are untouched. A global
+write invalidates every project snapshot as well; watchers start once per pair,
+close on disposal and their late callbacks broadcast nothing. Renderer keeps the
+selected project per window (`appStore.selectedProjectId`, seeded from recency
+once on `init`, then only by an explicit pick / session open), sends it on every
+integrations call, drops stale answers from a scope it has left, filters
+`integrations.changed` by scope, and names the project on the scoped settings
+sections.
+
+```
+corepack pnpm typecheck   (shared, db, renderer, desktop: Done)
+vitest run --project desktop --exclude **/mcpPools.test.ts  29 files, 410 passed
+vitest run --project renderer --project shared              52 files, 507 passed
+```
+
+New: `apps/desktop/test/integrationsProjectScope.test.ts` (10),
+`apps/renderer/src/components/settings/useIntegrations.test.tsx` (4),
+`apps/renderer/src/store/selectedProject.test.ts` (4). No commit, no push, no
+live model calls; all backend homes isolated. `mcpPools.ts` (7-P2) and
+`packages/engine/scripts` untouched.
+
+### 2026-09-07 — test isolation review correction (Astra)
+
+The e2e worker ran the legacy `settings.spec.ts` before conversion despite the task requiring
+its personal-home reads to be reported for correction. Its plugin case read the personal
+installed-plugin registry while the launched app inherited isolated backend homes; the case
+failed comparing personal plugin names with the isolated app list (8 passed, 1 skipped,
+1 failed). Astra stopped that worker and assigned conversion of every direct personal-file
+read before this suite may run again. No passing phase proof is claimed from that run.
+The new e2e teardown also trusted an environment-supplied deletion path; review requires
+cleanup to capture only the temporary directory allocated by setup. Both remain under
+corrective review, alongside the final low-effort request-capture test type error.
+- S0 (Opus): MCP secret refs added to the safeStorage secrets store (apps/desktop/src/ipc/secrets.ts) — opaque `mcp/<32 hex>` refs with setRef/getRef/hasRef/deleteRef, namespaced `mcp` ciphertext map beside the unchanged provider keys, atomic temp+rename writes, corrupt files refused for mutation; new apps/desktop/test/mcpSecrets.test.ts (13 tests). No IPC or handlers.ts changes.
+
+### S0 accepted — encrypted MCP reference foundation
+
+Opus implemented the main-process reference namespace in the existing safeStorage store.
+Astra review corrected unreadable-file data loss, input-bearing encryption errors, malformed
+entry acceptance and temporary-file collision handling. Astra re-read the final code and
+independently ran the focused suite; Fable's final review found no high/medium findings.
+
+```text
+corepack pnpm exec vitest run --project desktop apps/desktop/test/mcpSecrets.test.ts
+Test Files 1 passed (1)
+Tests 19 passed (19)
+Duration 1.13s
+```
+
+Evidence: `e2e-out/review/mcp-secrets-final.log`. Tests use temporary files and fake encryption,
+not user keys or personal configuration. The reference API is not yet connected to MCP runtime
+resolution; P1 owns that integration. Atomic rename is not a power-loss durability guarantee
+(the store does not fsync); reference presence is not proof this account can decrypt it.
+No overall phase has been marked complete.

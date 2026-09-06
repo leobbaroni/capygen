@@ -353,8 +353,9 @@ failures if missed:
 
 The historical API MCP inheritance, project-recency and settings-projection rows above describe
 intended or partial behavior. Shipping gaps are verified in `docs/reviews/phase1-6.md` R-A–R-D:
-API/widget discovery bypasses isolated homes and API-owned settings; MCP pool keys omit env/headers;
-global backend defaults are not fully consumed; recency is not reliable active-project identity.
+API/widget discovery bypasses isolated homes and API-owned settings;
+global backend defaults are not fully consumed; project-scoping corrections remain under review.
+The MCP pool identity gap is fixed by the complete-connection digest documented below.
 Do not rely on those rows as proof of complete runtime integration until the corrective tests pass.
 
 ## Pixel mascot asset contract (2026-09-06)
@@ -388,3 +389,14 @@ low/medium/high/xhigh/max. The Anthropic adapter maps configured `reasoningEffor
 field and leaves it absent when unset/unsupported. An unsupported model response is surfaced
 as an API error instead of silently dropping a valid effort. `apiProviders.test.ts` captures
 the body and preserves caching/thinking assertions.
+
+## Main-process MCP secret references — 2026-09-07
+
+`createSafeStorageSecretsStore` retains provider ciphertext at top level and adds an `mcp`
+map keyed by opaque 32-character lowercase hexadecimal ids. `mcp/<id>` references support
+main-only `setRef/getRef/hasRef/deleteRef`; no new IPC read returns plaintext. `hasRef` reports
+presence, while `getRef` returning null means the value is unavailable for a connection.
+Only ENOENT means an absent file. Unreadable/malformed stores refuse mutation and retain their
+bytes. Ciphertext writes use exclusive same-directory temporary files followed by rename;
+encryption errors are replaced with generic errors. Nineteen isolated fake-safeStorage tests
+cover compatibility and failure paths. API MCP reference wiring and migration remain P1 work.
