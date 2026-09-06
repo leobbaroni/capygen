@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
+import { launchEnv } from "./testPolicy.js";
 
 const root = path.resolve(__dirname, "../..");
 
@@ -16,14 +17,12 @@ test("pixel mascot draws a sharp static state and has no animation", async () =>
   const app = await electron.launch({
     args: [path.join(root, "apps/desktop"), `--user-data-dir=${dirs.profile}`],
     cwd: root,
-    env: {
-      ...process.env,
-      CAPYGEN_ENGINE: "stub",
-      CAPYGEN_USER_DATA_DIR: dirs.profile!,
-      CAPYGEN_PROJECT_DIR: dirs.project!,
-      CAPYGEN_CLAUDE_CONFIG_DIR: dirs.claude!,
-      CAPYGEN_CODEX_HOME: dirs.codex!,
-    },
+    env: launchEnv({
+      userDataDir: dirs.profile!,
+      projectDir: dirs.project!,
+      homes: { claudeHome: dirs.claude!, codexHome: dirs.codex! },
+      engine: "stub",
+    }),
   });
   try {
     const page = await app.firstWindow();

@@ -1435,3 +1435,17 @@ not complete the remaining Phase 7 runtime/worktree/import acceptance.
 Low follow-ups: remove dead MCP/plugin/skill projections, avoid an evicted watcher's last
 queued read, and avoid broad manual-refresh notifications. P1 owns full transport redaction,
 canonical runtime defaults and widget configuration identity; none is silently claimed here.
+
+### E2E isolation and pre-dispatch model policy accepted
+
+Opus converted all legacy personal-config content reads to owned fixtures/dedicated identities.
+Astra caught and corrected an environment-controlled teardown deletion target, Windows casing
+bypasses, and a model/effort assertion that ran after the landing composer had already sent its
+prompt. The six UI-created live paths now stop before dispatch until P1 and an effective-config
+assertion exist. Explicitly configured paths retain assertions before send, including pinned
+Codex configuration on a delegated child. No live prompts were run for this acceptance.
+
+Final native Playwright output: `12 skipped`, `43 passed (55.6s)`. The converted settings cases
+contributed nine offline passes. The whole-harness Anthropic low-effort capture is type-safe;
+API/provider/test-policy focused tests passed 60 cases after final typecheck. Astra reviewed
+source and inspected `settings-plugins-isolated.png`. Skips remain open live-proof items.

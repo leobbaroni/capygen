@@ -51,6 +51,12 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import { backendHomes, launchEnv, type BackendHomes } from "./testPolicy.js";
+
+/** One set of disposable backend homes for this spec file; a relaunch in the
+ *  same test must see the same (still empty) homes. */
+const homes = backendHomes("workspace");
+test.afterAll(() => homes.cleanup());
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -83,18 +89,11 @@ test.describe.configure({ mode: "serial" });
 
 async function launch(): Promise<void> {
   pageErrors.length = 0;
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      // Offline: the workspace panes are the subject, not a model.
-      CAPYGEN_ENGINE: "stub",
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    // Offline: the workspace panes are the subject, not a model.
+    env: launchEnv({ userDataDir, projectDir, homes, engine: "stub" }),
   });
   page = await app.firstWindow();
   page.on("pageerror", (err) => pageErrors.push(`pageerror: ${err.message}`));

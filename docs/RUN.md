@@ -27,9 +27,13 @@ node apps/desktop/node_modules/electron/install.js
 
 Prerequisites for the *live* paths (unit tests and the offline e2e need none of this):
 
-- Claude Code signed in — the harness uses the machine's claude.ai OAuth login, not an API key
-  (`init.apiKeySource: "none"`; see `COMPAT.md`). `claude --version` should print 2.1.x.
-- No `ANTHROPIC_API_KEY` is required, and none is ever read or written by the Claude harness.
+- Use persistent, separately authenticated test homes supplied explicitly through the environment.
+  The live scripts refuse missing, relative, personal, or ancestor paths; they never fall back to
+  `~/.claude`/`~/.codex` and never copy credentials. The e2e policy uses the corresponding
+  `CAPYGEN_TEST_CLAUDE_HOME` and `CAPYGEN_TEST_CODEX_HOME` variables.
+- The live Claude model is `claude-sonnet-5` at low effort; the live Codex model is
+  `gpt-5.6-luna` at low reasoning effort. API smoke coverage is Anthropic with
+  `claude-sonnet-5` only.
 
 ---
 
@@ -104,6 +108,9 @@ corepack pnpm e2e:only       # Playwright only — build yourself first
 corepack pnpm exec playwright test tests/e2e/launch.spec.ts   # offline only
 ```
 
+Latest offline worker validation: 43 passed, 12 skipped in 55.6 s; the settings offline subset
+reported 9 passes. The skipped cases are policy-gated live coverage, not live-model proof.
+
 Playwright drives the app's own Chromium through `_electron.launch`, so there is no browser to
 install. `workers: 1` — Electron windows are singletons per user-data-dir.
 
@@ -111,17 +118,22 @@ install. `workers: 1` — Electron windows are singletons per user-data-dir.
 |---|---|---|
 | `tests/e2e/launch.spec.ts` | `CAPYGEN_ENGINE=stub` (offline echo double) | none |
 | `tests/e2e/skeleton.spec.ts` | the real Claude harness | **real model calls, real money** |
-| `tests/e2e/harnesses.spec.ts` | the real Codex, Claude and API harnesses | **real model calls** (a few cents) |
+| `tests/e2e/harnesses.spec.ts` | the real Codex, Claude and API harnesses | **real model calls** |
 | `tests/e2e/widget.spec.ts` | the real Claude harness + a fixture MCP server | **real model calls** |
-| `tests/e2e/roundtable.spec.ts` | four live (Claude + Codex), one offline (`CAPYGEN_ENGINE=stub-roundtable`) | **real model calls** (a few cents) |
+| `tests/e2e/roundtable.spec.ts` | four live (Claude + Codex), one offline (`CAPYGEN_ENGINE=stub-roundtable`) | **real model calls** |
 | `tests/e2e/workspace.spec.ts` | `CAPYGEN_ENGINE=stub` | none — it spawns a 30-line node http server on 5199, nothing else |
-| `tests/e2e/settings.spec.ts` | the real config stores, on **isolated** backend homes | none except its one live Claude case, which skips without a usable login |
+| `tests/e2e/settings.spec.ts` | config-store checks on isolated backend homes | offline checks pass; live cases skip without an explicit dedicated authenticated pair |
 
 `skeleton.spec.ts` is the PLAN Phase 2 proof: landing → live Claude reply with a usage/cost line
 → close → relaunch → same transcript out of SQLite; plus an `AskUserQuestion` card answered in
-the UI whose answer reaches the model. It pins the session to `claude-sonnet-5` through the app's
-own `settings.set` channel, so a full run costs a few cents and about a minute. It needs the
-Claude login; without one it fails with the backend's own error rather than hanging.
+the UI whose answer reaches the model. Its intended test model is `claude-sonnet-5` at low
+effort. These UI-created live turns currently skip before dispatch until the runtime-default
+dependency below is implemented, even when a dedicated test identity is supplied.
+
+The pinned low-effort configuration is policy intent; runtime inheritance into every UI-created
+turn remains a Phase 7 P1 dependency. The shared policy skips those live sends until runtime
+layering and an effective-config assertion exist. An explicit `sessions.create` path with pinned
+configuration remains runnable. A skipped turn is not evidence that a live model call succeeded.
 
 `harnesses.spec.ts` is the Phase 3 proof. Each test asks `harness.list` first and **skips with
 that backend's own reason** rather than failing on a 401, so a machine with no Codex login still
@@ -132,15 +144,15 @@ gets a green run and a sentence saying why:
   card is guaranteed to appear) renders a permission card whose **Allow once** runs the command;
 - `/` in a Claude session lists Built-ins plus what Claude itself reports — on this machine the
   `/cockpit:*` plugin commands;
-- the API-model test runs **only** with a key in Settings ▸ API keys or in
-  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`; otherwise it skips and says so.
+- the API-model test is Anthropic-only, pinned to `claude-sonnet-5` at low effort; without its
+  configured key it skips and says so.
 
 `roundtable.spec.ts` is the Phase 4 proof (SPEC R10-R13, ADR-0002). It skips per backend the
 same way `harnesses.spec.ts` does:
 
 - **round table** — a session with `@claude` (Claude Code) and `@codex` (Codex); one message
   mentioning both opens two agent turns *in mention order*, and Codex's review quotes Claude's
-  haiku, which is only possible because the labelled context delta reached it (R23: a stateful
+  response, which is only possible because the labelled context delta reached it (R23: a stateful
   backend is sent the turns since its own last one, never the transcript again). The two may then
   go on talking to each other — R11 allows that, and the hop cap bounds it — so the test asserts
   on the hop-1 round and interrupts the session before closing;
@@ -149,14 +161,15 @@ same way `harnesses.spec.ts` does:
   at hops 1-2-3, writes one "Chain stopped after 3 hops" system turn, shows the Continue bar, and
   Continue grants exactly one more hop (4) before the cap applies again. A loop bound must not be
   proved with a model that might choose to stop by itself;
-- **routed sub-agent** — a solo Claude session with `subagentRouting: {backend:"claude",
-  model:"haiku"}`: the `PreToolUse` hook rewrites `updatedInput.model` and the stored `subagent`
-  block names a haiku model, `delegated: false` (the CLI still spawned it — capygen only re-homed
-  it);
+- **routed sub-agent** — a solo Claude session pinned to `claude-sonnet-5` at low effort. The
+  hook runs and the child can be observed, but parent and child use the same pinned model, so this
+  test is partial evidence and does not prove a different-model rewrite. The deterministic hook
+  and block-shape coverage remains the place to test routing mechanics without spending a second
+  live model budget;
 - **cross-backend delegation** — the same lead with `subagentRouting: {backend:"codex"}`: no hook
   can do that, so the lead calls `mcp__capygen__delegate_task` and the block is
   `backend: "codex", delegated: true`;
-- **agent info drawer** — after one cheap turn, the drawer shows the agent's own description, the
+- **agent info drawer** — after one live turn, the drawer shows the agent's own description, the
   generated usage description, the model, the live tool list and the other agent; the same facts
   are then re-read straight off `agents.describe` so a UI change cannot hide a regression in the
   channel.
@@ -191,10 +204,11 @@ native view's own pixels), `workspace-tasks.png`. To run it alone:
 corepack pnpm build && corepack pnpm exec playwright test tests/e2e/workspace.spec.ts
 ```
 
-Every run writes screenshots to `e2e-out/`: `landing.png`, `chat.png` (offline),
+Executed cases write screenshots to `e2e-out/`: `landing.png`, `chat.png` (offline),
 `chat-pong.png`, `restored.png`, `chat-question.png`, `codex-pong.png`, `codex-permission.png`,
 `codex-allowed.png`, `slash-menu.png`, `roundtable.png`, `roundtable-hopcap.png`,
 `roundtable-routed-subagent.png`, `roundtable-delegated.png`, `roundtable-agent-info.png` (live).
+Skipped cases do not refresh their screenshots; existing files may be historical.
 
 Each spec launches into a fresh `mkdtemp` profile and a fresh temp project directory, so the real
 `%APPDATA%\capygen` is never touched.
@@ -205,8 +219,8 @@ Each spec launches into a fresh `mkdtemp` profile and a fresh temp project direc
 MCP servers, tool policies, `config.toml`, API keys — goes to a **temp** `CLAUDE_CONFIG_DIR` and
 `CODEX_HOME`, handed to the app as `CAPYGEN_CLAUDE_CONFIG_DIR` / `CAPYGEN_CODEX_HOME`
 (`apps/desktop/src/win/configHomes.ts` maps them onto the CLIs' own variables for the app, for
-every child it spawns, and for the config stores). The machine's real `~/.claude` and `~/.codex`
-are only ever **read**, by the two tests whose names say so:
+every child it spawns, and for the config stores). The cases do not use the machine's personal
+backend homes:
 
 - **(a)** the nav lists all 22 section ids and each one routes to a non-empty body; the app's own
   log is then checked for the two `[config] …=<temp>` lines, so a run that silently used the real
@@ -216,10 +230,10 @@ are only ever **read**, by the two tests whose names say so:
 - **(b3)** capygen's own MCP client then connects to that registered server and reads its tools
   (`show_card`, `echo`). Live in the sense that matters — a real child process and a real MCP
   handshake — with no model and no sign-in, so it never skips;
-- **(b2)** the model half: a real Claude turn in a session whose **project-scope** `.mcp.json`
-  holds the server, asserting the tools reach the agent's live list. It runs against the *real*
-  Claude home, because a login cannot be isolated (see below), and writes only inside a temp
-  project directory; it re-checks the real home's mtimes at the end;
+- **(b2)** the model half starts with a skip unless an explicitly supplied dedicated authenticated
+  Claude/Codex home pair is present. It applies the pinned low-effort config before dispatch. UI
+  created live sends remain gated by the shared P1 runtime-inheritance check; explicit
+  `sessions.create` paths remain runnable. A skip is not live-model evidence;
 - **(c)** a `permissions.allow` entry appended to the isolated `settings.json` from outside the
   app appears in the Tools table within 3 s — R29's watcher half;
 - **(d)** Codex: a UI add patches `config.toml` and every pre-existing comment survives; an
@@ -229,32 +243,25 @@ are only ever **read**, by the two tests whose names say so:
 - **(f)** with every `codex`-bearing directory pruned off `PATH`, the setup panel shows the step
   and **Run…** reaches the confirm dialog and spawns nothing (R3/R27);
 - **(g)** the dark-theme screenshot, and `nativeTheme.themeSource === "dark"` in the main process;
-- **(h)** the Plugins page lists the machine's genuinely installed Claude plugins — read-only,
-  against the real config dir.
-
-**Why (b2) can skip.** `CLAUDE_CONFIG_DIR` relocates `.credentials.json` along with everything
-else, so an isolated home has no login. Copying the real one in is worse than a config write: the
-SDK refreshes it from there, the refresh **rotates** the token server-side, and the new one lands
-in a directory the test then deletes — logging the real Claude Code out. So (b2) uses the real
-home and skips when the machine's own OAuth session is unusable. It says which:
-
-```
-- (b2) tools from the fixture server appear in the agent's live tool list
-  the machine's Claude OAuth session expired …; refreshing it would rewrite the real
-  ~/.claude/.credentials.json — sign in with `claude` and re-run
-```
-
-If this error appears, sign in with `claude` in a terminal (`/login`). For automated live
-proofs, use a persistent dedicated test home as specified in `docs/plans/phases7-12.md`;
-do not copy personal credentials into a disposable home. **A Claude Code terminal is not a
-terminal for this purpose**: a host that refreshes auth for its children out of process leaves
-`.credentials.json` holding empty token strings, and capygen's own `harness.list` now reports
-that as "the Claude credentials file holds no token" rather than offering a backend whose every
-turn 401s.
+- **(h)** the Plugins page uses a synthetic isolated plugin registry; its isolated screenshot is
+  `settings-plugins-isolated.png`.
 
 ---
 
 ## 5. Spikes and live smoke checks
+
+Before any live e2e, spike, or smoke command, point both backends at dedicated authenticated test
+homes. In PowerShell, for example:
+
+```powershell
+$env:CAPYGEN_TEST_CLAUDE_HOME = 'D:\capygen-test\claude'
+$env:CAPYGEN_TEST_CODEX_HOME = 'D:\capygen-test\codex'
+$env:CLAUDE_CONFIG_DIR = $env:CAPYGEN_TEST_CLAUDE_HOME
+$env:CODEX_HOME = $env:CAPYGEN_TEST_CODEX_HOME
+```
+
+Use separate directories outside the personal configuration roots. Authentication is established
+in those test homes independently; these commands do not read or copy personal configuration.
 
 ```sh
 corepack pnpm spike                                  # Phase 1 capability proof (Claude + Codex)
@@ -264,23 +271,21 @@ corepack pnpm --dir packages/engine live:api         # one live API-model turn �
 ```
 
 `live:claude` is the smallest thing that proves the harness against the real backend; run it
-first when the live e2e fails, to tell "the harness broke" apart from "the UI broke". It takes
-`--model <id>` and prints the session id, the blocks, and the turn's usage and cost.
+first when the live e2e fails, to tell "the harness broke" apart from "the UI broke". It is pinned
+to `claude-sonnet-5` at low effort and rejects other model ids.
 
-`live:codex` is the same idea for the Codex harness (`--model <id>`, default `gpt-5.5`). It runs
-two turns in a throwaway `mkdtemp` thread: "pong", then a shell command under
+`live:codex` is the same idea for the Codex harness, pinned to `gpt-5.6-luna` at low reasoning
+effort and rejecting other model ids. It runs two turns in a throwaway `mkdtemp` thread: "pong", then a shell command under
 `approvalPolicy: "untrusted"` whose approval it accepts **programmatically** — the one unattended
 `allow` in the repo, and it is one `echo`. It prints which `codex.exe` it resolved and from where;
 that line should say `(bundled)`, because the machine's installed CLI is a different protocol
-version. Codex sign-in is the ChatGPT OAuth in `~/.codex`; without it the turn fails with
-"Codex is not signed in".
+version. Codex sign-in must be present in the explicitly supplied dedicated test home; there is no
+personal-home fallback.
 
-`live:api` is the same for the `api` backend. It takes `--provider anthropic|openai|openrouter`,
-`--model <id>` and `--tool` (which forces one `read_file` so the loop is proved, not just the
-stream). It reads the key from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` only —
-the engine never reads a key from disk (R21); in the app the desktop injects the `safeStorage` one.
-**This machine has none of the three**, so the script prints `SKIP` and exits 0. Only the ends of a
-key are ever printed.
+`live:api` is the same for the `api` backend. It accepts Anthropic only, pins
+`claude-sonnet-5`, and uses low effort; unsupported providers/models fail without substitution.
+`--tool` forces one `read_file` so the loop is proved, not just the stream. It reads the Anthropic
+key from `ANTHROPIC_API_KEY` without printing the secret.
 
 ---
 
@@ -330,10 +335,9 @@ logged with its real message before it is re-thrown to the renderer.
 - **`pnpm start` shows a white window**: the renderer was not built, or was built after the
   desktop bundle. Re-run `corepack pnpm build`.
 - **Codex is greyed out in the model picker**: the reason is on the row — `harness.list` puts it
-  there. It probes with `account/read {refreshToken:true}`, not `codex login status`, so "Logged in
-  using ChatGPT" from the CLI is not a contradiction: that command only checks that
-  `~/.codex/auth.json` exists, and a dead refresh token passes it. The fix is `codex logout` then
-  `codex login`. The answer is cached for 60 s.
+  there. Confirm that the explicitly supplied dedicated Codex test home is authenticated and that
+  `CODEX_HOME` points to it; the test policy never falls back to or repairs the personal home. The
+  answer is cached for 60 s.
 - **Codex runs but every approved command fails with "Access to the path ... is denied"**: the
   project folder is an 8.3 short path (`C:\Users\TUGAPL~1\...`). capygen expands
   `--project`/`CAPYGEN_PROJECT_DIR` and the picker's answer with `longPath()`; a project row stored
@@ -416,6 +420,5 @@ installation, then `corepack pnpm build`. No install occurs in the generator. Th
 frame layout and preview are documented in `assets/mascot/README.md`; generated assets are
 committed under `assets/mascot`, while renderer/public remains staged output.
 `corepack pnpm exec playwright test tests/e2e/mascot.spec.ts` checks static PNG loading,
-sharp rendering, the larger landing mascot, and absence of animation on isolated
-backend homes. It runs offline. The desktop's minimum window width remains the supported
+sharp rendering, the larger landing mascot, and zero animations. It runs offline. The desktop's minimum window width remains the supported
 layout; a 380px renderer screenshot is a stress check, not a mobile-support claim.

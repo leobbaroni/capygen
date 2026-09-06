@@ -29,6 +29,25 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import {
+  applyPinnedDefaults,
+  assertPinnedModel,
+  assertSessionPinned,
+  backendHomes,
+  launchEnv,
+  pinnedConfigFor,
+  skipUntilP1,
+  E2E_CLAUDE_MODEL,
+  E2E_CODEX_MODEL,
+  E2E_API_PROVIDER,
+  E2E_EFFORT,
+  type BackendHomes,
+} from "./testPolicy.js";
+
+/** One set of disposable backend homes for this spec file; a relaunch in the
+ *  same test must see the same (still empty) homes. */
+const homes = backendHomes("harness");
+test.afterAll(() => homes.cleanup());
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -37,8 +56,6 @@ const outDir = path.join(repoRoot, "e2e-out");
 /** A live turn is a real model call; Codex's first turn also spawns a child. */
 const LIVE_TIMEOUT_MS = 150_000;
 
-/** Claude's cheap model, as in skeleton.spec.ts — (c) spends one turn on it. */
-const CLAUDE_E2E_MODEL = "claude-sonnet-5";
 
 interface Launched {
   app: ElectronApplication;
@@ -57,17 +74,10 @@ interface HarnessRow {
 
 async function launch(userDataDir: string, projectDir: string): Promise<Launched> {
   const errors: string[] = [];
-  // `CAPYGEN_ENGINE` is deliberately dropped: this suite runs real harnesses.
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   const app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    env: launchEnv({ userDataDir, projectDir, homes }),
   });
   const page = await app.firstWindow();
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -139,6 +149,9 @@ test.describe("live harness layer", () => {
       const optionLabel = (await option.textContent()) ?? "";
       await option.click();
       await expect(page.getByTestId("landing-composer-agent-picker")).toContainText("Codex");
+      // Everything above is offline. The turn below is created by the landing
+      // composer, so its effort cannot be pinned before dispatch.
+      skipUntilP1("harnesses: landing picker → live Codex turn");
 
       const composer = page.getByTestId("landing-composer-input");
       await composer.click();
@@ -156,10 +169,12 @@ test.describe("live harness layer", () => {
         { sessionId },
       );
       expect(loaded?.agents[0]?.backend).toBe("codex");
-      // The row shows Codex's own `displayName` ("GPT-5.6-Terra"); the agent
-      // stores the id it will send on the wire ("gpt-5.6-terra").
+      // The row shows Codex's own `displayName`; the agent stores the id it
+      // will send on the wire. Both must be the pinned test model — asserting
+      // only that the label echoes the id would pass on any model at all.
       const pickedModel = loaded?.agents[0]?.model ?? "no-model";
       expect(optionLabel.toLowerCase()).toContain(pickedModel.toLowerCase());
+      assertPinnedModel("codex", pickedModel, "landing agent picker");
 
       const agentTurn = page.getByTestId("turn").nth(1);
       await expect(agentTurn).toHaveAttribute("data-role", "agent", {
@@ -211,12 +226,21 @@ test.describe("live harness layer", () => {
           {
             name: "codex",
             backend: "codex",
-            model: codex!.defaultModel,
+            model: E2E_CODEX_MODEL,
             role: "lead",
-            config: { codex: { approvalPolicy: "untrusted", sandbox: "workspace-write" } },
+            config: {
+              codex: {
+                approvalPolicy: "untrusted",
+                sandbox: "workspace-write",
+                ...pinnedConfigFor("codex").codex as Record<string, unknown>,
+              },
+            },
           },
         ],
       });
+      // Before the turn is sent, not after: an unpinned model or a default
+      // effort has already been paid for once `press("Enter")` lands.
+      await assertSessionPinned(page, created.session.id);
       await page.evaluate((id) => {
         window.location.hash = `#/c/${id}`;
       }, created.session.id);
@@ -282,7 +306,8 @@ test.describe("live harness layer", () => {
 
       const claude = (await harnesses(page)).claude;
       test.skip(!claude?.available, `Claude is unavailable: ${claude?.reason ?? "no row"}`);
-      await invoke(page, "settings.set", { defaultModel: CLAUDE_E2E_MODEL });
+      await applyPinnedDefaults(page);
+      skipUntilP1("harnesses: landing composer → live Claude turn for the slash menu");
 
       // One cheap turn first: Claude only reports its command list in
       // `system/init`, which arrives when the first turn starts. Before that
@@ -341,9 +366,21 @@ test.describe("live harness layer", () => {
       test.skip(
         !api?.available,
         `no API key on this machine — ${api?.reason ?? "harness.list reported no api row"}. ` +
-          "Add one in Settings ▸ API keys, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / " +
-          "OPENROUTER_API_KEY before running this spec.",
+          "Add one in Settings ▸ API keys, or run with a dedicated test identity " +
+          "(CAPYGEN_TEST_CLAUDE_HOME / CAPYGEN_TEST_CODEX_HOME); an ordinary offline run " +
+          "strips personal provider keys on purpose (tests/e2e/testPolicy.ts).",
       );
+      // Pre-flight, before a single token is spent: the policy allows exactly
+      // one API pair. A machine whose API default is another provider or model
+      // skips with that named — it never silently falls back onto a model the
+      // policy does not allow.
+      test.skip(
+        api?.defaultModel !== E2E_CLAUDE_MODEL,
+        `the API backend defaults to "${api?.defaultModel ?? "no model"}"; this spec may only ` +
+          `spend a turn on ${E2E_API_PROVIDER}/${E2E_CLAUDE_MODEL} at ${E2E_EFFORT} effort.`,
+      );
+      await applyPinnedDefaults(page);
+      skipUntilP1("harnesses: landing picker → live API-model turn");
 
       await page.getByTestId("landing-composer-agent-picker").click();
       const option = page
@@ -360,6 +397,7 @@ test.describe("live harness layer", () => {
 
       await expect(page.getByTestId("chat-page")).toBeVisible();
       const sessionId = await page.evaluate(() => window.location.hash.split("/").pop() ?? "");
+      await assertSessionPinned(page, sessionId);
       const loaded = await invoke<{ agents: { backend: string }[] } | null>(page, "sessions.get", {
         sessionId,
       });

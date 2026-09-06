@@ -28,7 +28,20 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import {
+  applyPinnedDefaults,
+  backendHomes,
+  launchEnv,
+  skipUntilP1,
+  E2E_CLAUDE_MODEL,
+  type BackendHomes,
+} from "./testPolicy.js";
 import { skipUnlessClaudeAvailable } from "./claudeAvailability";
+
+/** One set of disposable backend homes for this spec file; a relaunch in the
+ *  same test must see the same (still empty) homes. */
+const homes = backendHomes("live");
+test.afterAll(() => homes.cleanup());
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -37,8 +50,8 @@ const outDir = path.join(repoRoot, "e2e-out");
 /** A live turn is a real model call: the 60s default is not enough. */
 const LIVE_TIMEOUT_MS = 120_000;
 
-/** Cheap and fast; the shipping default (Opus) would work but costs more. */
-const E2E_MODEL = "claude-sonnet-5";
+/** The pinned Claude model (`testPolicy.ts`). Never the account default. */
+const E2E_MODEL = E2E_CLAUDE_MODEL;
 
 interface Launched {
   app: ElectronApplication;
@@ -55,16 +68,10 @@ interface Launched {
  */
 async function launch(userDataDir: string, projectDir: string): Promise<Launched> {
   const errors: string[] = [];
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   const app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    env: launchEnv({ userDataDir, projectDir, homes }),
   });
   const page = await app.firstWindow();
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -75,19 +82,13 @@ async function launch(userDataDir: string, projectDir: string): Promise<Launched
   return { app, page, errors };
 }
 
-/** Point new sessions at the cheap model, through the app's own IPC. */
+/**
+ * Put new sessions on the pinned model and low effort through the app's own
+ * settings IPC (`testPolicy.applyPinnedDefaults`), so a UI-created session can
+ * never inherit the account default.
+ */
 async function useCheapModel(page: Page): Promise<void> {
-  const model = await page.evaluate(async (defaultModel) => {
-    const bridge = (window as unknown as {
-      capygen?: { invoke(channel: string, payload: unknown): Promise<unknown> };
-    }).capygen;
-    if (!bridge) throw new Error("preload bridge missing");
-    const next = (await bridge.invoke("settings.set", { defaultModel })) as {
-      defaultModel: string;
-    };
-    return next.defaultModel;
-  }, E2E_MODEL);
-  expect(model).toBe(E2E_MODEL);
+  await applyPinnedDefaults(page);
 }
 
 function tempDirs(tag: string): { userDataDir: string; projectDir: string } {
@@ -140,6 +141,9 @@ test.describe("live Claude walking skeleton", () => {
       // real Claude turn, so ask the app whether it can take one first.
       await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
+      // The landing composer creates the agent from the picker + settings
+      // defaults, so its effort cannot be pinned before the turn is sent.
+      skipUntilP1("skeleton: landing composer → first live Claude turn");
 
       // --- one live turn (R5, R6, R23) ---------------------------------
       const composer = page.getByTestId("landing-composer-input");
@@ -226,6 +230,7 @@ test.describe("live Claude walking skeleton", () => {
       await expect(page.getByTestId("landing")).toBeVisible();
       await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
+      skipUntilP1("skeleton: landing composer → AskUserQuestion live turn");
 
       const composer = page.getByTestId("landing-composer-input");
       await composer.click();

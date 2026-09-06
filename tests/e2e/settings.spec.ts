@@ -7,9 +7,11 @@
  * the app as `CAPYGEN_CLAUDE_CONFIG_DIR` / `CAPYGEN_CODEX_HOME`
  * (`apps/desktop/src/win/configHomes.ts` maps them onto the CLIs' own
  * variables for the app, for every child it spawns and for the config stores).
- * The machine's real `~/.claude` and `~/.codex` are never written by this
- * file. The one test that reads the real home says so in its name and only
- * ever lists (h).
+ * The machine's real `~/.claude` and `~/.codex` are never read or written by
+ * this file — not for a fixture, not for a baseline, and not to check an
+ * OAuth expiry. The one test that spends a live turn (b2) runs only against a
+ * **dedicated, separately authenticated** identity and skips before it
+ * launches anything when there is none (`tests/e2e/testPolicy.ts`).
  *
  * Eight proofs, in the order Task C names them:
  *
@@ -21,10 +23,9 @@
  *       reads its tool list — live (a real child process and a real MCP
  *       handshake), but with no model and no sign-in, so it never skips;
  *   (b2) a new Claude session's live tool list contains that server's tools —
- *       the same add, done at **project** scope in a temp project directory so
- *       that a real, signed-in Claude can be used without writing one byte of
- *       the machine's own `~/.claude`. Real model call, one cheap turn; skips
- *       with the backend's own reason when Claude is unavailable;
+ *       the same add, done at **project** scope in a temp project directory.
+ *       Runs only against a dedicated test identity, on the pinned model at
+ *       low effort; skips before launching when there is none;
  *   (c) an edit made **outside** the app (a `permissions.allow` entry appended
  *       to the isolated `settings.json`) reaches the Tools table within 3 s —
  *       the watcher half of R29;
@@ -38,11 +39,13 @@
  *       reaches the confirm dialog and spawns **nothing** when it is cancelled
  *       (R3, R27);
  *   (g) the dark-theme screenshot, `e2e-out/settings-dark.png`;
- *   (h) Plugins lists the machine's genuinely installed Claude plugins —
- *       read-only, against the real config dir.
+ *   (h) Plugins lists the installed Claude plugins of the config home the app
+ *       was given — a synthetic registry written into the isolated home, so
+ *       the reader is asserted against known bytes.
  *
- * Cost: (b2) is one short Claude turn (a few cents). Everything else is
- * offline: no model, no network.
+ * Cost: (b2) is one short Claude turn (a few cents) and only with a dedicated
+ * identity. Everything else is offline: no model, no network, no personal
+ * configuration.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -55,6 +58,15 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import {
+  applyPinnedDefaults,
+  assertSessionPinned,
+  backendHomes,
+  launchEnv,
+  pinnedConfigFor,
+  usingDedicatedIdentity,
+  E2E_CLAUDE_MODEL,
+} from "./testPolicy.js";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -67,7 +79,6 @@ const FIXTURE_NAME = "capyfixture";
 /** A live turn is a real model call. */
 const LIVE_TIMEOUT_MS = 150_000;
 /** Claude's cheap model, as in `skeleton.spec.ts`. */
-const CLAUDE_E2E_MODEL = "claude-sonnet-5";
 /** R29's own promise for an outside edit: the watcher debounce plus slack. */
 const OUTSIDE_EDIT_TIMEOUT_MS = 3_000;
 
@@ -171,19 +182,17 @@ async function launch(
   // `CAPYGEN_ENGINE` is dropped so that what runs is the shipping harness
   // registry rather than the stub; none of the tests using this helper starts
   // a turn, so no model is reached either way.
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   const app = await electron.launch({
     args: [appDir, `--user-data-dir=${homes.userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      CAPYGEN_USER_DATA_DIR: homes.userDataDir,
-      CAPYGEN_PROJECT_DIR: homes.projectDir,
-      CAPYGEN_CLAUDE_CONFIG_DIR: homes.claudeHome,
-      CAPYGEN_CODEX_HOME: homes.codexHome,
-      ELECTRON_ENABLE_LOGGING: "0",
-      ...extraEnv,
-    },
+    // Both CAPYGEN_* mappings and the CLIs' own CLAUDE_CONFIG_DIR/CODEX_HOME
+    // come from `homes`; `extra` cannot overwrite either (testPolicy.ts).
+    env: launchEnv({
+      userDataDir: homes.userDataDir,
+      projectDir: homes.projectDir,
+      homes: { claudeHome: homes.claudeHome, codexHome: homes.codexHome },
+      extra: extraEnv,
+    }),
   });
   const page = await app.firstWindow();
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -220,24 +229,69 @@ async function openSettings(page: Page, section: string): Promise<void> {
   await expect(page.getByTestId("settings-page")).toBeVisible();
 }
 
+
 /**
- * When the machine's Claude OAuth session expires, in epoch ms — `null` when
- * there is no credentials file or it has no expiry.
+ * A synthetic installed-plugin registry inside an isolated Claude home.
  *
- * Only `claudeAiOauth.expiresAt` is read; the tokens themselves are never
- * touched, copied or logged.
+ * (h) used to read the machine's own
+ * `~/.claude/plugins/installed_plugins.json` and assert capygen listed what it
+ * found there. That made the assertion depend on the developer's personal
+ * configuration — it skipped on a machine with no plugins, changed meaning
+ * when they installed one, and read a personal file for no benefit the fixture
+ * cannot give. The *reader* is what is under test (`ClaudeConfigStore
+ * .readPlugins`: v2 `{plugins: {"<name>@<marketplace>": [{installPath, …}]}}`,
+ * `enabledPlugins` merged along the settings chain, `commands/` and `skills/`
+ * enumerated under `installPath`), and a fixture exercises every one of those
+ * branches deterministically.
  */
-function claudeSessionExpiry(): number | null {
-  const file = path.join(os.homedir(), ".claude", ".credentials.json");
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as {
-      claudeAiOauth?: { expiresAt?: number };
-    };
-    const at = parsed.claudeAiOauth?.expiresAt;
-    return typeof at === "number" ? at : null;
-  } catch {
-    return null;
+interface PluginFixture {
+  names: string[];
+  disabledName: string;
+  skillName: string;
+}
+
+function writePluginFixture(claudeHome: string): PluginFixture {
+  const cacheRoot = path.join(claudeHome, "plugins", "cache");
+  const entries = [
+    { name: "alpha-tools@capygen-fixtures", version: "1.2.3", enabled: true },
+    { name: "beta-tools@capygen-fixtures", version: "0.9.0", enabled: false },
+  ];
+  const table: Record<string, unknown[]> = {};
+  for (const entry of entries) {
+    const installPath = path.join(cacheRoot, entry.name.replace("@", "__"));
+    fs.mkdirSync(path.join(installPath, "commands"), { recursive: true });
+    fs.mkdirSync(path.join(installPath, "skills", "fixture-skill"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installPath, "skills", "fixture-skill", "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: a fixture\n---\n",
+      "utf8",
+    );
+    table[entry.name] = [{ installPath, version: entry.version }];
   }
+  fs.mkdirSync(path.join(claudeHome, "plugins"), { recursive: true });
+  fs.writeFileSync(
+    path.join(claudeHome, "plugins", "installed_plugins.json"),
+    `${JSON.stringify({ plugins: table }, null, 2)}\n`,
+    "utf8",
+  );
+  // `enabledPlugins` lives in the settings chain, not in the registry, so the
+  // disabled one proves the merge rather than the registry parse.
+  fs.writeFileSync(
+    path.join(claudeHome, "settings.json"),
+    `${JSON.stringify(
+      {
+        enabledPlugins: Object.fromEntries(entries.map((e) => [e.name, e.enabled])),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return {
+    names: entries.map((e) => e.name),
+    disabledName: entries[1]!.name,
+    skillName: "fixture-skill",
+  };
 }
 
 /** The app's own log file, for the assertions that can only be made there. */
@@ -249,6 +303,43 @@ function readLog(userDataDir: string): string {
     .filter((f) => f.startsWith("capygen-desktop"))
     .map((f) => fs.readFileSync(path.join(dir, f), "utf8"))
     .join("\n");
+}
+
+/** Case- and separator-insensitive path equality (Windows). */
+function samePath(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const norm = (p: string): string => path.resolve(p).replace(/[\\/]+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/** True when `file` is inside one of `roots` (or is one of them). */
+function isInsideAny(file: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    const rel = path.relative(path.resolve(root), path.resolve(file));
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  });
+}
+
+/**
+ * Every file under `roots` whose text contains `needle`. Used to prove a UI
+ * write landed inside the directories the test owns — without opening a single
+ * file outside them, which is what makes it a safe replacement for reading the
+ * developer's own `~/.claude.json`.
+ */
+function filesContaining(roots: string[], needle: string): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    for (const file of walk(root)) {
+      let text = "";
+      try {
+        text = fs.readFileSync(file, "utf8");
+      } catch {
+        continue; // binary or locked: cannot carry the name as text anyway
+      }
+      if (text.includes(needle)) out.push(file);
+    }
+  }
+  return out;
 }
 
 /** Every file under a directory, for the plaintext-key sweep in (e). */
@@ -359,10 +450,49 @@ test.describe("settings hub on isolated backend homes", () => {
       cliOutput = String((err as { stdout?: string }).stdout ?? "");
     }
     expect(cliOutput, `claude mcp list said:\n${cliOutput}`).toContain(FIXTURE_NAME);
-    // And it never touched the machine's own home.
-    expect(fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8")).not.toContain(
+
+    // 3. Containment, proved without opening a personal file.
+    //
+    //    The old assertion here read `~/.claude.json` and checked the fixture
+    //    name was absent. That reads the developer's own configuration to
+    //    prove a negative about it — and it only ever covered *one* personal
+    //    file. Two stronger, fully-local proofs replace it:
+    //
+    //    (i) the app says which home it resolved. `diagnostics.get` reports
+    //        the `claudeHome`/`codexHome` the running app is actually using,
+    //        so an app that had fallen back to the real home fails here,
+    //        before any file is inspected.
+    const diagnostics = await invoke<{ paths: Record<string, string> }>(
+      page,
+      "diagnostics.get",
+      {},
+    );
+    expect(
+      samePath(diagnostics.paths.claudeHome ?? "", homes.claudeHome),
+      `the app resolved claudeHome=${diagnostics.paths.claudeHome}, not the isolated ${homes.claudeHome}`,
+    ).toBe(true);
+    expect(samePath(diagnostics.paths.codexHome ?? "", homes.codexHome)).toBe(true);
+
+    //    (ii) every byte carrying the fixture name lives inside a directory
+    //         this test created. `filesContaining` walks the isolated homes and
+    //         the temp project and returns the files that mention it; the
+    //         write must have landed in at least one of them, and the CLI
+    //         agreeing above is independent evidence that it landed where the
+    //         backend looks. Nothing outside those roots is opened at all.
+    const carriers = filesContaining(
+      [homes.claudeHome, homes.codexHome, homes.projectDir],
       FIXTURE_NAME,
     );
+    expect(
+      carriers.map((f) => path.relative(homes.claudeHome, f)),
+      "the UI write did not land inside the isolated Claude home",
+    ).toContain(".claude.json");
+    for (const file of carriers) {
+      expect(
+        isInsideAny(file, [homes.claudeHome, homes.codexHome, homes.projectDir]),
+        `${file} is outside every directory this test owns`,
+      ).toBe(true);
+    }
   });
 
 
@@ -593,69 +723,50 @@ test.describe("prerequisites gate", () => {
 // (h): the real config dir, read-only
 // ---------------------------------------------------------------------------
 
-test.describe("plugins, read from the real Claude config", () => {
+test.describe("plugins, read from an isolated Claude config", () => {
   test.slow();
 
-  test("(h) Plugins lists the machine's installed Claude plugins", async () => {
+  test("(h) Plugins lists the installed Claude plugins of the config home it was given", async () => {
     fs.mkdirSync(outDir, { recursive: true });
     const homes = makeHomes("plugins");
-
-    // What the real home actually has, read here so the assertion is against
-    // the machine and not against a number this file made up.
-    const installedFile = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
-    test.skip(
-      !fs.existsSync(installedFile),
-      `no installed_plugins.json at ${installedFile} — nothing to list`,
-    );
-    // `installed_plugins.json` v2: `{plugins: {"<name>@<marketplace>": [...]}}`,
-    // and `PluginEntry.name` is that whole key (`ClaudeConfigStore.readPlugins`).
-    const installed = JSON.parse(fs.readFileSync(installedFile, "utf8")) as {
-      plugins?: Record<string, unknown>;
-    };
-    const expectedNames = Object.keys(installed.plugins ?? {});
-    test.skip(expectedNames.length === 0, "no Claude plugins are installed on this machine");
+    // The registry is written into the *isolated* home, so this asserts the
+    // real reader against known bytes and never opens the developer's own
+    // `~/.claude`. See `writePluginFixture` for why.
+    const fixture = writePluginFixture(homes.claudeHome);
 
     let launched: Launched | null = null;
     try {
-      // Deliberately **no** `CAPYGEN_CLAUDE_CONFIG_DIR`: this test reads the
-      // real home. It only ever opens the Plugins list, which is
-      // `ClaudeConfigStore.read()` — file reads and `claude plugin list
-      // --json`. Nothing here writes Claude configuration.
-      const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
-      const app = await electron.launch({
-        args: [appDir, `--user-data-dir=${homes.userDataDir}`],
-        cwd: repoRoot,
-        env: {
-          ...inherited,
-          CAPYGEN_USER_DATA_DIR: homes.userDataDir,
-          CAPYGEN_PROJECT_DIR: homes.projectDir,
-          CAPYGEN_CODEX_HOME: homes.codexHome,
-          ELECTRON_ENABLE_LOGGING: "0",
-        },
-      });
-      const page = await app.firstWindow();
-      const errors: string[] = [];
-      page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
-      launched = { app, page, errors };
-      await page.waitForLoadState("domcontentloaded");
-      await app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0]?.setSize(1400, 950);
-      });
+      launched = await launch(homes);
+      const page = launched.page;
 
       await openSettings(page, "plugins");
       await page.getByTestId("plugins-tab-claude").click();
       await expect(page.getByTestId("plugins-panel-claude")).toBeVisible({ timeout: 60_000 });
 
-      const listed = await invoke<{ plugins: { name: string }[] }>(page, "integrations.list", {
-        backend: "claude",
-      });
+      const listed = await invoke<{
+        plugins: { name: string; version?: string; marketplace?: string; enabled: boolean; installed: boolean; skills: string[] }[];
+      }>(page, "integrations.list", { backend: "claude" });
       const listedNames = listed.plugins.map((p) => p.name);
       expect(listedNames, `capygen listed: ${listedNames.join(", ")}`).toEqual(
-        expect.arrayContaining(expectedNames),
+        expect.arrayContaining(fixture.names),
       );
+
+      // The reader's real branches, each asserted rather than assumed:
+      const alpha = listed.plugins.find((p) => p.name === fixture.names[0]);
+      expect(alpha?.version).toBe("1.2.3");
+      expect(alpha?.marketplace).toBe("capygen-fixtures");
+      expect(alpha?.installed).toBe(true);
+      expect(alpha?.enabled).toBe(true);
+      // `skills` are enumerated under the install path, not declared.
+      expect(alpha?.skills).toContain(fixture.skillName);
+      // `enabledPlugins` is merged from the settings chain, not the registry.
+      const beta = listed.plugins.find((p) => p.name === fixture.disabledName);
+      expect(beta?.enabled).toBe(false);
+
       // And at least one of them is on screen, not only in the channel.
-      await expect(page.getByTestId("plugins-panel-claude")).toContainText(expectedNames[0]!);
-      await page.screenshot({ path: path.join(outDir, "settings-plugins-real.png") });
+      await expect(page.getByTestId("plugins-panel-claude")).toContainText(fixture.names[0]!);
+      await page.screenshot({ path: path.join(outDir, "settings-plugins-isolated.png") });
+      expect(launched.errors, launched.errors.join(" | ")).toEqual([]);
     } finally {
       await launched?.app.close().catch(() => undefined);
     }
@@ -663,41 +774,58 @@ test.describe("plugins, read from the real Claude config", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (b2): the live half of R20/R29 — its own launch, against the REAL Claude home
+// (b2): the live half of R20/R29 — its own launch, against a DEDICATED test
+//       identity (never the personal home); skips before launching without one
 // ---------------------------------------------------------------------------
 
 /**
- * Why this one is not in the serial block above.
+ * Why this one is not in the serial block above, and why it needs a dedicated
+ * identity.
  *
  * A live Claude turn needs a signed-in Claude, and the sign-in lives in
- * `~/.claude/.credentials.json` — which `CLAUDE_CONFIG_DIR` relocates along
- * with everything else. There are only two ways to have both a live model and
- * an isolated home, and both are refused here:
+ * `.credentials.json` inside whatever `CLAUDE_CONFIG_DIR` points at. The
+ * earlier version of this test solved that by pointing the app at the
+ * developer's **real** home and asserting afterwards, from file mtimes, that
+ * nothing had been written. Three things were wrong with that:
  *
- *  - copy the credentials into the temp home: the SDK refreshes them from
- *    there, the refresh **rotates** the token server-side and writes the new
- *    one into a directory this file then deletes — logging the user's real
- *    Claude Code out. Not a config write, but worse than one. (It is also what
- *    the first draft of this file did, and what it cost: the turn came back
- *    `Failed to authenticate: OAuth session expired and could not be
- *    refreshed`.)
- *  - point at an API key: this machine has none (`harness.list` says so).
+ *  - it read personal files (`~/.claude.json`, `~/.claude/settings.json` and
+ *    `~/.claude/.credentials.json`) to build the mtime baseline, and parsed
+ *    the credentials file to check the OAuth expiry;
+ *  - an mtime comparison is an after-the-fact check: by the time it fails the
+ *    write has already happened;
+ *  - a token refresh rewrites the real credentials file as a *side effect* of
+ *    the turn, which is exactly the write it was trying to rule out.
  *
- * So the isolation moves from the *home* to the *scope*. The server is added
- * at `project` scope, which is `<project>/.mcp.json` — a file inside a temp
- * project directory (`ClaudeConfigStore.writeProjectMcpJson`). The approval
- * `.mcp.json` servers need (`enableAllProjectMcpServers`) is seeded into that
- * same temp project's `.claude/settings.json`. `~/.claude`, `~/.claude.json`
- * and `~/.codex` are read and never written, and the test asserts that at the
- * end by comparing their mtimes with what they were before the app started.
+ * So the rule is now the plan's rule: a live turn runs only against a
+ * persistent, separately authenticated test identity
+ * (`CAPYGEN_TEST_CLAUDE_HOME` / `CAPYGEN_TEST_CODEX_HOME`, validated against
+ * the personal roots in both directions by `tests/e2e/testPolicy.ts`), and the
+ * decision is made **before** the app is launched or any probe runs. With no
+ * dedicated identity the test skips having touched nothing at all. Nothing
+ * here copies credentials anywhere; sign in inside that home, by hand, once.
+ *
+ * The server is still added at `project` scope — `<project>/.mcp.json` in a
+ * temp directory — so even the dedicated home is not written by the test.
  */
 test.describe("a live Claude session sees a project-scope server", () => {
   test.slow();
 
   test("(b2) tools from the fixture server appear in the agent's live tool list", async () => {
+    // Decided before anything is launched, spawned or read.
+    test.skip(
+      !usingDedicatedIdentity(),
+      "(b2) spends a real Claude turn and so runs only against a dedicated test identity: " +
+        "set CAPYGEN_TEST_CLAUDE_HOME and CAPYGEN_TEST_CODEX_HOME to persistent directories " +
+        "that have their own `claude` sign-in. Personal config is never used and credentials " +
+        "are never copied (tests/e2e/testPolicy.ts).",
+    );
     test.setTimeout(3 * LIVE_TIMEOUT_MS);
     fs.mkdirSync(outDir, { recursive: true });
-    const homes = makeHomes("live");
+
+    // The dedicated homes, validated; `makeHomes` still supplies the temp
+    // profile and the temp project the server is actually written into.
+    const dedicated = backendHomes("settings-live");
+    const homes: Homes = { ...makeHomes("live"), claudeHome: dedicated.claudeHome, codexHome: dedicated.codexHome };
 
     // The approval flag, written before the app starts: it is a project
     // setting (`ClaudeConfigStore.settingsChain`) and the CLI's own gate on
@@ -709,39 +837,23 @@ test.describe("a live Claude session sees a project-scope server", () => {
       "utf8",
     );
 
-    /** The real home's files, so "read-only" can be asserted rather than claimed. */
-    const untouched = [
-      path.join(os.homedir(), ".claude.json"),
-      path.join(os.homedir(), ".claude", "settings.json"),
-      path.join(os.homedir(), ".claude", ".credentials.json"),
-    ].filter((file) => fs.existsSync(file));
-    const before = untouched.map((file) => fs.statSync(file).mtimeMs);
-
     let launched: Launched | null = null;
     try {
-      // No `CAPYGEN_CLAUDE_CONFIG_DIR`: the real home, for its sign-in.
-      // `CAPYGEN_CODEX_HOME` stays isolated — nothing here needs Codex, and a
-      // stray write would still be a write.
-      const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
-      const app = await electron.launch({
-        args: [appDir, `--user-data-dir=${homes.userDataDir}`],
-        cwd: repoRoot,
-        env: {
-          ...inherited,
-          CAPYGEN_USER_DATA_DIR: homes.userDataDir,
-          CAPYGEN_PROJECT_DIR: homes.projectDir,
-          CAPYGEN_CODEX_HOME: homes.codexHome,
-          ELECTRON_ENABLE_LOGGING: "0",
-        },
-      });
-      const page = await app.firstWindow();
-      const errors: string[] = [];
-      page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
-      launched = { app, page, errors };
-      await page.waitForLoadState("domcontentloaded");
-      await app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0]?.setSize(1400, 950);
-      });
+      // Both homes explicit, both dedicated: no implicit fallback to the real
+      // home for either backend.
+      launched = await launch(homes);
+      const page = launched.page;
+
+      // The app's own answer about the identity it is using, before the turn.
+      const diagnostics = await invoke<{ paths: Record<string, string> }>(
+        page,
+        "diagnostics.get",
+        {},
+      );
+      expect(
+        samePath(diagnostics.paths.claudeHome ?? "", homes.claudeHome),
+        `the app resolved claudeHome=${diagnostics.paths.claudeHome}, not the dedicated ${homes.claudeHome}`,
+      ).toBe(true);
 
       const rows = await invoke<{ backend: string; available: boolean; reason?: string }[]>(
         page,
@@ -749,22 +861,13 @@ test.describe("a live Claude session sees a project-scope server", () => {
         {},
       );
       const claude = rows.find((r) => r.backend === "claude");
-      test.skip(!claude?.available, `Claude is unavailable: ${claude?.reason ?? "no row"}`);
-      // `harness.list` answers "is Claude installed and is there a login on
-      // disk", which is the right question for the New Session picker and the
-      // wrong one here: an *expired* on-disk OAuth session still looks like a
-      // login. The only way past an expired one is a token refresh, and that
-      // rewrites the machine's real `~/.claude/.credentials.json` — a real
-      // config write this suite is not allowed to cause. So the expiry is
-      // read directly and the test skips rather than either failing or
-      // rotating the user's own token.
-      const expiry = claudeSessionExpiry();
+      // The backend's own reason. An expired session inside the dedicated home
+      // surfaces here; capygen reports it rather than this test parsing a
+      // credentials file to find out.
       test.skip(
-        expiry !== null && expiry <= Date.now(),
-        `the machine's Claude OAuth session expired at ${
-          expiry === null ? "?" : new Date(expiry).toISOString()
-        }; refreshing it would rewrite the real ~/.claude/.credentials.json` +
-          " — sign in with `claude` and re-run",
+        !claude?.available,
+        `Claude cannot take a turn in the dedicated test home: ${claude?.reason ?? "no row"}` +
+          " — run `claude` with CLAUDE_CONFIG_DIR set to that home and sign in, then re-run.",
       );
 
       // 1. Add it in the UI, at project scope.
@@ -790,8 +893,9 @@ test.describe("a live Claude session sees a project-scope server", () => {
       expect(Object.keys(written.mcpServers ?? {})).toContain(FIXTURE_NAME);
 
       // 3. A real turn, in that project — the only moment Claude reports its
-      //    tool list (`system/init`).
-      await invoke(page, "settings.set", { defaultModel: CLAUDE_E2E_MODEL });
+      //    tool list (`system/init`). Pinned model and pinned effort: the e2e
+      //    policy allows exactly one Claude model, at low effort.
+      await applyPinnedDefaults(page);
       const projects = await invoke<{ id: string; path: string }[]>(page, "projects.list", {});
       const project =
         projects.find((p) => path.resolve(p.path) === path.resolve(homes.projectDir)) ??
@@ -802,9 +906,19 @@ test.describe("a live Claude session sees a project-scope server", () => {
         {
           projectId: project.id,
           mode: "solo",
-          agents: [{ name: "claude", backend: "claude", model: CLAUDE_E2E_MODEL, role: "lead" }],
+          agents: [
+            {
+              name: "claude",
+              backend: "claude",
+              model: E2E_CLAUDE_MODEL,
+              role: "lead",
+              config: pinnedConfigFor("claude"),
+            },
+          ],
         },
       );
+      // Refuses to spend a turn on anything but the pinned model/effort.
+      await assertSessionPinned(page, session.session.id);
       await page.evaluate((id) => {
         window.location.hash = `#/c/${id}`;
       }, session.session.id);
@@ -828,10 +942,18 @@ test.describe("a live Claude session sees a project-scope server", () => {
       ).not.toEqual([]);
       await page.screenshot({ path: path.join(outDir, "settings-mcp-live-tools.png") });
 
-      // 4. And the real home is exactly as it was.
-      expect(untouched.map((file) => fs.statSync(file).mtimeMs)).toEqual(before);
+      // 4. The server was written into the temp project, not into the
+      //    dedicated home — asserted from the files this test owns.
+      expect(
+        filesContaining([homes.projectDir], FIXTURE_NAME).map((f) =>
+          path.relative(homes.projectDir, f),
+        ),
+      ).toContain(".mcp.json");
     } finally {
       await launched?.app.close().catch(() => undefined);
+      // Never removes a dedicated home: `backendHomes` returns a no-op cleanup
+      // for one, and the temp project/profile are handled by `created`.
+      dedicated.cleanup();
     }
   });
 });

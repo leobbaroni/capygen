@@ -14,9 +14,12 @@
  *       (`CAPYGEN_ENGINE=stub-roundtable`), because a loop bound is exactly
  *       the thing that must not be proved with a model that might choose to
  *       stop on its own. The dispatcher under test is the shipping one;
- *   (c) **routed sub-agent** — a solo Claude session whose `subagentRouting`
- *       says `claude/haiku`: the `Task` spawn is rewritten by the `PreToolUse`
- *       hook and the resulting `subagent` block names a haiku model;
+ *   (c) **routed sub-agent (PARTIAL)** — a solo Claude session with a
+ *       same-backend `subagentRouting` rule: the `Task` spawn is written as a
+ *       native, non-delegated `subagent` block on the pinned model. The e2e
+ *       model policy allows only one Claude model, so this can no longer prove
+ *       the `PreToolUse` rewrite *changed* anything — that proof lives in
+ *       `apps/desktop/test/sessionRunnerRoundTable.test.ts`;
  *   (d) **cross-backend delegation** — a Claude lead routed to `codex`: the
  *       hook cannot do that, so the lead is told to call `delegate_task`, and
  *       the block records `backend: "codex"`, `delegated: true`;
@@ -39,6 +42,20 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import {
+  assertSessionPinned,
+  backendHomes,
+  launchEnv,
+  pinnedConfigFor,
+  E2E_CLAUDE_MODEL,
+  E2E_CODEX_MODEL,
+  type BackendHomes,
+} from "./testPolicy.js";
+
+/** One set of disposable backend homes for this spec file; a relaunch in the
+ *  same test must see the same (still empty) homes. */
+const homes = backendHomes("rt");
+test.afterAll(() => homes.cleanup());
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -46,8 +63,12 @@ const outDir = path.join(repoRoot, "e2e-out");
 
 /** A live turn is a real model call; a round-table round is two of them. */
 const LIVE_TIMEOUT_MS = 180_000;
-/** The cheap model every live test here runs on unless it needs another. */
-const CLAUDE_E2E_MODEL = "claude-sonnet-4-5";
+/**
+ * The pinned Claude model every live test here runs on (`testPolicy.ts`).
+ * There is no "unless it needs another": a spec that needs a *second* model to
+ * prove something proves it in a fixture test instead — see (c) below.
+ */
+const CLAUDE_E2E_MODEL = E2E_CLAUDE_MODEL;
 
 interface Launched {
   app: ElectronApplication;
@@ -84,17 +105,15 @@ async function launch(
   engine: string | null,
 ): Promise<Launched> {
   const errors: string[] = [];
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   const app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      ...(engine ? { CAPYGEN_ENGINE: engine } : {}),
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    env: launchEnv({
+      userDataDir,
+      projectDir,
+      homes,
+      ...(engine ? { engine } : {}),
+    }),
   });
   const page = await app.firstWindow();
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -246,17 +265,23 @@ test.describe("round table, hop cap and sub-agent routing", () => {
             backend: "claude",
             model: CLAUDE_E2E_MODEL,
             role: "lead",
+            config: pinnedConfigFor("claude"),
           },
           {
             name: "Codex",
             mentionName: "codex",
             backend: "codex",
-            model: rows.codex!.defaultModel,
+            model: E2E_CODEX_MODEL,
             role: "member",
+            config: pinnedConfigFor("codex"),
           },
         ],
       });
       expect(agents.map((a) => a.mentionName)).toEqual(["claude", "codex"]);
+      // Before a single token is spent: both agents on the pinned model at the
+      // pinned effort. This session was created through `sessions.create`, so
+      // the check happens while there is still something to stop.
+      await assertSessionPinned(page, sessionId);
 
       // Both agents are in the pane before anyone has spoken (R13's tree).
       await page.getByTestId("agents-pane-toggle").click();
@@ -429,9 +454,22 @@ test.describe("round table, hop cap and sub-agent routing", () => {
   });
 
   // -------------------------------------------------------------------------
-  // (c) same-backend routing: the PreToolUse hook rewrites the model
+  // (c) same-backend routing — PARTIAL evidence, deliberately
+  //
+  // This test used to route the sub-agent to `haiku` and assert the stored
+  // block named it, which proved the `PreToolUse` hook's `updatedInput.model`
+  // rewrite actually took effect. The e2e model policy allows no second model
+  // (`testPolicy.ts`), so the route now targets the *same* pinned model the
+  // lead runs on — and a spawn that names the pinned model is exactly what an
+  // *ignored* rewrite would also produce. What survives here is that the hook
+  // fires, a native same-backend spawn is written, and it is not a delegation.
+  //
+  // The different-model rewrite itself is proved deterministically in the
+  // fixture tests (`apps/desktop/test/sessionRunnerRoundTable.test.ts`), which
+  // spend no tokens and can route to any model id they like. Do not restore a
+  // model claim here without restoring a second live model to claim it with.
   // -------------------------------------------------------------------------
-  test("routed sub-agent: a Claude Task spawn runs on the routed haiku model", async () => {
+  test("routed sub-agent: a Claude Task spawn is re-homed by the routing hook (partial)", async () => {
     test.setTimeout(4 * LIVE_TIMEOUT_MS);
     fs.mkdirSync(outDir, { recursive: true });
     const { userDataDir, projectDir } = tempDirs("route");
@@ -459,12 +497,20 @@ test.describe("round table, hop cap and sub-agent routing", () => {
             model: CLAUDE_E2E_MODEL,
             role: "lead",
             // Same backend: enforced by the `PreToolUse` hook on `Task|Agent`,
-            // whose only lever is `updatedInput.model` (docs/adr/0004).
-            subagentRouting: { backend: "claude", model: "haiku" },
-            config: { claude: { permissionMode: "bypassPermissions" } },
+            // whose only lever is `updatedInput.model` (docs/adr/0004). The
+            // routed model is the pinned one — see the PARTIAL note above.
+            subagentRouting: { backend: "claude", model: CLAUDE_E2E_MODEL },
+            config: {
+              claude: {
+                permissionMode: "bypassPermissions",
+                ...(pinnedConfigFor("claude").claude as Record<string, unknown>),
+              },
+            },
           },
         ],
       });
+
+      await assertSessionPinned(page, sessionId);
 
       const composer = page.getByTestId("chat-composer-input");
       await composer.click();
@@ -489,13 +535,19 @@ test.describe("round table, hop cap and sub-agent routing", () => {
       const { turns, blocks } = await transcript(page, sessionId);
       const sub = blocks.find((b) => b.kind === "subagent");
       expect(sub, `no subagent block was written${dump(turns, blocks)}`).toBeTruthy();
-      expect(sub!.model ?? "", `the spawn was not re-homed${dump(turns, blocks)}`).toMatch(
-        /haiku/i,
+      // PARTIAL: the routed model equals the lead's, so this asserts the block
+      // carries the pinned model — it cannot distinguish "the hook rewrote it"
+      // from "the hook was ignored and the sub-agent inherited it". Claiming a
+      // rewrite here would be claiming evidence this test does not have.
+      expect(sub!.model ?? "", `the spawn named an unpinned model${dump(turns, blocks)}`).toBe(
+        CLAUDE_E2E_MODEL,
       );
       expect(sub!.backend).toBe("claude");
       // Same backend ⇒ the native spawn, re-labelled — not a delegation.
       expect(sub!.delegated ?? false).toBe(false);
-      await expect(subagentRow).toContainText(/haiku/i);
+      // The pane renders whatever the block says; assert the pinned model, not
+      // a second model this test is no longer allowed to route to.
+      await expect(subagentRow).toContainText(CLAUDE_E2E_MODEL);
 
       await page.screenshot({ path: path.join(outDir, "roundtable-routed-subagent.png") });
       expect(launched.errors, launched.errors.join(" | ")).toEqual([]);
@@ -532,13 +584,26 @@ test.describe("round table, hop cap and sub-agent routing", () => {
             backend: "claude",
             model: CLAUDE_E2E_MODEL,
             role: "lead",
-            // No model: a cross-backend rule leaves the routed harness to pick
-            // its own default, because a Claude model id means nothing to Codex.
-            subagentRouting: { backend: "codex" },
-            config: { claude: { permissionMode: "bypassPermissions" } },
+            // The delegated child's model is named explicitly: leaving it out
+            // makes `resolveRoute` send "" and lets the Codex harness pick its
+            // own default, which the e2e policy does not allow to be spent on.
+            subagentRouting: { backend: "codex", model: E2E_CODEX_MODEL },
+            // `createDelegateRunner` builds the child harness with the
+            // *parent's* `config` (SessionRunner.harnessExtras), so the child's
+            // `codex.reasoningEffort` has to be declared here — it is the only
+            // lever a test has over a delegated agent.
+            config: {
+              claude: {
+                permissionMode: "bypassPermissions",
+                ...(pinnedConfigFor("claude").claude as Record<string, unknown>),
+              },
+              ...pinnedConfigFor("codex"),
+            },
           },
         ],
       });
+
+      await assertSessionPinned(page, sessionId);
 
       const composer = page.getByTestId("chat-composer-input");
       await composer.click();
@@ -590,7 +655,7 @@ test.describe("round table, hop cap and sub-agent routing", () => {
       test.skip(!rows.claude?.available, `Claude is unavailable: ${rows.claude?.reason ?? "no row"}`);
       test.skip(!rows.codex?.available, `Codex is unavailable: ${rows.codex?.reason ?? "no row"}`);
 
-      const { agents } = await openSession(page, projectDir, {
+      const { sessionId, agents } = await openSession(page, projectDir, {
         mode: "round-table",
         title: "agent info",
         agents: [
@@ -600,17 +665,21 @@ test.describe("round table, hop cap and sub-agent routing", () => {
             backend: "claude",
             model: CLAUDE_E2E_MODEL,
             role: "lead",
+            config: pinnedConfigFor("claude"),
             description: "Writes and reviews the prose.",
           },
           {
             name: "Codex",
             mentionName: "codex",
             backend: "codex",
-            model: rows.codex!.defaultModel,
+            model: E2E_CODEX_MODEL,
             role: "member",
+            config: pinnedConfigFor("codex"),
           },
         ],
       });
+
+      await assertSessionPinned(page, sessionId);
 
       // One cheap turn first: `tools` and `capabilities` are facts of a
       // *running* harness (Claude reports them in `system/init`, which arrives

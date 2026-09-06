@@ -31,7 +31,13 @@ import {
   type FrameLocator,
   type Page,
 } from "@playwright/test";
+import { backendHomes, launchEnv, skipUntilP1, type BackendHomes } from "./testPolicy.js";
 import { skipUnlessClaudeAvailable } from "./claudeAvailability";
+
+/** One set of disposable backend homes for this spec file; a relaunch in the
+ *  same test must see the same (still empty) homes. */
+const homes = backendHomes("widget");
+test.afterAll(() => homes.cleanup());
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -49,16 +55,10 @@ interface Launched {
 
 async function launch(userDataDir: string, projectDir: string): Promise<Launched> {
   const errors: string[] = [];
-  const { CAPYGEN_ENGINE: _drop, ...inherited } = process.env;
   const app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...inherited,
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    env: launchEnv({ userDataDir, projectDir, homes }),
   });
   const page = await app.firstWindow();
   page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -147,6 +147,7 @@ test.describe("MCP Apps widget host", () => {
       await expect(page.getByTestId("landing")).toBeVisible();
       await skipUnlessClaudeAvailable(page);
       await useCheapModel(page);
+      skipUntilP1("widget: landing composer → live Claude turn that calls an MCP tool");
 
       const composer = page.getByTestId("landing-composer-input");
       await composer.click();

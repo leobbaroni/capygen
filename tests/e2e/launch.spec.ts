@@ -17,6 +17,7 @@ import {
   type ElectronApplication,
   type Page,
 } from "@playwright/test";
+import { backendHomes, launchEnv, type BackendHomes } from "./testPolicy.js";
 
 // Playwright transpiles specs to CommonJS (the repo root is not `"type":
 // "module"`), so `__dirname` is the portable anchor here, not `import.meta`.
@@ -26,6 +27,7 @@ const outDir = path.join(repoRoot, "e2e-out");
 
 let app: ElectronApplication;
 let page: Page;
+let homes: BackendHomes;
 let userDataDir: string;
 let projectDir: string;
 /** Renderer console errors, surfaced on failure — a CSP or bridge fault is
@@ -33,6 +35,7 @@ let projectDir: string;
 const pageErrors: string[] = [];
 
 test.beforeAll(async () => {
+  homes = backendHomes("launch");
   // A fresh profile per run: no leftover sessions, no leftover window geometry,
   // and the real %APPDATA%\capygen is never touched.
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-e2e-"));
@@ -44,17 +47,11 @@ test.beforeAll(async () => {
   app = await electron.launch({
     args: [appDir, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      CAPYGEN_USER_DATA_DIR: userDataDir,
-      CAPYGEN_PROJECT_DIR: projectDir,
-      // The walking-skeleton run must be deterministic and offline: the echo
-      // engine stands in for the Claude harness, which has its own live check
-      // (`corepack pnpm --dir packages/engine live:claude`).
-      CAPYGEN_ENGINE: "stub",
-      // Electron's own noise off; the app's rotating log is the record we keep.
-      ELECTRON_ENABLE_LOGGING: "0",
-    },
+    // The walking-skeleton run must be deterministic and offline: the echo
+    // engine stands in for the Claude harness, which has its own live check
+    // (`corepack pnpm --dir packages/engine live:claude`). Backend homes are
+    // disposable, so nothing here can read the developer's config.
+    env: launchEnv({ userDataDir, projectDir, homes, engine: "stub" }),
   });
   page = await app.firstWindow();
   page.on("pageerror", (err) => pageErrors.push(`pageerror: ${err.message}`));
@@ -73,6 +70,7 @@ test.afterAll(async () => {
   await app?.close();
   fs.rmSync(userDataDir, { recursive: true, force: true });
   fs.rmSync(projectDir, { recursive: true, force: true });
+  homes.cleanup();
 });
 
 test("lands on the New Session page with the mascot and composer", async () => {

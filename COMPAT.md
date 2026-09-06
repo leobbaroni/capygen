@@ -414,3 +414,16 @@ and Codex project paths. Renderer selection is per window and captured by mutati
 Project/session tool-policy writes without a representable backend identity are refused;
 legacy rows stay removable. `integrationsProjectScope.test.ts`, watcher tests and renderer
 scope tests cover these semantics. Worktree relation/operations remain a separate Phase 7 task.
+
+## E2E model and home policy — 2026-09-07
+
+Playwright setup supplies disposable backend homes by default and captures their cleanup in a
+closure. `CAPYGEN_TEST_CLAUDE_HOME` plus `CAPYGEN_TEST_CODEX_HOME` selects an explicitly supplied
+persistent test identity; neither directory is removed. Personal-root/ancestor checks resolve
+symlinks without reading configuration content. Launch environments set both CAPYGEN mappings
+and CLI-native names, strip conflicting casing on Windows, and reject reserved-key overrides.
+Live prompts use only `claude-sonnet-5` or `gpt-5.6-luna`, with low effort. Six UI-created live
+paths currently skip before dispatch pending P1 effective runtime-default verification. Explicit
+agent-config paths assert the selected model/effort before sending. These tests prove current
+request policy, not live capability when skipped. Plugin listing uses a synthetic isolated
+registry instead of the machine's personal plugins. `testPolicy.spec.ts` covers the guards.

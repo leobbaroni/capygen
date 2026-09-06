@@ -691,6 +691,98 @@ describe("cache_control on the wire (R24)", () => {
   });
 });
 
+/**
+ * The live test policy pins `claude-sonnet-5` at `low`. That claim is only true
+ * if the effort survives every leg — `agent.config.api.reasoningEffort` →
+ * `resolveApiConfig` → `ProviderRequest.reasoningEffort` → the Anthropic body.
+ * Asserting the **outbound body** rather than the resolved config is the point:
+ * the field used to stop at the provider boundary and be silently dropped, so
+ * a policy that said `low` paid the model's default effort instead.
+ */
+describe("reasoning effort on the wire", () => {
+  /**
+   * A fake Anthropic client that records every outbound body. No key, no
+   * network. Typed as the provider's own first constructor parameter
+   * (`AnthropicClientLike`) rather than `unknown`, so the fake is checked
+   * against the real seam instead of being cast past it.
+   */
+  type AnthropicClient = ConstructorParameters<typeof AnthropicProvider>[0];
+
+  function recordingClient(): { bodies: Record<string, unknown>[]; client: AnthropicClient } {
+    const bodies: Record<string, unknown>[] = [];
+    // Annotated, not cast: the fake has to satisfy the seam structurally, so a
+    // change to `AnthropicClientLike` fails here instead of at runtime.
+    const client: AnthropicClient = {
+      messages: {
+        create: (body: Record<string, unknown>) => {
+          bodies.push(body);
+          return (async function* () {
+            yield { type: "content_block_start", index: 0, content_block: { type: "text" } };
+            yield { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } };
+            yield { type: "content_block_stop", index: 0 };
+            yield { type: "message_delta", delta: { stop_reason: "end_turn" } };
+          })();
+        },
+      },
+    };
+    return { bodies, client };
+  }
+
+  async function bodiesFor(apiConfig: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+    const { bodies, client } = recordingClient();
+    const harness = new ApiHarness({
+      ...useMcpOff(),
+      createProvider: async () => new AnthropicProvider(client),
+      keys: { getKey: () => "sk-test" },
+    });
+    await harness.start({ ...SESSION, projectPath: root }, agent({ config: { api: apiConfig } }));
+    await runTurn(harness, "turn_1");
+    await harness.dispose();
+    return bodies;
+  }
+
+  it("sends the pinned test model at low effort as output_config.effort", async () => {
+    const bodies = await bodiesFor({
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      reasoningEffort: "low",
+    });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.model).toBe("claude-sonnet-5");
+    expect(bodies[0]?.output_config).toEqual({ effort: "low" });
+  });
+
+  it("omits output_config when the agent configures no effort", async () => {
+    const bodies = await bodiesFor({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(bodies[0]?.output_config).toBeUndefined();
+  });
+
+  it("drops an effort the Messages API does not accept rather than sending it", async () => {
+    // `minimal` is valid for OpenAI and invalid for Anthropic; the adapter
+    // degrades to the model default instead of failing the turn.
+    const bodies = await bodiesFor({
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      reasoningEffort: "minimal",
+    });
+    expect(bodies[0]?.output_config).toBeUndefined();
+  });
+
+  it("keeps the cache breakpoints while effort is set", async () => {
+    const body = (await bodiesFor({
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      reasoningEffort: "low",
+    }))[0]!;
+    expect((body.system as { cache_control?: unknown }[])[0]?.cache_control).toEqual({
+      type: "ephemeral",
+    });
+    expect((body.tools as { cache_control?: unknown }[]).at(-1)?.cache_control).toEqual({
+      type: "ephemeral",
+    });
+  });
+});
+
 describe("config, prompt and pricing", () => {
   it("reads the agent's api config and falls back to the agent's own model", () => {
     expect(
