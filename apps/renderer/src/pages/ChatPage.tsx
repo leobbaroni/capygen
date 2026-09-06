@@ -129,7 +129,16 @@ export function ChatPage() {
     // and the sessions sidebar on a 1280px window.
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="chat-page-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="chat-page">
-        <header className="titlebar-clearance flex h-9 shrink-0 items-center gap-2 px-4">
+        {/* [C] The caption buttons sit over the *rightmost* column. With the
+            workspace open that is `WorkspaceHost`'s toolbar, which reserves the
+            clearance itself — reserving it here too would leave a 9rem hole in
+            the middle of the chat row. */}
+        <header
+          className={cn(
+            "titlebar-clearance flex h-9 shrink-0 items-center gap-2 px-4",
+            agentsPaneOpen && "titlebar-clearance-no-caption",
+          )}
+        >
           <Mascot state={mascotState} size={20} />
           <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {session?.title || "Untitled session"}

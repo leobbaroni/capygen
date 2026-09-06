@@ -6,6 +6,9 @@ import type { DockviewApi, DockviewPanelApi } from "dockview-react";
 import type { WorkspacePaneParams } from "@/workspace/types";
 import { ServersPane } from "./ServersPane";
 import { onOpenInBrowserPane } from "../browserBus";
+// Side effect only: registers the `browser` pane so `openUrlInBrowserPane`
+// can create its panel in the "Browser tab is closed" test below.
+import "../browser/BrowserPane";
 
 const ipcInvoke = vi.fn();
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -55,7 +58,21 @@ beforeEach(() => {
 
 const params: WorkspacePaneParams = { projectId: "p1", sessionId: "s1" };
 const api = {} as DockviewPanelApi;
-const containerApi = {} as DockviewApi;
+
+/** [C] The pane now opens URLs through `workspace/openInBrowser`, which
+ *  creates the Browser panel when it is closed and only falls back to the
+ *  `browserBus` when one already exists — so the fake container has to
+ *  answer both questions. `hasBrowser` picks which branch is under test. */
+function fakeContainerApi(hasBrowser: boolean): DockviewApi & { addPanel: ReturnType<typeof vi.fn> } {
+  const addPanel = vi.fn();
+  const setActive = vi.fn();
+  return {
+    addPanel,
+    getPanel: (id: string) => (hasBrowser && id === "browser" ? { api: { setActive } } : undefined),
+  } as unknown as DockviewApi & { addPanel: ReturnType<typeof vi.fn> };
+}
+
+const containerApi = fakeContainerApi(true);
 const props = { params, api, containerApi };
 
 describe("ServersPane (SPEC R18)", () => {
@@ -156,6 +173,65 @@ describe("ServersPane (SPEC R18)", () => {
     });
 
     expect(await screen.findByTestId("server-open-browser")).toBeInTheDocument();
+  });
+
+  it("[C] auto-opens the Browser pane when a server this pane started reports its URL (G6)", async () => {
+    ipcInvoke.mockImplementation((channel: string) => {
+      if (channel === "servers.detect") return Promise.resolve(rows);
+      // Discovery has not finished when `start` returns — the URL arrives on
+      // the `servers.status` event, which is what G6 keys the open on.
+      if (channel === "servers.start") return Promise.resolve({ serverId: "srv1", status: "starting" });
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
+    const user = userEvent.setup();
+    const received = vi.fn();
+    const off = onOpenInBrowserPane(received);
+    render(<ServersPane {...props} />);
+    await screen.findByText("web");
+
+    await user.click(screen.getByTestId("server-start"));
+    act(() => {
+      emit("servers.status", { run: { serverId: "srv1", status: "running", url: "http://localhost:5199" } });
+    });
+
+    expect(received).toHaveBeenCalledWith("http://localhost:5199");
+    off();
+  });
+
+  it("[C] does not hijack the Browser pane for a server it did not start", async () => {
+    const received = vi.fn();
+    const off = onOpenInBrowserPane(received);
+    render(<ServersPane {...props} />);
+    await screen.findByText("web");
+
+    act(() => {
+      emit("servers.status", { run: { serverId: "srv1", status: "running", url: "http://localhost:5199" } });
+    });
+
+    expect(received).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("[C] creates the Browser panel when it is closed instead of shouting into the void", async () => {
+    const closedContainer = fakeContainerApi(false);
+    ipcInvoke.mockImplementation((channel: string) => {
+      if (channel === "servers.detect")
+        return Promise.resolve([row({}, { serverId: "srv1", status: "running", url: "http://localhost:5173" })]);
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
+    const user = userEvent.setup();
+    render(<ServersPane params={params} api={api} containerApi={closedContainer} />);
+    await screen.findByTestId("server-open-browser");
+
+    await user.click(screen.getByTestId("server-open-browser"));
+
+    expect(closedContainer.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "browser",
+        component: "browser",
+        params: expect.objectContaining({ initialUrl: "http://localhost:5173" }),
+      }),
+    );
   });
 
   it("opens the log drawer, fetching the initial tail once", async () => {

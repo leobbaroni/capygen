@@ -18,6 +18,18 @@ function cssVar(name: string, fallback: string): string {
   return value.length > 0 ? value : fallback;
 }
 
+/**
+ * [C] xterm measures glyphs by writing the family into a `CanvasRenderingContext2D.font`
+ * string (and into the WebGL atlas), where `var(--font-mono)` is not a value
+ * a canvas can resolve — Chromium silently drops the whole declaration and
+ * falls back to a proportional face, which makes the cursor land in the
+ * wrong column. So the family is resolved to real font names here, exactly
+ * like every colour on this page.
+ */
+export function readXtermFontFamily(): string {
+  return cssVar("--font-mono", "ui-monospace, SFMono-Regular, Consolas, monospace");
+}
+
 export function readXtermTheme(): ITheme {
   const foreground = cssVar("--foreground", "#27272a");
   const background = cssVar("--code-bg", "#0000000f");

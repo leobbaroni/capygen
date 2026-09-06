@@ -22,7 +22,7 @@ import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { registerPane } from "@/workspace/registry";
 import type { WorkspacePaneProps } from "@/workspace/types";
-import { readXtermTheme } from "./xtermTheme";
+import { readXtermFontFamily, readXtermTheme } from "./xtermTheme";
 
 interface TerminalTab {
   id: string;
@@ -87,7 +87,7 @@ export function TerminalPane({ params }: WorkspacePaneProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="terminal-pane">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="terminal-pane">
       <div className="flex shrink-0 items-center gap-1 border-b border-border-weak bg-card px-1.5 py-1">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" data-testid="terminal-tabs">
           {tabs.map((tab) => (
@@ -214,7 +214,7 @@ function TerminalInstance({
     const term = new Terminal({
       convertEol: true,
       cursorBlink: true,
-      fontFamily: "var(--font-mono)",
+      fontFamily: readXtermFontFamily(),
       fontSize: 13,
       theme: readXtermTheme(),
     });
@@ -233,6 +233,14 @@ function TerminalInstance({
     }
 
     term.open(el);
+    // [C] The only way to read what a terminal is showing from the outside.
+    // Under the WebGL (or canvas) renderer xterm draws to a canvas and puts
+    // *nothing* in the DOM, and it offers no DOM-element → instance lookup,
+    // so `tests/e2e/workspace.spec.ts` would have no way to assert on the
+    // buffer at all. Attaching the instance to its own container is a
+    // renderer-local back-pointer: it crosses no bridge, is not on `window`,
+    // and dies with the element.
+    (el as HTMLElement & { __xterm?: Terminal }).__xterm = term;
     fit.fit();
     void ipc()
       .invoke("terminal.resize", { id, cols: term.cols, rows: term.rows })
@@ -320,6 +328,12 @@ function TerminalInstance({
     void ipc()
       .invoke("terminal.resize", { id, cols: term.cols, rows: term.rows })
       .catch(() => undefined);
+    // [C] Without this the pane opens with a terminal nobody can type into
+    // until they think to click the black rectangle: xterm only takes
+    // keystrokes through its own hidden textarea, and nothing had focused
+    // it. Focusing the *active* tab is also what makes switching tabs put
+    // the caret where the user is looking.
+    term.focus();
   }, [active, id]);
 
   return (

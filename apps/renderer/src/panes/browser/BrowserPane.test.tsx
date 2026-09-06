@@ -26,7 +26,10 @@ vi.mock("@/lib/ipc", () => ({
 
 /** A minimal stand-in for the slice of `DockviewPanelApi` this pane reads —
  *  `isVisible` plus the event dockview fires when a stacked tab's own
- *  visibility flips (never unmounted, per that api's own doc comment). */
+ *  visibility flips (never unmounted, per that api's own doc comment), and
+ *  `onDidDimensionsChange`, which the bounds tracker listens to so the
+ *  native view follows a dock/drag/maximise that moved the box without
+ *  resizing it. */
 function fakeApi(initialVisible = true): DockviewPanelApi & { setVisible: (v: boolean) => void } {
   const handlers = new Set<(e: { isVisible: boolean }) => void>();
   let isVisible = initialVisible;
@@ -38,6 +41,7 @@ function fakeApi(initialVisible = true): DockviewPanelApi & { setVisible: (v: bo
       handlers.add(listener);
       return { dispose: () => handlers.delete(listener) };
     },
+    onDidDimensionsChange: () => ({ dispose: () => undefined }),
     setVisible(next: boolean) {
       isVisible = next;
       for (const h of handlers) h({ isVisible: next });
@@ -84,7 +88,13 @@ afterEach(() => {
 });
 
 const params: WorkspacePaneParams = { projectId: "p1", sessionId: "s1" };
-const containerApi = {} as DockviewApi;
+const containerApi = {
+  onDidLayoutChange: () => ({ dispose: () => undefined }),
+  // Maximising a group rearranges the grid's presentation without changing
+  // the serialisable tree, so the bounds tracker subscribes to this
+  // separately from `onDidLayoutChange`.
+  onDidMaximizedGroupChange: () => ({ dispose: () => undefined }),
+} as unknown as DockviewApi;
 
 describe("BrowserPane (SPEC R16)", () => {
   it("attaches a native view with the placeholder's bounds once visible", async () => {

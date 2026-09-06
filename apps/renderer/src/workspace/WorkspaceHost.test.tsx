@@ -30,7 +30,16 @@ vi.mock("dockview-react", () => ({
 
 interface FakePanel {
   id: string;
-  api: { id: string; setActive: () => void; close: () => void };
+  api: {
+    id: string;
+    setActive: () => void;
+    close: () => void;
+    /** [C] Dockview merges these into the panel's stored params; the host
+     *  calls it after a restore so a layout saved under a previous session
+     *  does not hand every pane a dead `projectId`/`sessionId`. */
+    updateParameters: (params: Record<string, unknown>) => void;
+  };
+  params: Record<string, unknown>;
 }
 
 function createFakeApi() {
@@ -47,11 +56,15 @@ function createFakeApi() {
     get activePanel() {
       return active;
     },
-    addPanel: vi.fn((opts: { id: string }) => {
+    addPanel: vi.fn((opts: { id: string; params?: Record<string, unknown> }) => {
       const panel: FakePanel = {
         id: opts.id,
+        params: { ...(opts.params ?? {}) },
         api: {
           id: opts.id,
+          updateParameters: vi.fn((next: Record<string, unknown>) => {
+            panel.params = { ...panel.params, ...next };
+          }),
           // Real dockview activates a freshly-added panel by default.
           setActive: vi.fn(() => {
             active = panel;
@@ -151,6 +164,72 @@ describe("WorkspaceHost", () => {
     });
     await waitFor(() => expect(api.fromJSON).toHaveBeenCalledWith({ saved: true }));
     expect(api.panels.map((p) => p.id)).toEqual(["editor"]);
+  });
+
+  it("[C] rebinds a restored panel's projectId/sessionId, keeping its own params", async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === "layout.get") {
+        return Promise.resolve({ projectId: "p1", layoutJson: { saved: true }, updatedAt: 0 });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<WorkspaceHost projectId="p1" sessionId="s1" onClose={vi.fn()} />);
+    const api = ready();
+    api.fromJSON.mockImplementation((data: { saved?: boolean }) => {
+      if (!data.saved) return;
+      // What `toJSON` would have serialised in a *previous* session.
+      api.addPanel({
+        id: "editor",
+        params: { projectId: "p-old", sessionId: "s-old", initialFilePath: "src/main.ts" },
+      });
+    });
+    await waitFor(() => expect(api.fromJSON).toHaveBeenCalled());
+
+    await waitFor(() =>
+      expect(api.panels[0]!.params).toEqual({
+        projectId: "p1",
+        sessionId: "s1",
+        initialFilePath: "src/main.ts",
+      }),
+    );
+  });
+
+  it("[C] rewrites the ids inside the saved JSON, so a panel is never *created* with a stale one", async () => {
+    // The post-`fromJSON` rebind above is not enough on its own: a pane's
+    // "open one terminal" effect has a `[]` dependency list, so it acts on
+    // what it saw on its first render and never reconsiders. The ids have to
+    // be right in the JSON dockview builds the panel from.
+    const saved = {
+      grid: { root: { type: "leaf", data: { views: ["terminal"] } } },
+      panels: {
+        terminal: {
+          id: "terminal",
+          contentComponent: "terminal",
+          params: { projectId: "p-old", sessionId: "s-old" },
+        },
+      },
+    };
+    invoke.mockImplementation((channel: string) => {
+      if (channel === "layout.get") {
+        return Promise.resolve({ projectId: "p1", layoutJson: saved, updatedAt: 0 });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<WorkspaceHost projectId="p1" sessionId="s1" onClose={vi.fn()} />);
+    const api = ready();
+    api.fromJSON.mockImplementation((data: { panels?: Record<string, { params?: unknown }> }) => {
+      for (const [id, panel] of Object.entries(data.panels ?? {})) {
+        api.addPanel({ id, params: panel.params as Record<string, unknown> });
+      }
+    });
+    await waitFor(() => expect(api.fromJSON).toHaveBeenCalled());
+    // The argument `fromJSON` saw — not what was patched afterwards.
+    const passed = api.fromJSON.mock.calls[0]![0] as {
+      panels: Record<string, { params: Record<string, string> }>;
+    };
+    expect(passed.panels.terminal!.params).toEqual({ projectId: "p1", sessionId: "s1" });
+    // …and the caller's own object was not mutated on the way through.
+    expect(saved.panels.terminal.params).toEqual({ projectId: "p-old", sessionId: "s-old" });
   });
 
   it("falls back to the default layout when the saved one fails to restore", async () => {

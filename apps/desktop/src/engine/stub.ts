@@ -22,8 +22,52 @@ import { describeAgent as describeAgentInfo } from "../ipc/agentsDescribe.js";
 import { createRoundTable, type RoundTable } from "./RoundTable.js";
 import { emitBlock, finishTurn, openAgentTurn, recordUserTurn, textBlock } from "./persist.js";
 import type { Engine, EngineDeps } from "./types.js";
+import { newId, type Block } from "@capygen/shared";
 
 export const ECHO_DELAY_MS = 300;
+
+/**
+ * [C] `todo: a, b, c` makes the echo double write a real Claude-shaped
+ * `TodoWrite` tool call before its text reply.
+ *
+ * The Tasks pane is fed *only* by the broadcast tap in `ipc/handlers.ts`
+ * (`TasksService.observeBlock`) — capygen never asks a model for its plan
+ * (R26). Proving that end to end therefore needs a block of that exact
+ * shape in the transcript, and the offline engine is the only place one can
+ * come from without spending a token. The first item is `in_progress` and
+ * the rest `pending`, which is what a real agent's first `TodoWrite` looks
+ * like.
+ */
+const TODO_PREFIX = /^todo:\s*/i;
+
+function todoBlock(sessionId: string, turnId: string, index: number, text: string): Block | null {
+  if (!TODO_PREFIX.test(text)) return null;
+  const items = text
+    .replace(TODO_PREFIX, "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (items.length === 0) return null;
+  const ts = Date.now();
+  return {
+    id: newId("block"),
+    turnId,
+    sessionId,
+    kind: "tool_call",
+    index,
+    name: "TodoWrite",
+    input: {
+      todos: items.map((content, i) => ({
+        content,
+        activeForm: content,
+        status: i === 0 ? "in_progress" : "pending",
+      })),
+    },
+    status: "success",
+    createdAt: ts,
+    updatedAt: ts,
+  };
+}
 
 export interface StubEngineOptions {
   /** Answer every turn with an `@mention` of another agent, and dispatch
@@ -62,6 +106,8 @@ export function createStubEngine(
         inFlight.delete(sessionId);
         try {
           const peer = peerOf(sessionId, agentId ?? deps.store.turns.get(turnId)?.agentId);
+          const todos = todoBlock(sessionId, turnId, deps.store.blocks.nextIndex(turnId), text);
+          if (todos) emitBlock(deps, todos);
           emitBlock(
             deps,
             textBlock(

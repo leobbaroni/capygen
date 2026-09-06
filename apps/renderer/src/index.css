@@ -281,6 +281,14 @@ html:not(.dark) .conversations-sidebar {
   -webkit-app-region: drag;
 }
 
+/* [C] …unless another column to its right owns that clearance instead. With
+   the workspace host open (SPEC R16), the caption buttons sit over the
+   *workspace* toolbar, not over the chat header, and reserving the width in
+   both places leaves a 9rem hole in the middle of the chat row. */
+.titlebar-clearance-no-caption {
+  padding-right: 0;
+}
+
 /* …and anything at the very top of a column keeps clear of the drag strip,
    which is fixed above the whole window and would otherwise swallow the click. */
 .titlebar-top-clearance {

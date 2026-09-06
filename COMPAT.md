@@ -226,3 +226,33 @@ Added by Phase 5 task B1 (`apps/desktop/src/workspace/**`). Verified on this mac
 | `.cmd` / `.bat` need `cmd.exe /d /s /c` | Node refuses to `CreateProcess` a batch file since CVE-2024-27980 | `DevServerService.resolveWindowsCommand` | a real `.exe` is spawned **directly** with an argv array — routing it through cmd puts two quote parsers in the path and node's `\"` escaping is not what cmd understands |
 | `rg --files` when ripgrep is on PATH | optional | `FsService.search` | probed once per process; absent (as on this machine) the bounded walker answers instead |
 | `docker compose -f <file> up <service>` | detector output only, never run by capygen itself | `detectors.detectCompose` | if the v1 `docker-compose` binary is all a machine has, the row still lists and the start fails visibly with docker's own message |
+
+### Renderer side of the panes — dockview, xterm (SPEC R16, R17)
+
+Added by Phase 5 tasks B2/B3 and pinned by task C's integration. Versions are the ones
+installed in `apps/renderer/node_modules` on 2026-09-06, read back from each package's own
+`package.json`, not from the range in the manifest.
+
+| Item | Pinned / verified | Used by | If it changes |
+|---|---|---|---|
+| `dockview-react` | **8.2.0** (exact, no caret — the layout JSON this app persists is dockview's own `toJSON()` output) | `workspace/WorkspaceHost.tsx` | `layout.set` stores a `SerializedDockview` verbatim; a format change across a major would make every saved layout unreadable. `applySavedOrDefaultLayout` already falls back to the default when `fromJSON` throws, so the failure mode is "layout resets", not "workspace is dead" |
+| `DockviewApi.onDidLayoutChange` / `onDidMaximizedGroupChange` are **separate** events | measured against 8.2.0 | `BrowserPane`'s bounds tracker | maximising rearranges the grid's presentation without changing the serialisable tree, so a native overlay that only listens to `onDidLayoutChange` lags a maximise until the 500 ms poll. e2e `(g)` asserts the two rectangles agree to 2px |
+| `defaultRenderer="always"` | dockview's default is `onlyWhenVisible` | `WorkspaceHost` | the default **unmounts** every non-active tab, which kills an xterm's scrollback, stops a Servers pane hearing `servers.status` mid-start, and destroys a `WebContentsView`. Every capygen pane that owns a live resource depends on `always` |
+| dockview's tab context menu (float/popout from a right-click) | **paid** `dockview-enterprise` "ContextMenu" module | not used | `getTabContextMenuItems` throws at runtime without it; float is still reachable by dragging a tab past the group edge |
+| dockview tabs are **HTML5** drag sources (`draggable` + `dragstart`), and its pointer backend ignores mouse input on a fine-pointer device | measured while writing the e2e | `tests/e2e/workspace.spec.ts` `(e)` | a Playwright drag must be *stepped* (one jump produces no `dragover`) and must dwell in the target quadrant before releasing |
+| `@xterm/xterm` **6.0.0** + `addon-fit` 0.11.0, `addon-web-links` 0.12.0, `addon-webgl` 0.19.0 | same pins Omnigent ships | `panes/terminal/TerminalPane.tsx` | WebGL failure is caught and falls back to the DOM renderer silently; the fit addon is what turns a pane resize into `terminal.resize` |
+| xterm's `fontFamily` reaches a `CanvasRenderingContext2D.font` string and the WebGL atlas | Chromium behaviour | `xtermTheme.readXtermFontFamily` | a CSS `var(--font-mono)` is **not** resolvable there — Chromium drops the whole declaration and measures a proportional face, so the cursor lands in the wrong column. Colours have the same constraint, which is why both are read with `getComputedStyle` |
+| under WebGL, xterm draws to a canvas and puts nothing in the DOM | xterm's own design | `tests/e2e/workspace.spec.ts` `(d)` | there is no DOM-element → `Terminal` lookup in xterm's API, so the pane hangs the instance on its own container (`__xterm`) and the e2e reads the public `buffer` API off it |
+
+**Packaging (Phase 12) owes this section three things**, all Windows-specific and all silent
+failures if missed:
+
+1. `asarUnpack` `**/node_modules/node-pty/**` — the *whole* package directory, not just the
+   `.node`: `conpty.dll` and `OpenConsole.exe` are launched as files and the loader also needs
+   `lib/`, `build/Release/conpty/` and `prebuilds/win32-<arch>/`. A packaged build that skips
+   this looks fine until someone opens the Terminal pane (ADR-0005 makes that an acceptance step).
+2. `node-pty` stays **external** in `apps/desktop/scripts/build.ts` — its binding loader is a
+   relative `require`, so inlining it into `main.cjs` makes that require resolve next to the
+   bundle and find nothing.
+3. Nothing else here needs unpacking: `chokidar`, `simple-git`, `dockview` and `xterm` are pure
+   JS and ride inside the asar, and the SQLite driver is `node:sqlite` (ADR-0003), not an addon.

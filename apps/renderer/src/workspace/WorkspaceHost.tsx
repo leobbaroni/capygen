@@ -56,8 +56,13 @@ const WIDTH_STORAGE_KEY = "capygen.workspace.width";
  *  `panes/agents/AgentsWorkspacePane.tsx`) keeps its historical 288px fixed
  *  width, and this is the smallest host width that never clips it. */
 const MIN_WIDTH = 300;
-const MAX_WIDTH = 720;
-const DEFAULT_WIDTH = 384;
+/** [C] 1200, not 720: a Browser pane or a Terminal at 720px is a demo, not a
+ *  workspace — R16's panes are meant to be worked in, and dockview lets a
+ *  user split them further inside this width. */
+const MAX_WIDTH = 1200;
+/** [C] Wide enough that the toolbar's ten buttons fit beside the caption
+ *  clearance the toolbar now reserves (see `titlebar-clearance` below). */
+const DEFAULT_WIDTH = 560;
 /** One save per settle, not one per drag frame (R23-R26). */
 const SAVE_DEBOUNCE_MS = 400;
 
@@ -249,7 +254,23 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
         onPointerDown={startResize}
         className="absolute inset-y-0 left-0 z-10 w-1 -translate-x-1/2 cursor-col-resize hover:bg-ring/40"
       />
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border-weak px-2">
+      {/*
+        * [C] The toolbar shares the window's title-bar row, so it has to play
+        * by that row's two rules or its buttons are dead to a mouse:
+        *   - `.titlebar-drag` is a *fixed, window-wide* strip at z-index 40
+        *     with `-webkit-app-region: drag`. A drag region is geometric —
+        *     Windows takes the press before the page sees it — so anything
+        *     under it is unclickable. `titlebar-clearance` paints above it
+        *     (z-41) and re-declares the drag region for its own empty space,
+        *     which `index.css`'s `no-drag` rule then opts every button out of;
+        *   - Electron draws the caption buttons over the top *right* corner,
+        *     which is exactly where this aside is when it is open. So the
+        *     clearance is reserved here, and `ChatPage`'s header drops its own
+        *     copy of it (`titlebar-clearance-no-caption`) while we are mounted.
+        * The toggles scroll rather than overflow at the minimum width.
+        */}
+      <div className="titlebar-clearance flex h-9 shrink-0 items-center gap-0.5 border-b border-border-weak px-2">
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         {panes.map((pane) => {
           const open = openKinds.has(pane.kind);
           const Icon = pane.icon;
@@ -268,7 +289,8 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
             </Button>
           );
         })}
-        <div className="relative ml-auto">
+        </div>
+        <div className="relative">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -324,6 +346,24 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
           className="capygen-dockview"
           components={components}
           rightHeaderActionsComponent={GroupHeaderActions}
+          /*
+           * [C] `always`, not dockview's default `onlyWhenVisible`. The
+           * default *unmounts* every panel that is not the active tab of its
+           * group, which is wrong for every pane capygen has that owns a live
+           * resource rather than a view of some data:
+           *   - a Terminal loses its xterm instance, and with it the whole
+           *     scrollback, every time the user looks at another tab (the pty
+           *     survives, so the output of what it kept doing is simply gone);
+           *   - a Servers pane stops receiving `servers.status`/`servers.log`
+           *     while hidden, so a server started from it can finish starting
+           *     with nobody listening — which is exactly how "start it and
+           *     watch the Browser tab" used to lose the URL;
+           *   - a Browser pane's `WebContentsView` is detached and recreated,
+           *     losing its history.
+           * `always` keeps them mounted and hidden, which is also what the
+           * panes' own `api.isVisible` handling was written against.
+           */
+          defaultRenderer="always"
           onReady={handleReady}
         />
       </div>
@@ -341,14 +381,68 @@ function applySavedOrDefaultLayout(
   params: WorkspacePaneParams,
 ): void {
   if (layoutJson && typeof layoutJson === "object") {
+    let restored = false;
     try {
-      api.fromJSON(layoutJson as SerializedDockview);
-      if (api.panels.length > 0) return;
+      api.fromJSON(rebindSerializedParams(layoutJson, params) as SerializedDockview);
+      restored = api.panels.length > 0;
     } catch {
       api.clear();
     }
+    // Outside the `catch`: a fault in the rebind is a bug in capygen, not a
+    // corrupt saved layout, and must not be laundered into "start fresh".
+    if (restored) {
+      rebindParams(api, params);
+      return;
+    }
   }
   buildDefaultLayout(api, params);
+}
+
+/**
+ * [C] The restore trap. `toJSON()` serialises each panel's `params` — which
+ * is where every pane reads its `projectId`/`sessionId` from — so a layout
+ * saved yesterday replays *yesterday's* ids. A Terminal pane restored that
+ * way would `terminal.create` against a project that may no longer exist,
+ * and a Tasks pane would subscribe to a dead session.
+ *
+ * The rewrite happens **in the JSON, before `fromJSON`**, not only after it:
+ * a pane's "open one terminal" effect has a `[]` dependency list, so it acts
+ * on whatever it saw on its *first* render and never reconsiders. Patching
+ * afterwards relies on dockview creating every panel synchronously inside
+ * `fromJSON` while React has not committed yet — true today, and exactly
+ * the kind of ordering that breaks silently and in the wrong project.
+ *
+ * Non-identity params (`initialFilePath`, `initialUrl`, anything else a pane
+ * stashed) are preserved: this only overwrites the two identity fields.
+ */
+function rebindSerializedParams(layoutJson: object, params: WorkspacePaneParams): object {
+  const panels = (layoutJson as { panels?: Record<string, { params?: unknown }> }).panels;
+  if (!panels || typeof panels !== "object") return layoutJson;
+  return {
+    ...layoutJson,
+    panels: Object.fromEntries(
+      Object.entries(panels).map(([id, panel]) => [
+        id,
+        {
+          ...panel,
+          params: {
+            ...(typeof panel?.params === "object" && panel.params ? panel.params : {}),
+            projectId: params.projectId,
+            sessionId: params.sessionId,
+          },
+        },
+      ]),
+    ),
+  };
+}
+
+/** Belt and braces for the same trap: a panel dockview materialised without
+ *  going through the serialized `panels` map still gets the current ids.
+ *  `updateParameters` merges, so nothing else a pane stashed is lost. */
+function rebindParams(api: DockviewApi, params: WorkspacePaneParams): void {
+  for (const panel of api.panels) {
+    panel.api.updateParameters({ projectId: params.projectId, sessionId: params.sessionId });
+  }
 }
 
 /**

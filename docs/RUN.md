@@ -114,6 +114,7 @@ install. `workers: 1` — Electron windows are singletons per user-data-dir.
 | `tests/e2e/harnesses.spec.ts` | the real Codex, Claude and API harnesses | **real model calls** (a few cents) |
 | `tests/e2e/widget.spec.ts` | the real Claude harness + a fixture MCP server | **real model calls** |
 | `tests/e2e/roundtable.spec.ts` | four live (Claude + Codex), one offline (`CAPYGEN_ENGINE=stub-roundtable`) | **real model calls** (a few cents) |
+| `tests/e2e/workspace.spec.ts` | `CAPYGEN_ENGINE=stub` | none — it spawns a 30-line node http server on 5199, nothing else |
 
 `skeleton.spec.ts` is the PLAN Phase 2 proof: landing → live Claude reply with a usage/cost line
 → close → relaunch → same transcript out of SQLite; plus an `AskUserQuestion` card answered in
@@ -158,6 +159,36 @@ same way `harnesses.spec.ts` does:
   generated usage description, the model, the live tool list and the other agent; the same facts
   are then re-read straight off `agents.describe` so a UI change cannot hide a regression in the
   channel.
+
+`workspace.spec.ts` is the Phase 5 proof (SPEC R16-R18, G5, G6) and is **entirely offline** — no
+model, no network, no cost. It is one `test.describe.configure({mode:"serial"})` run against one
+profile and one temp project (the `tests/fixtures/servers/node` fixture copied out of the repo,
+then `git init` + one commit so the Diff pane has a baseline):
+
+- **(a) Files + Editor** — expand the tree, double-click `src/greeting.txt`, type into CodeMirror,
+  Ctrl+S, then assert the *bytes on disk* changed. `fs.list` → `fs.read` → `fs.write` end to end;
+- **(b) Diff** — that same edit appears in `git.status` and its unified patch in `git.diff`;
+- **(c) Tasks** — a `todo: a, b, c` message makes the echo engine write a real Claude-shaped
+  `TodoWrite` tool call, and the broadcast tap in `ipc/handlers.ts` turns it into task rows. No
+  model is asked for a plan, which is the point (R26);
+- **(d) Terminal** — `echo capy` into a real ConPTY and `capy` back out of **xterm's own buffer**
+  (under WebGL there is nothing in the DOM to assert on);
+- **(e) Layout** — drag the Terminal tab into the bottom quadrant of the Browser group with the
+  mouse, assert two groups, assert the saved `layout.set` row has the same shape, then **restart
+  the app on the same profile** and assert the group tree comes back identical (R17, G5);
+- **(f) Servers** — the fixture's `dev` script is detected (`npm run dev`, port 5199), Start
+  streams its log, discovery reads the `Local: http://…` line it printed, and the Browser pane
+  opens it *with nobody clicking anything else* (R18, G6). Both the app's URL bar/title and the
+  native view's own `capturePage()` are asserted, because neither process can photograph the other;
+- **(g) Overlay tracking** — the `WebContentsView`'s `getBounds()` and the placeholder's
+  `getBoundingClientRect()` agree to within 2px through a group maximise and a window resize.
+
+Screenshots: `workspace-layout.png`, `workspace-server.png`, `workspace-server-view.png` (the
+native view's own pixels), `workspace-tasks.png`. To run it alone:
+
+```sh
+corepack pnpm build && corepack pnpm exec playwright test tests/e2e/workspace.spec.ts
+```
 
 Every run writes screenshots to `e2e-out/`: `landing.png`, `chat.png` (offline),
 `chat-pong.png`, `restored.png`, `chat-question.png`, `codex-pong.png`, `codex-permission.png`,
@@ -288,3 +319,35 @@ logged with its real message before it is re-thrown to the renderer.
   server's declared port already answers, capygen adopts the running server and hands you its URL
   rather than spawning a second one that would die on EADDRINUSE. Stopping an adopted server kills
   nothing — capygen did not start it.
+- **A Terminal loses its scrollback, or a server finishes starting with nobody listening**:
+  `WorkspaceHost` passes `defaultRenderer="always"` to dockview. Dockview's default,
+  `onlyWhenVisible`, *unmounts* every tab that is not the active one in its group — which throws
+  away an xterm instance and its buffer, unsubscribes the Servers pane from `servers.status`
+  mid-start (this is exactly how "click Start, watch the Browser tab" used to lose the URL), and
+  destroys a `WebContentsView`. Every pane that owns a live resource depends on `always`.
+- **The workspace toolbar's buttons are dead, or the chat header has a 9rem hole in it**: the
+  window's caption buttons are drawn over the top *right* corner, so whichever column is rightmost
+  owns that clearance. `WorkspaceHost`'s toolbar reserves it while it is mounted and `ChatPage`'s
+  header drops its own copy (`titlebar-clearance-no-caption`). Reserve it in both and you get the
+  hole; reserve it in neither and the buttons sit under `.titlebar-drag` and are unclickable.
+- **The terminal cursor lands in the wrong column**: xterm writes its `fontFamily` into a
+  `CanvasRenderingContext2D.font` string and into the WebGL atlas, where `var(--font-mono)` is not
+  resolvable — Chromium drops the whole declaration and measures a proportional face.
+  `xtermTheme.readXtermFontFamily()` resolves it to real family names first, the same way the
+  colours are read.
+- **A restored layout points at the wrong project**: dockview's `toJSON()` serialises each panel's
+  `params`, which is where every pane reads its `projectId`/`sessionId`. A layout saved yesterday
+  would replay yesterday's ids — a Terminal pane would `terminal.create` against a project that may
+  not exist. `applySavedOrDefaultLayout` rewrites those two fields after `fromJSON`
+  (`updateParameters` merges, so `initialFilePath`/`initialUrl` survive).
+- **A Playwright drag of a dockview tab does nothing**: dockview tabs are HTML5 drag sources and
+  its pointer backend ignores mouse input on a fine-pointer device. Chromium synthesises the DnD
+  sequence from mouse input only for a *stepped* gesture — one jump from source to target never
+  produces the `dragover` the drop target needs — and the drop overlay needs a few frames of dwell
+  inside the quadrant before it commits. `dragTabToBottomOfGroup` in the workspace e2e is the
+  working recipe.
+- **The Browser pane's page vanishes when you click another tab in its group**: it is supposed to.
+  A hidden native view would float over whatever is now in front, so the pane detaches on hide and
+  re-attaches (re-navigating to the same URL) on show. The address survives; the back/forward
+  history does not. Keeping it alive needs a "park it off-screen" mode the contract does not have
+  yet — see PLAN.md's Phase 5 deviations.

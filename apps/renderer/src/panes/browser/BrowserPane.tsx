@@ -48,8 +48,14 @@ function normalizeTypedUrl(raw: string): string {
   return `https://${trimmed}`;
 }
 
-export function BrowserPane({ api }: WorkspacePaneProps) {
+export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
   const viewId = useId();
+  /** [C] The address a *freshly created* panel was opened with (the Servers
+   *  pane's "open in Browser pane" on a closed Browser tab — see
+   *  `workspace/openInBrowser.ts`). Read once: it is the panel's opening
+   *  address, not a live binding, so a later navigation must not be undone
+   *  by a re-render. */
+  const initialUrl = useRef(typeof params.initialUrl === "string" ? params.initialUrl : "");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const editingRef = useRef(false);
@@ -67,8 +73,8 @@ export function BrowserPane({ api }: WorkspacePaneProps) {
     return () => disposable.dispose();
   }, [api]);
 
-  const [addressBarValue, setAddressBarValue] = useState("");
-  const [currentUrl, setCurrentUrl] = useState("");
+  const [addressBarValue, setAddressBarValue] = useState(initialUrl.current);
+  const [currentUrl, setCurrentUrl] = useState(initialUrl.current);
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
@@ -161,26 +167,69 @@ export function BrowserPane({ api }: WorkspacePaneProps) {
 
   // Reconcile bounds on resize/scroll/layout changes, coalesced to one
   // measurement per frame (R23-R26: no per-event IPC flood).
+  //
+  // [C] Three sources, because a `ResizeObserver` alone is not enough. The
+  // native view is positioned in *window* coordinates, so it has to follow
+  // the placeholder's **position**, and a box can move without changing
+  // size — drag a tab into the group below this one and both groups keep
+  // their height while this one slides down; maximise a sibling group and
+  // this box moves off-screen at an unchanged size. `ResizeObserver` is
+  // silent for all of that. So:
+  //   1. `ResizeObserver` + window `resize`/`scroll` — the size cases;
+  //   2. dockview's own `onDidLayoutChange` and this panel's
+  //      `onDidDimensionsChange` — every dock, drag and tab switch — plus
+  //      `onDidMaximizedGroupChange`, which is *not* reliably a layout
+  //      change: maximising rearranges the grid's presentation without
+  //      touching the serialisable tree, so without this one the overlay
+  //      only catches up on the 500 ms poll below and visibly lags a
+  //      maximise by up to half a second;
+  //   3. a `settle()` burst of ~24 frames after any of those, because
+  //      dockview's own transition animates the box *after* the event
+  //      fires, plus a 500 ms idle poll as the backstop for a move nothing
+  //      announced at all.
+  // All of it is `getBoundingClientRect` + a compare; `syncBounds` only
+  // sends IPC when the rectangle actually changed.
   useEffect(() => {
     if (!attached) return;
     const el = containerRef.current;
     if (!el) return;
+    let burst = 0;
+    let burstFrame = 0;
+    const settle = (): void => {
+      burst = 24;
+      if (burstFrame) return;
+      const step = (): void => {
+        burst -= 1;
+        syncBounds();
+        burstFrame = burst > 0 ? requestAnimationFrame(step) : 0;
+      };
+      burstFrame = requestAnimationFrame(step);
+    };
     // jsdom (the renderer test environment) has no ResizeObserver — window
     // resize/scroll still cover it there.
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleSync);
     ro?.observe(el);
-    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("resize", settle);
     window.addEventListener("scroll", scheduleSync, true);
+    const layoutDisposable = containerApi.onDidLayoutChange(settle);
+    const dimensionsDisposable = api.onDidDimensionsChange(settle);
+    const maximizeDisposable = containerApi.onDidMaximizedGroupChange(settle);
+    const poll = setInterval(syncBounds, 500);
     return () => {
       ro?.disconnect();
-      window.removeEventListener("resize", scheduleSync);
+      window.removeEventListener("resize", settle);
       window.removeEventListener("scroll", scheduleSync, true);
+      layoutDisposable.dispose();
+      dimensionsDisposable.dispose();
+      maximizeDisposable.dispose();
+      clearInterval(poll);
+      if (burstFrame) cancelAnimationFrame(burstFrame);
       if (frameRef.current) {
         cancelAnimationFrame(frameRef.current);
         frameRef.current = 0;
       }
     };
-  }, [attached, scheduleSync]);
+  }, [attached, scheduleSync, syncBounds, api, containerApi]);
 
   // Live toolbar state from the main process (R6-adjacent: the pane must not
   // poll for title/url/loading — one push event per navigation).
@@ -228,7 +277,7 @@ export function BrowserPane({ api }: WorkspacePaneProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="browser-pane" data-view-id={viewId}>
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="browser-pane" data-view-id={viewId}>
       <div className="flex shrink-0 items-center gap-1 border-b border-border-weak bg-card px-2 py-1.5">
         <button
           type="button"

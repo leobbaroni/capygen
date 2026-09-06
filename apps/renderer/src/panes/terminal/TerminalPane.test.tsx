@@ -19,6 +19,10 @@ interface FakeTerminalInstance {
   written: string[];
   dataHandlers: ((data: string) => void)[];
   disposed: boolean;
+  /** [C] The pane focuses the *active* tab's terminal so the pane opens
+   *  ready to type into (xterm only takes keystrokes through its own hidden
+   *  textarea, which nothing else focuses). */
+  focusCount: number;
 }
 
 const xtermState = vi.hoisted(() => ({ instances: [] as FakeTerminalInstance[] }));
@@ -30,6 +34,7 @@ vi.mock("@xterm/xterm", () => {
     written: string[] = [];
     dataHandlers: ((data: string) => void)[] = [];
     disposed = false;
+    focusCount = 0;
     constructor(_options: unknown) {
       xtermState.instances.push(this);
     }
@@ -43,6 +48,9 @@ vi.mock("@xterm/xterm", () => {
       return { dispose: () => undefined };
     }
     attachCustomKeyEventHandler(): void {}
+    focus(): void {
+      this.focusCount += 1;
+    }
     getSelection(): string {
       return "";
     }

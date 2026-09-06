@@ -14,7 +14,7 @@
  * server already has a known `url` (a previous successful start, or one
  * typed into the add form), an "Open existing URL" button next to it.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ExternalLinkIcon,
   PlayIcon,
@@ -31,9 +31,9 @@ import type { DevServerDraft, DevServerRunStatus, DevServerWithRun } from "@capy
 import { Badge } from "@/components/ui/badge";
 import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { openUrlInBrowserPane } from "@/workspace/openInBrowser";
 import { registerPane } from "@/workspace/registry";
 import type { WorkspacePaneProps } from "@/workspace/types";
-import { openInBrowserPane } from "../browserBus";
 
 const STATUS_DOT: Record<DevServerRunStatus, string> = {
   starting: "bg-info animate-pulse",
@@ -45,7 +45,7 @@ const STATUS_DOT: Record<DevServerRunStatus, string> = {
 const LOG_TAIL = 200;
 const LOG_CAP = 500;
 
-export function ServersPane({ params }: WorkspacePaneProps) {
+export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
   const { projectId } = params;
   const [rows, setRows] = useState<DevServerWithRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,6 +55,19 @@ export function ServersPane({ params }: WorkspacePaneProps) {
   const [openLogsId, setOpenLogsId] = useState<string | null>(null);
   const [logsById, setLogsById] = useState<Record<string, string[]>>({});
   const [addOpen, setAddOpen] = useState(false);
+  /** [C] Servers whose Start *this pane* asked for and that have not yet
+   *  produced a URL. Only these auto-open the Browser pane (SPEC G6): a
+   *  `servers.status` for a server somebody else started — another window,
+   *  a restored run — must not hijack the user's Browser tab. */
+  const awaitingOpen = useRef<Set<string>>(new Set());
+
+  /** Open a dev-server URL in the Browser pane, creating that panel when it
+   *  is closed (the default layout's state). `browserBus` alone only
+   *  reaches an already-mounted pane — see `workspace/openInBrowser.ts`. */
+  const openInBrowser = useCallback(
+    (url: string) => openUrlInBrowserPane(containerApi, params, url),
+    [containerApi, params],
+  );
 
   async function detect(): Promise<void> {
     setLoading(true);
@@ -76,6 +89,15 @@ export function ServersPane({ params }: WorkspacePaneProps) {
   useEffect(() => {
     const offStatus = ipc().on("servers.status", ({ run }) => {
       setRows((prev) => prev.map((row) => (row.server.id === run.serverId ? { ...row, run } : row)));
+      // SPEC G6/R18: "starting streams logs and opens the URL in the Browser
+      // pane once the port answers". The URL is only known once discovery
+      // has finished, which is this event, not `servers.start`'s return.
+      if (run.status === "running" && run.url && awaitingOpen.current.delete(run.serverId)) {
+        openInBrowser(run.url);
+      }
+      if (run.status === "stopped" || run.status === "failed") {
+        awaitingOpen.current.delete(run.serverId);
+      }
     });
     const offLog = ipc().on("servers.log", ({ serverId, line }) => {
       setLogsById((prev) => {
@@ -87,15 +109,23 @@ export function ServersPane({ params }: WorkspacePaneProps) {
       offStatus();
       offLog();
     };
-  }, []);
+  }, [openInBrowser]);
 
   async function start(row: DevServerWithRun): Promise<void> {
     setBusyId(row.server.id);
     setRowErrors((prev) => ({ ...prev, [row.server.id]: "" }));
+    awaitingOpen.current.add(row.server.id);
     try {
       const run = await ipc().invoke("servers.start", { serverId: row.server.id });
       setRows((prev) => prev.map((r) => (r.server.id === row.server.id ? { ...r, run } : r)));
+      // A server that was already answering is adopted synchronously — its
+      // `running` status may have been broadcast before this promise
+      // resolved, so the event above had nothing to open yet.
+      if (run.status === "running" && run.url && awaitingOpen.current.delete(row.server.id)) {
+        openInBrowser(run.url);
+      }
     } catch (err) {
+      awaitingOpen.current.delete(row.server.id);
       setRowErrors((prev) => ({
         ...prev,
         [row.server.id]: err instanceof Error ? err.message : String(err),
@@ -159,7 +189,7 @@ export function ServersPane({ params }: WorkspacePaneProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="servers-pane">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="servers-pane">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border-weak px-3">
         <ServerIcon className="size-3.5 text-muted-foreground" />
         <span className="flex-1 text-sm font-medium text-foreground">Servers</span>
@@ -225,6 +255,11 @@ export function ServersPane({ params }: WorkspacePaneProps) {
                   <div className="flex items-center gap-2">
                     <span
                       data-testid="server-status-dot"
+                      // [C] The status is otherwise only a colour class, and
+                      // an e2e cannot assert on `bg-success` without pinning
+                      // the palette; `aria-label` alone is read by the screen
+                      // reader but is not a stable machine-readable state.
+                      data-status={status}
                       aria-label={status}
                       className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[status])}
                     />
@@ -235,7 +270,7 @@ export function ServersPane({ params }: WorkspacePaneProps) {
                     {knownUrl ? (
                       <button
                         type="button"
-                        onClick={() => openInBrowserPane(knownUrl)}
+                        onClick={() => openInBrowser(knownUrl)}
                         aria-label={`Open ${knownUrl} in the Browser pane`}
                         title="Open in Browser pane"
                         data-testid="server-open-browser"
@@ -310,7 +345,7 @@ export function ServersPane({ params }: WorkspacePaneProps) {
                       {knownUrl ? (
                         <button
                           type="button"
-                          onClick={() => openInBrowserPane(knownUrl)}
+                          onClick={() => openInBrowser(knownUrl)}
                           data-testid="server-open-existing-url"
                           className="shrink-0 whitespace-nowrap underline"
                         >

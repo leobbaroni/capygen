@@ -154,7 +154,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
         not taken a turn shows "Not reported yet" instead of a config-derived list.
       * Landed here rather than in Phase 6: `agent.config.<backend>.permissionMode` now outranks the
         global setting (it was dead — `HarnessAgent.permissionMode` is the higher priority).
-- [ ] Phase 5: Workspace panes and dev servers
+- [x] Phase 5: Workspace panes and dev servers
       Done when: e2e drags Terminal under Browser, restarts, layout restored; fixture project with
       `dev` script is detected, Start shows logs and the Browser pane loads the URL; files/editor/
       diff/tasks panes render fixtures.
@@ -162,6 +162,37 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       Diff, Browser (webview + URL bar + devtools), Terminal (node-pty + xterm), Tasks, Servers
       (detectors: launch.json, package.json, pyproject/manage.py, docker-compose; port probe).
       Covers: R16, R17, R18; checks: A5.
+      **Accepted 2026-09-06** — every Done-when clause holds in `tests/e2e/workspace.spec.ts`
+      (7/7, entirely offline on `CAPYGEN_ENGINE=stub`): (a) Files -> Editor -> Ctrl+S changes the
+      bytes on disk, (b) Diff shows that file, (c) a recorded `TodoWrite` becomes Tasks rows,
+      (d) `echo capy` comes back out of a real ConPTY, (e) the Terminal tab is dragged under the
+      Browser group with the mouse and the group tree survives an app restart, (f) the fixture's
+      `dev` script is detected, Start streams its log and the Browser pane's native view loads the
+      URL it printed, (g) the native view's bounds track the placeholder to 2px through a maximise
+      and a window resize. Gate: typecheck (6 projects), 952 unit tests, build, 22/23 Playwright
+      (1 skipped: the API-key case, no key on this machine). Deviations:
+      * **Editor uses CodeMirror 6 only — no Shiki.** The Steps line said "CodeMirror 6 + Shiki";
+        the pane highlights through `@codemirror/lang-*` + `@lezer/highlight` tags mapped onto
+        capygen's own tokens. A second highlighter would be a second grammar set for the same
+        text with nothing to gain, and Shiki's WASM is a big renderer dependency.
+      * **Browser is a native `WebContentsView`, not a "webview".** `<webview>` is deprecated;
+        Omnigent's own pane does the same thing. Consequence: the view floats above the DOM, so
+        the pane must ship its bounds on every move — (g) is the assertion that it does.
+        Consequence two: **a hidden tab detaches the view**, so switching to another tab in the
+        Browser's group and back re-navigates to the same URL and loses the back/forward history.
+        Keeping it alive needs a "park it off-screen" mode the contract does not have.
+      * **Terminals are not persisted.** A `node-pty` handle cannot outlive the app, so
+        `TerminalInfo` is in-memory only and a restart restores the *pane*, not the shell
+        (migration 0004 has no `terminals` table, deliberately).
+      * **Float has no menu affordance.** Dockview's tab context menu (float/popout) needs the
+        paid `dockview-enterprise` ContextMenu module; drag-out still floats a tab. A5 is held on
+        dock/stack/reorder/maximise/persist, all of which are proved.
+      * **Tasks are derived, never asked for.** `TodoWrite` and Codex plan blocks are read off the
+        transcript by a broadcast tap; no model is prompted for a plan (R26). `TaskSource` still
+        has no `"subagent"` value, so a delegated sub-agent can only *close* a matching task, not
+        create one — noted for whoever next owns the shared contract.
+      * **The Codex plan path is unit-tested, not live**: `CodexHarness` does not yet map
+        `turn/plan/updated` to a block, so `readPlan` has nothing to observe from a real backend.
 - [ ] Phase 6: Settings hub and prerequisites
       Done when: nav test lists every section id; MCP/skills/plugins edits round-trip on temp
       homes for Claude and Codex; API key stored via safeStorage, absent from files/logs;
@@ -238,7 +269,7 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
 | A2 | Claude Agent SDK gives text/tool/permission/AskUserQuestion/hook events headless on Windows | SDK description (npm) | engine design | Phase 1 |
 | A3 | `codex app-server` JSON-RPC covers threads, turns, approvals, usage | help text shows it exists | Codex harness | Phase 1 |
 | A4 | API models need our own tool runtime (no harness) | nature of raw APIs | engine size | Phase 3 |
-| A5 | dockview 8 handles dock/stack/float/persist | npm version | pane layer | Phase 5 |
+| A5 | dockview 8 handles dock/stack/float/persist | npm version | pane layer | Phase 5 — **held, with one asterisk**: dock/stack/reorder/maximise/persist all proved e2e on dockview-react 8.2.0; *float* works only by dragging a tab out, because the context-menu affordance for it lives in the paid `dockview-enterprise` module |
 | A6 | Omnigent Tailwind 4 tokens copy verbatim | same stack (verified) | look parity | Phase 2 |
 | A7 | Round-table rules: mentions, lead fallback, 3-hop cap | stated in interview, unvetoed | dispatcher | Phase 4 — **held**: shipped and proved e2e; the cap is per-session (`settings.hopCap`) |
 | A8 | Mascot: 8 states, 96 px sprite, CSS steps; generated image or code-drawn | user brief | landing only | Phase 2 |

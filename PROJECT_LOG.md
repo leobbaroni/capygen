@@ -709,3 +709,48 @@ Not fixed, on purpose
   `/dev/workspace` dev-only route (fakes its own IPC bridge — this pane's `fs`/`git` calls bypass
   the store) at `e2e-out/workspace-files.png` / `workspace-editor.png`, captured with the throwaway
   `scripts/dev-workspace-screenshots.mjs` against a plain `vite` dev server (not Electron).
+
+- [Phase 5 · C] Integration: every pane wired into the registry and the workspace host, the desktop
+  services behind all 30 workspace channels, and `tests/e2e/workspace.spec.ts` — seven proofs,
+  entirely offline (`CAPYGEN_ENGINE=stub`, a `git init`-ed temp copy of `tests/fixtures/servers/node`,
+  a dev server that is a 30-line node script). Integration work beyond wiring, each of it a thing
+  that was broken until it was found:
+  * `defaultRenderer="always"` on the dockview host. The default (`onlyWhenVisible`) *unmounts*
+    every non-active tab — which throws away an xterm and its scrollback, unsubscribes the Servers
+    pane from `servers.status` while a start is still in flight (that is how "click Start, then look
+    at the Browser tab" lost the URL), and destroys a `WebContentsView`.
+  * The Browser overlay now also listens to `containerApi.onDidMaximizedGroupChange`: maximising a
+    group rearranges dockview's presentation *without* changing the serialisable tree, so
+    `onDidLayoutChange` never fires and the native view lagged a maximise by up to the 500 ms
+    backstop poll. e2e `(g)` asserts `WebContentsView.getBounds()` and the placeholder's
+    `getBoundingClientRect()` agree to 2px through a maximise and a window resize — the one fact
+    neither process can photograph.
+  * A saved layout's ids are rewritten **inside the JSON, before `fromJSON`**, not only patched
+    after it. `toJSON()` serialises each panel's `params`, so a restored Terminal pane would
+    `terminal.create` against yesterday's project; its "open one terminal" effect has a `[]`
+    dependency list and would never reconsider. Patching afterwards only worked because dockview
+    happens to build panels synchronously before React commits.
+  * Caption-button clearance moved to whichever column is rightmost: `WorkspaceHost`'s toolbar
+    reserves it while mounted and `ChatPage`'s header drops its own copy, otherwise the chat row
+    had a 9rem hole in the middle of it.
+  * `openInBrowser.ts` (new): the Servers pane's "open in Browser pane" used to be a no-op whenever
+    the Browser tab was closed — which is the default layout's state, the one case the button
+    matters most. It now creates the panel with `params.initialUrl`, exactly the shape
+    `openInEditor.ts` already used, and only auto-opens for a start *this pane* asked for.
+  * xterm's `fontFamily` is resolved to real family names (`readXtermFontFamily`): a
+    `var(--font-mono)` reaches a `CanvasRenderingContext2D.font` string, where Chromium drops the
+    whole declaration and measures a proportional face, so the cursor landed in the wrong column.
+    The active tab is also focused now — the pane used to open with a terminal nobody could type
+    into until they thought to click the black rectangle.
+  * The offline echo engine turns a `todo: a, b, c` message into a real Claude-shaped `TodoWrite`
+    tool call, which is what lets the Tasks derivation be proved without asking a model for a plan
+    (R26). Two e2e-only seams: `data-status` on the server dot, and the xterm instance hung on its
+    own container (`__xterm`) because under WebGL there is nothing in the DOM to read.
+  Not achieved, recorded rather than hidden: switching away from the Browser tab still detaches the
+  native view, so its back/forward history is lost on return (the address survives); `TaskSource`
+  has no `"subagent"` value; the Codex plan path has no live backend to observe.
+- Gate: `pnpm typecheck` clean (6 projects), `pnpm test` 66 files / 952 passed, `pnpm build` clean,
+  `pnpm exec playwright test` 22 passed / 1 skipped (the API-key case) in 6.3 min — then
+  `workspace.spec.ts` re-run at 7/7 after `(g)` was added. Screenshots: `e2e-out/workspace-layout.png`,
+  `workspace-server.png`, `workspace-server-view.png` (the native view's own pixels),
+  `workspace-tasks.png`. PLAN.md Phase 5 ticked with six deviations; A5 held with the float asterisk.
