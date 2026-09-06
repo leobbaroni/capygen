@@ -867,3 +867,50 @@ Not fixed, on purpose
 - Gate: `pnpm typecheck` clean (5 workspace projects + `tests/tsconfig.json`); `pnpm test` 93 files
   / 1203 passed / 4 skipped (pre-existing, not this task's), including the new
   `prereqsDetect`/`prereqsRunGate`/`prereqsIpc`/`PrereqPanel`/`SetupBanner` suites (50 new tests).
+
+## 2026-09-06 — Phase 6 / B2: settings hub UI
+- `shell/settingsNav.tsx`: `SETTINGS_NAV_GROUPS`/`SETTINGS_SECTIONS`, grouped like the reference's
+  own `settingsNav.tsx` (General / Harnesses & tools / Workspace / Desktop / Admin / Archived).
+  22 ids total — R19's list (general, appearance, git, shortcuts, import, integrations, account,
+  cli, updates, members, policies, sharing, archived) plus capygen's own (harnesses, mcp, skills,
+  plugins, api-keys, dev-servers, diagnostics) plus two Task B2 names outside R19's prose (tools,
+  prereqs). `SettingsPage.tsx` rewritten to render this nav and route each id to a section body.
+- New GlobalSettings-backed sections (`settings.getAll`/`.patch`/`.reset` via a shared
+  `useGlobalSettings` hook, `components/settings/`, deliberately outside `appStore` — the
+  established `ProvidersSection.tsx` pattern of a settings page talking to `ipc()` directly):
+  General, Appearance, Git, Shortcuts (the last with a hand-picked default keybinding list —
+  capygen has no shipped registry yet).
+- New Integrations-backed sections (`integrations.list`/`.mcp.*`/`.plugin.*`/`.skill.*`/`.tools.*`
+  via a shared `useIntegrations` hook), each per-backend-tabbed: Harnesses (availability from
+  `appStore.harnesses` + a Defaults card per backend editing `GlobalSettings.backends.<backend>`,
+  with a note that a per-agent override wins), MCP servers (add/edit dialog for stdio/http with
+  client-side validation, Test, remove, a read-only note for `claudeai-proxy` entries), Skills
+  (enable/disable, Create-skill dialog with a markdown editor, Open), Plugins (Claude:
+  install/enable/uninstall + marketplace browse+install; Codex: read-only list with a note), Tools
+  (per-backend allow/deny/ask policy table + pattern editor, Claude's four permission modes
+  explained above it).
+- Dev servers: no `GlobalSettings.devServers` section exists in the Phase 6 contract and adding one
+  is outside this task's file ownership (`packages/shared`) — kept in `localStorage` for now with a
+  note in the page and the commit, a documented provisional gap rather than a silent one.
+- Prerequisites: swapped to render the real `components/prereqs/PrereqPanel.tsx` once it landed
+  from the parallel B3 task mid-session — exactly the follow-up that task's own log entry above
+  flagged as left for "whoever finishes the Settings-hub integration."
+- Diagnostics (`diagnostics.get`/`.copy`) and Archived sessions (real, reusing the existing
+  `appStore.sessions`/`archiveSession`/`setShowArchived` from Phase 2/4) are fully live. Import,
+  Updates, Members, Policies, Sharing name their arriving phase; Account (no cloud login — local
+  app) and the legacy Omnigent "Integrations" / "Local CLI" ids redirect to the capygen sections
+  that actually cover the same ground, per Task B2 item 1's "no dead controls."
+- `lib/theme.ts`: `applyTheme()` (pure DOM: `.dark` class, `data-theme=<palette>` attribute reusing
+  `themePalettes.generated.css`'s existing palette selectors, `--desktop-ui-font-size` scaled by
+  `fontScale` — that token's own doc comment already anticipated this — and a scoped
+  reduced-motion stylesheet) plus `useApplyGlobalTheme()`, wired into `AppShell.tsx` in place of
+  its old inline effect that read the flat Phase-2 `Settings.theme`; re-applies live on every
+  `settings.changed` broadcast and on an OS light/dark flip while `theme==="system"`.
+- `/dev/settings/:section` (dev-only route, `DevSettingsPage.tsx`) installs a fixture
+  `window.capygen` bridge before anything mounts, for visual QA outside Electron. Screenshots:
+  `e2e-out/settings-mcp.png`, `settings-plugins.png`, `settings-dark.png`.
+- Gate: `corepack pnpm typecheck` clean for the 5 workspace projects this task touches (renderer
+  included); `corepack pnpm test` 92/93 files green — the one red file,
+  `packages/engine/test/configLayering.test.ts` (4 failing), is unrelated concurrent work in this
+  worktree (`packages/engine`, explicitly outside this task's ownership) and was left untouched;
+  `corepack pnpm build` clean. Committed only this task's 41 files (`git add` by path).
