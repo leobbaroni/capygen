@@ -131,6 +131,45 @@ describe.skipIf(!HAS_GIT)("git.status / diff / commit on a real repo", () => {
   });
 });
 
+/**
+ * simple-git appends `files` to the argv verbatim (`addTask` → `["add",
+ * ...files]`, `commitTask` → `[…, "commit", "-m", msg, ...files]`), so
+ * without a `--` a path beginning with `-` is parsed by git as an option:
+ * `paths: ["-p"]` becomes `git add -p`, which waits on stdin forever. The
+ * fake client here is the only way to assert on the argv git would receive.
+ */
+describe("git.commit argv", () => {
+  it("separates pathspecs from options with --", async () => {
+    const addCalls: string[][] = [];
+    const commitCalls: unknown[][] = [];
+    const fakeService = new GitService({
+      store: h.store,
+      log: h.log,
+      createClient: () => ({
+        checkIsRepo: async () => true,
+        status: async () => ({ files: [], current: "main", ahead: 0, behind: 0 }),
+        diff: async () => "",
+        add: async (files: string[]) => void addCalls.push(files),
+        commit: async (
+          message: string,
+          files?: string[],
+          options?: Record<string, null>,
+        ) => void commitCalls.push([message, files, options]),
+        revparse: async () => "0".repeat(40),
+      }),
+    });
+
+    await fakeService.commit({
+      projectId: h.projectId,
+      message: "one",
+      paths: ["-p", "src/app.ts"],
+    });
+
+    expect(addCalls).toEqual([["--", "-p", "src/app.ts"]]);
+    expect(commitCalls[0]).toEqual(["one", ["--", "-p", "src/app.ts"], undefined]);
+  });
+});
+
 describe("splitUnifiedDiff", () => {
   it("returns nothing for an empty patch", () => {
     expect(splitUnifiedDiff("")).toEqual([]);

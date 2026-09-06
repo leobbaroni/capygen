@@ -94,11 +94,29 @@ const containerApi = {
   // the serialisable tree, so the bounds tracker subscribes to this
   // separately from `onDidLayoutChange`.
   onDidMaximizedGroupChange: () => ({ dispose: () => undefined }),
+  // A dockview drag paints its drop indicators as DOM elements, which the
+  // native view would otherwise cover — the pane parks itself for the
+  // duration (`workspace/browserOverlay.ts`).
+  onWillDragPanel: () => ({ dispose: () => undefined }),
+  onWillDragGroup: () => ({ dispose: () => undefined }),
+  onDidDrop: () => ({ dispose: () => undefined }),
 } as unknown as DockviewApi;
 
+/**
+ * A pane opened *with* an address — the Servers pane's "open in Browser
+ * pane" on a closed Browser tab (`workspace/openInBrowser.ts` sets
+ * `params.initialUrl`).
+ *
+ * [C] Most of these cases need a live view, and a view only exists once a
+ * navigation has asked for one: attaching on bare visibility is what made the
+ * "Enter a URL above to get started." card unreachable and left a blank
+ * native rectangle in its place.
+ */
+const paramsWithUrl: WorkspacePaneParams = { ...params, initialUrl: "https://example.com/" };
+
 describe("BrowserPane (SPEC R16)", () => {
-  it("attaches a native view with the placeholder's bounds once visible", async () => {
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+  it("attaches a native view with the placeholder's bounds once visible and navigated", async () => {
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
 
     await waitFor(() =>
       expect(ipcInvoke).toHaveBeenCalledWith(
@@ -109,9 +127,30 @@ describe("BrowserPane (SPEC R16)", () => {
     expect(await screen.findByTestId("browser-container")).toBeInTheDocument();
   });
 
+  it("creates no view until something navigates, keeping the empty state reachable", async () => {
+    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    await Promise.resolve();
+
+    expect(ipcInvoke).not.toHaveBeenCalledWith("browser.attach", expect.anything());
+    expect(screen.getByText(/enter a url/i)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByTestId("browser-url-input"), "example.com{Enter}");
+
+    // The first navigation is what creates the view — and it carries the URL,
+    // so there is no attach-then-navigate round trip.
+    await waitFor(() =>
+      expect(ipcInvoke).toHaveBeenCalledWith(
+        "browser.attach",
+        expect.objectContaining({ url: "https://example.com" }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText(/enter a url/i)).not.toBeInTheDocument());
+  });
+
   it("detaches when the tab is hidden", async () => {
     const api = fakeApi();
-    render(<BrowserPane params={params} api={api} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={api} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
 
     act(() => api.setVisible(false));
@@ -121,7 +160,7 @@ describe("BrowserPane (SPEC R16)", () => {
 
   it("re-attaches when the tab becomes visible again", async () => {
     const api = fakeApi();
-    render(<BrowserPane params={params} api={api} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={api} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
     act(() => api.setVisible(false));
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.detach", expect.anything()));
@@ -134,22 +173,24 @@ describe("BrowserPane (SPEC R16)", () => {
 
   it("navigates on Enter in the address bar", async () => {
     const user = userEvent.setup();
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
     ipcInvoke.mockClear();
 
     const input = screen.getByTestId("browser-url-input");
-    await user.type(input, "example.com{Enter}");
+    // The pane opened on `initialUrl`, so the bar already holds an address.
+    await user.clear(input);
+    await user.type(input, "example.org{Enter}");
 
     expect(ipcInvoke).toHaveBeenCalledWith("browser.navigate", {
       viewId: expect.any(String),
-      url: "https://example.com",
+      url: "https://example.org",
     });
   });
 
   it("back/forward/reload send the control-word navigate calls", async () => {
     const user = userEvent.setup();
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
 
     act(() => {
@@ -180,7 +221,7 @@ describe("BrowserPane (SPEC R16)", () => {
 
   it("opens DevTools", async () => {
     const user = userEvent.setup();
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
     ipcInvoke.mockClear();
 
@@ -190,7 +231,7 @@ describe("BrowserPane (SPEC R16)", () => {
   });
 
   it("re-syncs bounds on window resize", async () => {
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
     ipcInvoke.mockClear();
 
@@ -202,7 +243,7 @@ describe("BrowserPane (SPEC R16)", () => {
   });
 
   it("the Servers pane's browserBus opens a URL here", async () => {
-    render(<BrowserPane params={params} api={fakeApi()} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi()} containerApi={containerApi} />);
     await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("browser.attach", expect.anything()));
     ipcInvoke.mockClear();
 
@@ -225,7 +266,7 @@ describe("BrowserPane (SPEC R16)", () => {
   });
 
   it("never attaches while the tab starts out hidden", async () => {
-    render(<BrowserPane params={params} api={fakeApi(false)} containerApi={containerApi} />);
+    render(<BrowserPane params={paramsWithUrl} api={fakeApi(false)} containerApi={containerApi} />);
     await Promise.resolve();
     expect(ipcInvoke).not.toHaveBeenCalledWith("browser.attach", expect.anything());
   });

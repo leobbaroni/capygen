@@ -10,6 +10,22 @@
  * the active tab's pty — full terminal-attach parity (SPEC P19) is a later
  * phase; this is the same shortcut a person typing the command themselves
  * would get.
+ *
+ * [C] Mounting **adopts before it creates**. A pty outlives this component:
+ * closing the Terminal tab, toggling the toolbar button, or closing the whole
+ * workspace unmounts the pane, and `TerminalService` keeps the shell (and
+ * whatever it started — a `pnpm dev`, a watcher) running deliberately. So the
+ * mount effect asks `terminal.list` for this project's live terminals first
+ * and re-attaches to them; only a project with none spawns one. The naive
+ * version created unconditionally, which meant every open/close cycle left
+ * one more unreachable pwsh.exe alive for the life of the app and presented
+ * the user with an empty "Terminal 2" instead of the shell they were using.
+ *
+ * The auto-create also waits for the panel to be **visible**: `WorkspaceHost`
+ * mounts every pane with `defaultRenderer="always"`, so a restored layout
+ * with the Terminal sitting behind another tab would otherwise spawn a shell
+ * nobody asked for and nobody can see (the Browser pane already gates on
+ * `api.isVisible` for the same reason).
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { PlusIcon, SquareTerminalIcon, XIcon } from "lucide-react";
@@ -32,12 +48,20 @@ interface TerminalTab {
 
 let tabCounter = 0;
 
-export function TerminalPane({ params }: WorkspacePaneProps) {
+export function TerminalPane({ params, api }: WorkspacePaneProps) {
   const { projectId, sessionId } = params;
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const creatingRef = useRef(false);
+  /** Dockview keeps a hidden tab mounted and reports visibility instead of
+   *  unmounting — see the module comment on why the first shell waits. */
+  const [visible, setVisible] = useState(api.isVisible);
+  useEffect(() => {
+    setVisible(api.isVisible);
+    const disposable = api.onDidVisibilityChange((event) => setVisible(event.isVisible));
+    return () => disposable.dispose();
+  }, [api]);
 
   const openTerminal = useCallback(async () => {
     if (creatingRef.current) return;
@@ -60,13 +84,50 @@ export function TerminalPane({ params }: WorkspacePaneProps) {
     }
   }, [projectId, sessionId]);
 
-  // One terminal on open, matching every other pane's "ready to use" default.
+  /**
+   * Adopt this project's already-running terminals, and answer whether any
+   * were found. The ids are the ones `TerminalService` still holds, so the
+   * `terminal.data`/`terminal.exit` subscriptions in `TerminalInstance` pick
+   * up exactly where the previous mount left off.
+   *
+   * Scrollback from before this mount is genuinely gone (xterm's buffer lived
+   * in the destroyed component, and `TerminalInfo` carries no history), but
+   * the *shell* — and the process it is running — is the same one.
+   */
+  const adoptExisting = useCallback(async (): Promise<boolean> => {
+    try {
+      const existing = await ipc().invoke("terminal.list", { projectId });
+      if (existing.length === 0) return false;
+      setTabs(
+        existing.map((info, index) => {
+          tabCounter = Math.max(tabCounter, index + 1);
+          return { id: info.id, title: `Terminal ${index + 1}`, exitCode: undefined };
+        }),
+      );
+      setActiveId(existing[0]!.id);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }, [projectId]);
+
+  // One terminal once this pane is actually on screen, matching every other
+  // pane's "ready to use" default — but adopting before creating.
   useEffect(() => {
-    if (tabs.length === 0) void openTerminal();
-    // Only ever auto-opens the first tab; `openTerminal` closes over
-    // `projectId`/`sessionId` which do not change for a mounted pane.
+    if (!visible || tabs.length > 0 || creatingRef.current) return;
+    let cancelled = false;
+    void adoptExisting().then((adopted) => {
+      if (cancelled || adopted) return;
+      void openTerminal();
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `tabs.length` is read, not depended on: re-running on every tab change
+    // would race a create in flight. `creatingRef` covers the same window.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [visible, adoptExisting, openTerminal]);
 
   function closeTab(id: string): void {
     void ipc().invoke("terminal.kill", { id }).catch(() => undefined);
@@ -128,7 +189,7 @@ export function TerminalPane({ params }: WorkspacePaneProps) {
                     closeTab(tab.id);
                   }
                 }}
-                className="shrink-0 rounded p-0.5 opacity-0 hover:bg-accent/50 group-hover:opacity-100"
+                className="shrink-0 rounded p-0.5 opacity-0 hover:bg-accent/50 group-hover:opacity-100 focus-visible:opacity-100"
               >
                 <XIcon className="size-3" />
               </span>

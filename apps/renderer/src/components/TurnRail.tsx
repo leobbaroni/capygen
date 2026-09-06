@@ -3,6 +3,14 @@
  * scanned and jumped through at a glance. Colour follows the turn's status;
  * clicking scrolls that turn into view (`Transcript` gives each turn the
  * matching `#turn-<id>` anchor).
+ *
+ * [C] `absolute`, not `fixed`. Fixed positioning anchors to the *window*, and
+ * `WorkspaceHost`'s aside is a normal-flow element with no z-index — so with
+ * the workspace open the rail floated on top of whichever pane was docked at
+ * the right edge (visible in all three committed e2e screenshots: dots inside
+ * the Tasks and Browser panes), and each `pointer-events-auto` dot ate the
+ * clicks meant for the pane underneath. `ChatPage` marks the chat column
+ * `relative`, which is what this now measures against.
  */
 import type { Turn } from "@capygen/shared";
 import { cn } from "@/lib/utils";
@@ -21,7 +29,7 @@ export function TurnRail({ turns }: { turns: Turn[] }) {
     <nav
       aria-label="Turns"
       data-testid="turn-rail"
-      className="pointer-events-auto fixed top-1/2 right-1.5 z-10 hidden -translate-y-1/2 flex-col items-center gap-1 lg:flex"
+      className="pointer-events-auto absolute top-1/2 right-1.5 z-10 hidden max-h-[70%] -translate-y-1/2 flex-col items-center gap-1 overflow-y-auto lg:flex"
     >
       {turns.map((turn) => (
         <button

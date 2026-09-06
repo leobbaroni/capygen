@@ -128,7 +128,10 @@ export function ChatPage() {
     // whole shell scrolled sideways — clipping the pane's own footer button
     // and the sessions sidebar on a 1280px window.
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="chat-page-row">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="chat-page">
+      {/* `relative` is load-bearing: `TurnRail` is absolutely positioned
+          inside this column so it stays out of the workspace pane docked to
+          the right of it (see `TurnRail.tsx`). */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-testid="chat-page">
         {/* [C] The caption buttons sit over the *rightmost* column. With the
             workspace open that is `WorkspaceHost`'s toolbar, which reserves the
             clearance itself — reserving it here too would leave a 9rem hole in

@@ -35,6 +35,11 @@ import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { registerPane } from "@/workspace/registry";
 import type { WorkspacePaneProps } from "@/workspace/types";
+import {
+  isBrowserOverlaySuppressed,
+  onBrowserOverlayChange,
+  suppressBrowserOverlay,
+} from "@/workspace/browserOverlay";
 import { onOpenInBrowserPane } from "../browserBus";
 
 /** Adds `https://` to a bare `example.com`-style typed value; leaves
@@ -61,6 +66,25 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
   const editingRef = useRef(false);
   const attachedRef = useRef(false);
   const frameRef = useRef(0);
+  /**
+   * [C] The address the view should be created with, and the reason a view
+   * exists at all. Attaching on *visibility* meant `browser.attach` succeeded
+   * on a pane nobody had navigated yet, `attached` flipped true on the same
+   * tick, and the "Enter a URL above to get started." card was removed before
+   * it could ever be seen -- leaving a blank white native rectangle where the
+   * empty state should be. A view is now created by the first navigation
+   * (`wanted`), and re-created on later visibility changes because there is
+   * then a URL to bring back.
+   */
+  const pendingUrlRef = useRef(initialUrl.current);
+  const [wanted, setWanted] = useState(initialUrl.current !== "");
+  const wantedRef = useRef(wanted);
+  wantedRef.current = wanted;
+  /** True while a DOM overlay (a menu, a dockview drag) needs the native
+   *  view out of the way -- see `workspace/browserOverlay.ts`. */
+  const [overlaySuppressed, setOverlaySuppressed] = useState(isBrowserOverlaySuppressed);
+  const overlaySuppressedRef = useRef(overlaySuppressed);
+  overlaySuppressedRef.current = overlaySuppressed;
 
   // dockview keeps every tab in a stacked group mounted and reports
   // visibility through the panel's own api instead of unmounting — exactly
@@ -85,6 +109,9 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
   const syncBounds = useCallback((force = false) => {
     const el = containerRef.current;
     if (!el || !attachedRef.current) return;
+    // Parked: an overlay owns this rectangle for the moment (a zero-size view
+    // is the only way a native `WebContentsView` gets out of the DOM's way).
+    if (overlaySuppressedRef.current) return;
     const rect = el.getBoundingClientRect();
     const bounds = {
       x: Math.round(rect.left),
@@ -131,13 +158,14 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
   // Attach when the tab becomes visible; detach when it hides or unmounts —
   // a hidden dockview tab must not keep a compositor layer alive underneath.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !wanted) return;
     let cancelled = false;
+    const url = pendingUrlRef.current;
     void ipc()
       .invoke("browser.attach", {
         viewId,
         bounds: measureNow(),
-        ...(currentUrl ? { url: currentUrl } : {}),
+        ...(url ? { url } : {}),
       })
       .then(() => {
         if (cancelled) return;
@@ -159,11 +187,61 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
       setAttached(false);
       void ipc().invoke("browser.detach", { viewId }).catch(() => undefined);
     };
-    // Deliberately excludes `currentUrl`: attach is a one-time create per
-    // visible span, not a per-navigation event — navigation goes through
-    // `browser.navigate` instead (see `navigate` below).
+    // Deliberately reads `pendingUrlRef` rather than depending on the URL:
+    // attach is a one-time create per visible span, not a per-navigation
+    // event — navigation goes through `browser.navigate` instead (see
+    // `navigate` below), and `wanted` only ever goes false → true once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, viewId, measureNow, syncBounds]);
+  }, [visible, wanted, viewId, measureNow, syncBounds]);
+
+  // Overlay parking. While any DOM overlay is open the view is shrunk to
+  // nothing (its bounds are the only handle the contract gives us) and put
+  // back — force-synced, since the cached rectangle is the one it already
+  // "has" — the moment the last overlay closes.
+  useEffect(() => {
+    return onBrowserOverlayChange((suppressed) => {
+      overlaySuppressedRef.current = suppressed;
+      setOverlaySuppressed(suppressed);
+      if (!attachedRef.current) return;
+      if (suppressed) {
+        lastBoundsRef.current = null;
+        void ipc()
+          .invoke("browser.setBounds", { viewId, bounds: { x: 0, y: 0, width: 0, height: 0 } })
+          .catch(() => undefined);
+      } else {
+        syncBounds(true);
+      }
+    });
+  }, [viewId, syncBounds]);
+
+  // A dockview drag paints its drop indicators as DOM elements
+  // (`--dv-drag-over-*`), so without this the R17/G5 docking affordance was
+  // invisible over exactly one of the eight panes. `dragend` on the document
+  // is the release: a drag abandoned outside a drop target fires no
+  // `onDidDrop`.
+  useEffect(() => {
+    let release: (() => void) | null = null;
+    const hold = (): void => {
+      release ??= suppressBrowserOverlay();
+    };
+    const letGo = (): void => {
+      release?.();
+      release = null;
+    };
+    const disposables = [
+      containerApi.onWillDragPanel(hold),
+      containerApi.onWillDragGroup(hold),
+      containerApi.onDidDrop(letGo),
+    ];
+    document.addEventListener("dragend", letGo, true);
+    document.addEventListener("drop", letGo, true);
+    return () => {
+      for (const disposable of disposables) disposable.dispose();
+      document.removeEventListener("dragend", letGo, true);
+      document.removeEventListener("drop", letGo, true);
+      letGo();
+    };
+  }, [containerApi]);
 
   // Reconcile bounds on resize/scroll/layout changes, coalesced to one
   // measurement per frame (R23-R26: no per-event IPC flood).
@@ -241,6 +319,7 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
       setCanGoBack(state.canGoBack);
       setCanGoForward(state.canGoForward);
       setCurrentUrl(state.url);
+      if (state.url) pendingUrlRef.current = state.url;
       if (!editingRef.current) setAddressBarValue(state.url);
     });
   }, [viewId]);
@@ -249,20 +328,21 @@ export function BrowserPane({ params, api, containerApi }: WorkspacePaneProps) {
     (url: string) => {
       setError(null);
       if (!attachedRef.current) {
-        void ipc()
-          .invoke("browser.attach", { viewId, bounds: measureNow(), url })
-          .then(() => {
-            attachedRef.current = true;
-            setAttached(true);
-          })
-          .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+        // No view yet: remember where to go and let the attach effect create
+        // it. One creation path, so a navigation typed while the tab is
+        // hidden is honoured when it comes back rather than lost.
+        pendingUrlRef.current = url;
+        if (!wantedRef.current) {
+          wantedRef.current = true;
+          setWanted(true);
+        }
         return;
       }
       void ipc()
         .invoke("browser.navigate", { viewId, url })
         .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
     },
-    [viewId, measureNow],
+    [viewId],
   );
 
   // The Servers pane's "Open in Browser pane" link.

@@ -524,6 +524,17 @@ test("(g) the native overlay tracks its placeholder through maximise and a windo
   // and a screenshot of the view cannot contain the page.
   await openPane("browser");
   await expect(page.getByTestId("browser-pane")).toBeVisible();
+
+  // A native view only exists once something has navigated — an un-navigated
+  // pane deliberately shows its "Enter a URL" card rather than a blank
+  // rectangle. The full-file run arrives here already on the fixture URL from
+  // (f); this covers `-g "(g)"` on a fresh profile, where whether the page
+  // loads does not matter (the view is created either way).
+  const urlBar = page.getByTestId("browser-url-input");
+  if ((await urlBar.inputValue()) === "") {
+    await urlBar.fill(FIXTURE_URL);
+    await urlBar.press("Enter");
+  }
   await expect.poll(overlayOffset, { timeout: 20_000, intervals: [250] }).toBeLessThanOrEqual(2);
 
   // Maximising is only a *change* when there is a second group to maximise

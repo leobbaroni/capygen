@@ -106,11 +106,21 @@ export const capygenEditorTheme = EditorView.theme(
   { dark: true },
 );
 
-/** Syntax colours, mapped onto the app's own accent tokens rather than
- *  one-dark's literal hex values. */
+/**
+ * Syntax colours, mapped onto the app's own accent tokens rather than
+ * one-dark's literal hex values.
+ *
+ * [C] Every entry here must be an **opaque foreground** token.
+ * `--tag-pink` is not one — it is `rgba(240,1,150,0.06)` in light and
+ * `rgba(240,1,150,0.15)` in dark, a chip *background* used only as a `bg-`
+ * elsewhere. Over `--code-bg` it renders keywords at ~1.1:1 contrast, i.e.
+ * `import`, `from`, `export`, `return` and every JSX tag name invisible.
+ * `--brand-accent` (#df3c85 in the default palette, per-theme in
+ * `themePalettes.generated.css`) is the opaque pink that was meant.
+ */
 export const capygenHighlightStyle = HighlightStyle.define([
   { tag: t.comment, color: "var(--muted-foreground)", fontStyle: "italic" },
-  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword], color: "var(--tag-pink)" },
+  { tag: [t.keyword, t.controlKeyword, t.moduleKeyword], color: "var(--brand-accent)" },
   { tag: [t.string, t.special(t.string)], color: "var(--status-green)" },
   { tag: [t.number, t.bool, t.null], color: "var(--status-yellow)" },
   { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--status-blue)" },
@@ -118,7 +128,7 @@ export const capygenHighlightStyle = HighlightStyle.define([
   { tag: [t.typeName, t.className], color: "var(--info)" },
   { tag: t.operator, color: "var(--foreground)" },
   { tag: t.punctuation, color: "var(--muted-foreground)" },
-  { tag: t.tagName, color: "var(--tag-pink)" },
+  { tag: t.tagName, color: "var(--brand-accent)" },
   { tag: t.attributeName, color: "var(--status-yellow)" },
   { tag: t.invalid, color: "var(--destructive)" },
 ]);

@@ -270,6 +270,36 @@ describe("ServersPane (SPEC R18)", () => {
     expect(await screen.findByText("compiled successfully")).toBeInTheDocument();
   });
 
+  /**
+   * [C] A server that was already running when this pane mounted (an adopted
+   * run after a relaunch, or a start from another window) streams live lines
+   * into `logsById` before the drawer is ever opened. Gating the backlog
+   * fetch on "does this server have any lines" therefore skipped it, and the
+   * `Local: http://localhost:…` line G6 keys on was never shown.
+   */
+  it("[C] fetches the ring-buffer tail even when live lines already arrived", async () => {
+    ipcInvoke.mockImplementation((channel: string) => {
+      if (channel === "servers.detect") return Promise.resolve(rows);
+      if (channel === "servers.logs") {
+        return Promise.resolve({ lines: ["> npm run dev", "  Local: http://localhost:5173/"] });
+      }
+      return Promise.reject(new Error(`unexpected channel ${channel}`));
+    });
+    const user = userEvent.setup();
+    render(<ServersPane {...props} />);
+    await screen.findByText("web");
+
+    // A line streams in before anyone opens the drawer.
+    act(() => {
+      emit("servers.log", { serverId: "srv1", line: "compiled successfully" });
+    });
+
+    await user.click(screen.getByTestId("server-logs-toggle"));
+
+    expect(ipcInvoke).toHaveBeenCalledWith("servers.logs", { serverId: "srv1", tail: 200 });
+    expect(await screen.findByText(/Local: http:\/\/localhost:5173/)).toBeInTheDocument();
+  });
+
   it("removes a custom server", async () => {
     ipcInvoke.mockImplementation((channel: string) => {
       if (channel === "servers.detect") return Promise.resolve([row({ source: "custom" })]);

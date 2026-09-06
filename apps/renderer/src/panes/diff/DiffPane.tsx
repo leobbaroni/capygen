@@ -1,18 +1,38 @@
 /**
  * Diff pane (SPEC R16, item B2.4): `git.status`'s working-tree list with a
- * badge per entry, click → `git.diff`'s unified patch rendered with
+ * badge and a tick-box per entry, click → the file's patch rendered with
  * `DiffView` (the same component the chat transcript's diff blocks use —
- * SPEC R6 already settled what a diff looks like in this app), and a
- * message box that commits everything currently changed
- * (`git.commit`, `paths` omitted). Matches `GithubPanel`'s status-list +
- * diff-body shape (`reference/omnigent/web/src/shell/GithubPanel.tsx`),
- * reimplemented against capygen's own contract.
+ * SPEC R6 already settled what a diff looks like in this app), and a message
+ * box that commits **the ticked files** (`git.commit`'s `paths`, which the
+ * service `git add`s first, so a brand-new file is committable from here).
+ * Matches `GithubPanel`'s status-list + diff-body shape
+ * (`reference/omnigent/web/src/shell/GithubPanel.tsx`), reimplemented against
+ * capygen's own contract.
+ *
+ * [C] Three things the naive version got wrong, all of them "the pane says
+ * nothing is there when something is":
+ *   - it committed with `paths` omitted, i.e. `git commit --all`, while the
+ *     list showed one row selected — every modified tracked file went in,
+ *     including files the user never looked at, and a working tree of only
+ *     untracked files had nothing to commit at all;
+ *   - `git diff -- <path>` prints nothing for an **untracked** file, so a new
+ *     file rendered as an empty `+0 −0` card. Untracked entries are read
+ *     through `fs.read` and shown as an all-added patch instead;
+ *   - the `staged` flag exists on the contract and was never sent, so
+ *     anything already `git add`-ed rendered empty too. A tracked file whose
+ *     working tree is clean is now asked for its staged half before being
+ *     called unchanged. (Which half it *is* cannot be read off
+ *     `GitStatusEntry.status`: `GitService.status` joins and trims git's two
+ *     porcelain columns, so " M" and "M " both arrive as "M". Asking for both
+ *     needs no contract change and gives the same answer.)
+ *   - a binary change was `unified: ""` plus `binary: true`, and the pane read
+ *     only the first half — so a changed PNG also rendered as `+0 −0`.
  *
  * `projectId` not being a git repository at all is not an error
  * (`git.status`'s `null` — see `GitStatusSchema`'s doc comment) and gets its
  * own quiet message rather than the error banner.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GitCommitHorizontalIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import type { GitDiff, GitStatus, GitStatusEntry } from "@capygen/shared";
 import { DiffView } from "@/components/blocks/DiffCard";
@@ -23,6 +43,28 @@ import { registerPane } from "@/workspace/registry";
 import type { WorkspacePaneProps } from "@/workspace/types";
 
 type BadgeVariant = "default" | "outline" | "success" | "warning" | "destructive" | "info";
+
+/** How long a burst of `fs.changed` batches is allowed to pile up before one
+ *  `git status` runs. `FsService` already emits at most one batch per 250 ms;
+ *  without this, sustained file activity spawned one `git.exe` per batch. */
+const REFRESH_DEBOUNCE_MS = 300;
+
+function isUntracked(status: string): boolean {
+  return status.includes("?");
+}
+
+/** An all-added unified patch for a file git will not diff (an untracked
+ *  one): the same shape `DiffView` renders for a real patch, built from the
+ *  bytes `fs.read` returns. */
+function patchForNewFile(path: string, content: string): string {
+  const lines = content === "" ? [] : content.replace(/\n$/, "").split("\n");
+  return [
+    `--- /dev/null`,
+    `+++ b/${path}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map((line) => `+${line}`),
+  ].join("\n");
+}
 
 function statusMeta(status: string): { label: string; variant: BadgeVariant } {
   const code = status.trim();
@@ -55,16 +97,29 @@ export function DiffPane({ params }: WorkspacePaneProps) {
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Which rows go into the next commit. Every entry starts ticked, so the
+   *  default is still "commit what I changed" — it is just now *visible*
+   *  which files that means, and untickable. */
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  /** Rising id per `git.status` request; a response from an older one is
+   *  dropped rather than allowed to overwrite a newer working tree (the same
+   *  guard `FilesPane`'s search uses). */
+  const statusSeq = useRef(0);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStatus = useCallback(async () => {
+    const seq = ++statusSeq.current;
     try {
       const result = await ipc().invoke("git.status", { projectId });
+      if (statusSeq.current !== seq) return;
       setStatus(result);
+      setChecked(new Set((result?.entries ?? []).map((entry) => entry.path)));
       setError(null);
     } catch (err) {
+      if (statusSeq.current !== seq) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoaded(true);
+      if (statusSeq.current === seq) setLoaded(true);
     }
   }, [projectId]);
 
@@ -72,33 +127,83 @@ export function DiffPane({ params }: WorkspacePaneProps) {
     void loadStatus();
   }, [loadStatus]);
 
+  // [C] Debounced, because every `git.status` is an OS process spawn
+  // (simple-git runs the user's real `git.exe`). `FsService` flushes a batch
+  // roughly every 250 ms under sustained activity — a formatter, a build
+  // writing outside the ignore list — and the undebounced version answered
+  // each one with its own `git status`, unbounded and overlapping.
   useEffect(() => {
     const unsubscribe = ipc().on("fs.changed", (event) => {
       if (event.projectId !== projectId) return;
-      void loadStatus();
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => {
+        refreshTimer.current = null;
+        void loadStatus();
+      }, REFRESH_DEBOUNCE_MS);
     });
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
   }, [projectId, loadStatus]);
 
+  /**
+   * The patch for one row. An untracked file is read rather than diffed
+   * (git prints nothing for it); a tracked file whose working tree is clean
+   * is asked for its *staged* half before being called unchanged.
+   */
   async function selectEntry(entry: GitStatusEntry): Promise<void> {
     setSelected(entry.path);
     setDiff(null);
     setError(null);
     try {
-      const diffs = await ipc().invoke("git.diff", { projectId, path: entry.path });
-      setDiff(diffs[0] ?? { path: entry.path, unified: "" });
+      if (isUntracked(entry.status)) {
+        const file = await ipc().invoke("fs.read", { projectId, path: entry.path });
+        setDiff({
+          path: entry.path,
+          unified: file.binary ? "" : patchForNewFile(entry.path, file.content),
+          ...(file.binary ? { binary: true } : {}),
+        });
+        return;
+      }
+      const worktree = await ipc().invoke("git.diff", { projectId, path: entry.path });
+      const first = worktree[0];
+      if (first && (first.unified !== "" || first.binary)) {
+        setDiff(first);
+        return;
+      }
+      const staged = await ipc().invoke("git.diff", {
+        projectId,
+        path: entry.path,
+        staged: true,
+      });
+      setDiff(staged[0] ?? { path: entry.path, unified: "" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
+  function toggleChecked(path: string): void {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
   async function commit(): Promise<void> {
     const trimmed = message.trim();
-    if (trimmed === "") return;
+    const paths = (status?.entries ?? [])
+      .map((entry) => entry.path)
+      .filter((path) => checked.has(path));
+    if (trimmed === "" || paths.length === 0) return;
     setCommitting(true);
     setError(null);
     try {
-      await ipc().invoke("git.commit", { projectId, message: trimmed });
+      // Named paths, never `--all`: `GitService.commit` stages exactly these
+      // first, which is also what makes an untracked file committable here.
+      await ipc().invoke("git.commit", { projectId, message: trimmed, paths });
       setMessage("");
       setSelected(null);
       setDiff(null);
@@ -109,6 +214,8 @@ export function DiffPane({ params }: WorkspacePaneProps) {
       setCommitting(false);
     }
   }
+
+  const checkedCount = (status?.entries ?? []).filter((entry) => checked.has(entry.path)).length;
 
   return (
     <div className="flex h-full flex-col" data-testid="diff-pane">
@@ -158,16 +265,28 @@ export function DiffPane({ params }: WorkspacePaneProps) {
               status.entries.map((entry) => {
                 const meta = statusMeta(entry.status);
                 return (
-                  <li key={entry.path}>
+                  <li
+                    key={entry.path}
+                    className={`flex items-center gap-1.5 px-2 py-1 text-xs hover:bg-accent/40 ${
+                      selected === entry.path ? "bg-accent/60" : ""
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked.has(entry.path)}
+                      onChange={() => toggleChecked(entry.path)}
+                      aria-label={`Include ${entry.path} in the commit`}
+                      data-testid="diff-status-check"
+                      data-path={entry.path}
+                      className="size-3 shrink-0 accent-[var(--brand-accent)]"
+                    />
                     <button
                       type="button"
                       data-testid="diff-status-row"
                       data-path={entry.path}
                       aria-pressed={selected === entry.path}
                       onClick={() => void selectEntry(entry)}
-                      className={`flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs hover:bg-accent/40 ${
-                        selected === entry.path ? "bg-accent/60" : ""
-                      }`}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                     >
                       <span className="min-w-0 flex-1 truncate text-foreground">{entry.path}</span>
                       <Badge variant={meta.variant}>{meta.label}</Badge>
@@ -179,13 +298,24 @@ export function DiffPane({ params }: WorkspacePaneProps) {
           </ul>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2" data-testid="diff-body">
-            {selected && diff ? (
-              <DiffView
-                path={diff.path}
-                patch={diff.unified}
-                {...countChanges(diff.unified)}
-                testId="diff-pane-view"
-              />
+            {selected && diff?.binary ? (
+              <p className="text-xs text-muted-foreground" data-testid="diff-binary-notice">
+                {diff.path} — binary file, not shown.
+              </p>
+            ) : selected && diff ? (
+              <>
+                <DiffView
+                  path={diff.path}
+                  patch={diff.unified}
+                  {...countChanges(diff.unified)}
+                  testId="diff-pane-view"
+                />
+                {diff.unified === "" ? (
+                  <p className="mt-1 text-xs text-muted-foreground" data-testid="diff-empty-notice">
+                    No textual changes in the working tree or the index.
+                  </p>
+                ) : null}
+              </>
             ) : selected ? (
               <p className="text-xs text-muted-foreground">Loading diff…</p>
             ) : (
@@ -207,11 +337,18 @@ export function DiffPane({ params }: WorkspacePaneProps) {
             />
             <Button
               size="sm"
-              disabled={committing || message.trim() === "" || status.entries.length === 0}
+              // Enabled only when there is something ticked to commit — the
+              // old `entries.length > 0` let an untracked-only tree arm a
+              // `git commit -a` that could only ever fail.
+              disabled={committing || message.trim() === "" || checkedCount === 0}
               data-testid="diff-commit-submit"
               onClick={() => void commit()}
             >
-              {committing ? <Loader2Icon className="size-3.5 animate-spin" /> : "Commit"}
+              {committing ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                `Commit ${checkedCount}`
+              )}
             </Button>
           </div>
         </>

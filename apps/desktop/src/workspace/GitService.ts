@@ -114,8 +114,14 @@ export class GitService {
     const git = await this.client(args.projectId);
     if (!(await isRepo(git))) throw new Error("not a git repository");
     if (args.paths && args.paths.length > 0) {
-      await git.add(args.paths);
-      await git.commit(args.message, args.paths);
+      // [C] `--` before the pathspecs, the same guard `diff()` above uses.
+      // simple-git appends `files` to the argv verbatim (`addTask` builds
+      // `["add", ...files]`, `commitTask` `[…, "commit", -m…, ...files]`), so
+      // a path that starts with `-` is read by git as an *option*:
+      // `paths: ["-p"]` turns the call into `git add -p`, which blocks on
+      // stdin that never comes and hangs a git.exe per commit.
+      await git.add(["--", ...args.paths]);
+      await git.commit(args.message, ["--", ...args.paths]);
     } else {
       await git.commit(args.message, undefined, { "--all": null });
     }

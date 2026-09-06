@@ -15,7 +15,9 @@ import type { WorkspacePaneParams } from "@/workspace/types";
 import { EditorPane } from "./EditorPane";
 
 const invoke = vi.fn();
-const on = vi.fn(() => () => undefined);
+const on = vi.fn<(channel: string, listener: (payload: any) => void) => () => void>(
+  () => () => undefined,
+);
 vi.mock("@/lib/ipc", () => ({
   ipc: () => ({ invoke, on }),
   hasBridge: () => true,
@@ -206,6 +208,108 @@ describe("EditorPane", () => {
 
     await waitFor(() => expect(screen.getAllByTestId("editor-tab")).toHaveLength(1));
     expect(screen.getByTestId("editor-tab")).toHaveTextContent("a.ts");
+  });
+
+  /** Closing a tab used to `statesRef.delete` outright — no confirm, no
+   *  autosave, no undo. */
+  it("[C] a dirty tab asks before its close throws the edits away", async () => {
+    render(
+      <EditorPane
+        params={{ ...params, initialFilePath: "a.ts" }}
+        api={{} as never}
+        containerApi={{} as never}
+      />,
+    );
+    await screen.findByTestId("editor-tab");
+    typeInActiveEditor(" edited");
+    await screen.findByTestId("editor-tab-dirty");
+
+    fireEvent.click(screen.getByTestId("editor-tab-close"));
+
+    // Still open, with the question on screen.
+    expect(screen.getByTestId("editor-close-confirm")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-tab")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("editor-close-confirm-cancel"));
+    expect(screen.queryByTestId("editor-close-confirm")).not.toBeInTheDocument();
+    expect(screen.getByTestId("editor-tab")).toBeInTheDocument();
+
+    // "Save and close" writes first, then closes.
+    fireEvent.click(screen.getByTestId("editor-tab-close"));
+    fireEvent.click(screen.getByTestId("editor-close-confirm-save"));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("fs.write", {
+        projectId: "proj-1",
+        path: "a.ts",
+        content: "content of a.ts edited",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByTestId("editor-tab")).not.toBeInTheDocument());
+  });
+
+  /** A clean tab follows the file; a dirty one is flagged rather than
+   *  silently overwritten by the next save. */
+  it("[C] an agent rewriting the open file reloads a clean tab and guards a dirty one", async () => {
+    let disk = "content of a.ts";
+    const listeners = new Map<string, (payload: unknown) => void>();
+    on.mockImplementation((channel: string, listener: (payload: any) => void) => {
+      listeners.set(channel, listener);
+      return () => void listeners.delete(channel);
+    });
+    invoke.mockImplementation((channel: string, args: { path?: string; content?: string }) => {
+      if (channel === "fs.read") {
+        return Promise.resolve({
+          path: args.path,
+          content: disk,
+          encoding: "utf8",
+          size: disk.length,
+          truncated: false,
+          binary: false,
+        });
+      }
+      if (channel === "fs.write") {
+        disk = args.content ?? "";
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    render(
+      <EditorPane
+        params={{ ...params, initialFilePath: "a.ts" }}
+        api={{} as never}
+        containerApi={{} as never}
+      />,
+    );
+    await screen.findByTestId("editor-tab");
+    expect(listeners.has("fs.changed")).toBe(true);
+
+    // Clean tab: the new bytes just arrive.
+    disk = "rewritten by the agent";
+    listeners.get("fs.changed")!({
+      projectId: "proj-1",
+      changes: [{ path: "a.ts", kind: "change" }],
+    });
+    await waitFor(() => expect(activeEditorView().state.doc.toString()).toBe(disk));
+
+    // Dirty tab: flagged, and the first save refuses rather than clobbering.
+    typeInActiveEditor(" mine");
+    await screen.findByTestId("editor-tab-dirty");
+    disk = "rewritten again";
+    listeners.get("fs.changed")!({
+      projectId: "proj-1",
+      changes: [{ path: "a.ts", kind: "change" }],
+    });
+    await screen.findByTestId("editor-external-change");
+
+    invoke.mockClear();
+    fireEvent.click(screen.getByTestId("editor-save"));
+    await screen.findByTestId("editor-error");
+    expect(invoke).not.toHaveBeenCalledWith("fs.write", expect.anything());
+
+    // Reload takes the disk copy.
+    fireEvent.click(screen.getByTestId("editor-reload-from-disk"));
+    await waitFor(() => expect(activeEditorView().state.doc.toString()).toBe("rewritten again"));
   });
 
   it("a binary file opens read-only with no CodeMirror content and no write on save", async () => {

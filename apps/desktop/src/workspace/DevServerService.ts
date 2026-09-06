@@ -296,14 +296,16 @@ export class DevServerService {
     }
     // `child.kill()` is the *fallback*, not the primary: on Windows it stops
     // the shell and orphans everything below it, which is the opposite of what
-    // stopping a dev server means. It only runs when there was no pid to kill
-    // a tree from.
-    if (pid === undefined) {
-      try {
-        live.child?.kill();
-      } catch {
-        /* already gone */
-      }
+    // stopping a dev server means. It runs unconditionally all the same —
+    // exactly as `TerminalService.kill()` does — because a tree kill that
+    // *threw* (no `taskkill.exe`, a policy-blocked one) would otherwise leave
+    // the process alive while this method reported `status: "stopped"` as
+    // fact. Killing an already-dead child is a no-op; not killing a live one
+    // is a port nobody can explain.
+    try {
+      live.child?.kill();
+    } catch {
+      /* already gone — the tree kill above is what mattered */
     }
     const run: DevServerRun = { serverId: args.serverId, status: "stopped" };
     live.run = run;

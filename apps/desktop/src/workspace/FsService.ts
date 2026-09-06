@@ -17,8 +17,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { CapygenStore } from "@capygen/db";
 import type { FileChange, FileEntry, FileListResult, FileReadResult } from "@capygen/shared";
-import { ignoredUnder, isIgnoredDirName } from "./ignore.js";
-import { projectRoot, resolveExistingInside, resolveInside, toRelPosix } from "./paths.js";
+import { IGNORED_DIR_NAMES, ignoredUnder, isIgnoredDirName } from "./ignore.js";
+import { projectRoot, resolveExistingInside, resolveNewInside, toRelPosix } from "./paths.js";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
 
 export const MAX_ENTRIES_PER_DIR = 500;
@@ -55,6 +55,17 @@ export interface FsServiceDeps {
 
 export class FsService {
   private readonly watchers = new Map<string, Promise<WatcherLike>>();
+  /**
+   * How many callers currently want each project watched.
+   *
+   * [C] Reference-counted, the same way `mcpPools` is ("closed when the last
+   * of them lets go"): two Files panes can watch one project at once — two
+   * sessions on the same directory, or the tray's "New Window" (R2) — and the
+   * second `watch` is a no-op because the watcher already exists. Without a
+   * count, the *first* pane to unmount closed the only chokidar instance and
+   * the other pane silently stopped receiving `fs.changed` for good.
+   */
+  private readonly subscribers = new Map<string, number>();
   private readonly pending = new Map<string, FileChange[]>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private ripgrep: string | null | undefined;
@@ -144,10 +155,16 @@ export class FsService {
    * over the target, so a crash mid-write leaves the old file intact rather
    * than a half-written one. The rename is same-directory on purpose — across
    * volumes it is a copy, and would lose the atomicity that is the whole point.
+   *
+   * The destination is resolved with `resolveNewInside`, not the lexical
+   * `resolveInside`: a junction inside the project would otherwise let a save
+   * land outside it (see that function's comment) — `read`/`list` and the
+   * terminal's `cwd` have always had the realpath check; `write`, the one
+   * method that *creates* bytes, was the gap.
    */
   write(args: { projectId: string; path: string; content: string }): { ok: boolean } {
     const { root } = projectRoot(this.deps.store, args.projectId);
-    const absolute = resolveInside(root, args.path);
+    const absolute = resolveNewInside(root, args.path);
     const dir = path.dirname(absolute);
     fs.mkdirSync(dir, { recursive: true });
     const temp = path.join(dir, `.capygen-${process.pid}-${Date.now().toString(36)}.tmp`);
@@ -171,10 +188,17 @@ export class FsService {
 
   /**
    * Filename search (the quick-open box), not content search: `rg --files`
-   * when ripgrep is on PATH — it already honours `.gitignore` and is an order
-   * of magnitude faster on a big tree — and a bounded walker otherwise. Both
-   * match a case-insensitive substring of the project-relative path, so
-   * `src/ma` finds `src/main.ts`.
+   * when ripgrep is on PATH — an order of magnitude faster on a big tree —
+   * and a bounded walker otherwise. Both match a case-insensitive substring of
+   * the project-relative path, so `src/ma` finds `src/main.ts`.
+   *
+   * [C] The two backends are made to answer *identically*: the ripgrep branch
+   * is given the walker's own ignore set as a `--glob` and `--no-ignore-vcs`,
+   * so whether a machine has `rg` installed is not a difference the user can
+   * observe. (It used to be: `rg` honoured `.gitignore` and knew nothing of
+   * `IGNORED_DIR_NAMES`, the walker the exact reverse, so searching "env" in a
+   * project with a gitignored `.env` found it on one machine and not the
+   * other.)
    */
   search(args: { projectId: string; query: string; limit?: number }): FileListResult {
     const { root } = projectRoot(this.deps.store, args.projectId);
@@ -192,7 +216,21 @@ export class FsService {
     if (!rg) return null;
     let stdout: string;
     try {
-      const result = spawnSync(rg, ["--files", "--hidden", "--no-messages"], {
+      // [C] The same ignore set the walker and the tree use, and
+      // `--no-ignore-vcs` so ripgrep does *not* additionally apply
+      // `.gitignore`. Without both flags the search answered differently on a
+      // machine with ripgrep on PATH than on one without it — searching
+      // "env" in a project with a gitignored `.env` found nothing here and
+      // found it there.
+      const excludeGlob = `!{${[...IGNORED_DIR_NAMES].join(",")}}/**`;
+      const result = spawnSync(rg, [
+        "--files",
+        "--hidden",
+        "--no-ignore-vcs",
+        "--glob",
+        excludeGlob,
+        "--no-messages",
+      ], {
         cwd: root,
         encoding: "utf8",
         windowsHide: true,
@@ -276,8 +314,10 @@ export class FsService {
   // watch
   // -------------------------------------------------------------------------
 
-  /** Idempotent — watching an already-watched project is not an error. */
+  /** Idempotent — watching an already-watched project is not an error; it is
+   *  one more subscriber on the same watcher (see `subscribers`). */
   async watch(args: { projectId: string }): Promise<{ ok: boolean }> {
+    this.subscribers.set(args.projectId, (this.subscribers.get(args.projectId) ?? 0) + 1);
     if (this.watchers.has(args.projectId)) return { ok: true };
     const { root } = projectRoot(this.deps.store, args.projectId);
     const starting = Promise.resolve(
@@ -298,14 +338,25 @@ export class FsService {
       await starting;
     } catch (err) {
       this.watchers.delete(args.projectId);
+      this.subscribers.delete(args.projectId);
       throw err;
     }
     this.deps.log.info(`[fs] watching ${root}`);
     return { ok: true };
   }
 
-  /** Idempotent — unwatching a project nothing watches is not an error. */
+  /**
+   * Drop one subscriber. The chokidar instance only closes when the last one
+   * lets go — a second Files pane on the same project keeps it alive.
+   * Idempotent: unwatching a project nothing watches is not an error.
+   */
   async unwatch(args: { projectId: string }): Promise<{ ok: boolean }> {
+    const remaining = (this.subscribers.get(args.projectId) ?? 0) - 1;
+    if (remaining > 0) {
+      this.subscribers.set(args.projectId, remaining);
+      return { ok: true };
+    }
+    this.subscribers.delete(args.projectId);
     const watcher = this.watchers.get(args.projectId);
     this.watchers.delete(args.projectId);
     this.clearTimer(args.projectId);
@@ -349,8 +400,11 @@ export class FsService {
     this.timers.delete(projectId);
   }
 
+  /** Shutdown, not a subscriber leaving: the counts are dropped outright so a
+   *  project two panes still "want" is closed anyway. */
   async dispose(): Promise<void> {
     const ids = [...this.watchers.keys()];
+    this.subscribers.clear();
     await Promise.all(ids.map((projectId) => this.unwatch({ projectId })));
   }
 }

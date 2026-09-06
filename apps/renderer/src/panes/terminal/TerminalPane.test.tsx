@@ -93,11 +93,15 @@ vi.mock("@/lib/ipc", () => ({
 }));
 
 let createCount = 0;
+/** What `terminal.list` answers — the pane adopts these instead of spawning
+ *  a fresh shell (see the pane's module comment). */
+let existingTerminals: unknown[] = [];
 
 beforeEach(() => {
   xtermState.instances.length = 0;
   listeners.clear();
   createCount = 0;
+  existingTerminals = [];
   ipcInvoke.mockReset();
   ipcOn.mockClear();
   ipcInvoke.mockImplementation((channel: string, args: Record<string, unknown>) => {
@@ -114,6 +118,7 @@ beforeEach(() => {
         rows: 24,
       });
     }
+    if (channel === "terminal.list") return Promise.resolve(existingTerminals);
     if (channel === "terminal.write") return Promise.resolve({ ok: true });
     if (channel === "terminal.resize") return Promise.resolve({ ok: true });
     if (channel === "terminal.kill") return Promise.resolve({ ok: true });
@@ -121,10 +126,35 @@ beforeEach(() => {
   });
 });
 
+/** A stand-in for the slice of `DockviewPanelApi` a pane reads: `isVisible`,
+ *  plus the event dockview fires when a stacked tab's visibility flips.
+ *  Dockview never unmounts a hidden tab (`WorkspaceHost` sets
+ *  `defaultRenderer="always"`), so visibility — not mounting — is what a pane
+ *  holding a live resource has to react to. */
+function fakePanelApi(initialVisible = true): DockviewPanelApi & {
+  setVisible: (v: boolean) => void;
+} {
+  const handlers = new Set<(e: { isVisible: boolean }) => void>();
+  let isVisible = initialVisible;
+  return {
+    get isVisible() {
+      return isVisible;
+    },
+    onDidVisibilityChange: (listener: (e: { isVisible: boolean }) => void) => {
+      handlers.add(listener);
+      return { dispose: () => handlers.delete(listener) };
+    },
+    onDidDimensionsChange: () => ({ dispose: () => undefined }),
+    setVisible(next: boolean) {
+      isVisible = next;
+      for (const h of handlers) h({ isVisible: next });
+    },
+  } as unknown as DockviewPanelApi & { setVisible: (v: boolean) => void };
+}
+
 const params: WorkspacePaneParams = { projectId: "p1", sessionId: "s1" };
-const api = {} as DockviewPanelApi;
 const containerApi = {} as DockviewApi;
-const props = { params, api, containerApi };
+const props = { params, api: fakePanelApi(), containerApi };
 
 describe("TerminalPane (SPEC R16)", () => {
   it("creates a terminal on mount, scoped to the project/session", async () => {
@@ -139,6 +169,48 @@ describe("TerminalPane (SPEC R16)", () => {
       }),
     );
     expect(await screen.findByTestId("terminal-instance")).toBeInTheDocument();
+  });
+
+  /**
+   * A pty outlives this component, so re-opening the pane has to find the
+   * shell it left running rather than spawn another one nobody can reach.
+   */
+  it("[C] adopts this project's running terminals instead of spawning another", async () => {
+    existingTerminals = [
+      {
+        id: "term-existing",
+        projectId: "p1",
+        sessionId: "s1",
+        title: "pwsh.exe",
+        cwd: "C:/proj",
+        shell: "pwsh.exe",
+        cols: 80,
+        rows: 24,
+      },
+    ];
+    render(<TerminalPane {...props} api={fakePanelApi()} />);
+
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("terminal.list", { projectId: "p1" }));
+    await waitFor(() => expect(screen.getAllByTestId("terminal-tab")).toHaveLength(1));
+    expect(ipcInvoke).not.toHaveBeenCalledWith("terminal.create", expect.anything());
+    // The adopted id is what the data/exit subscriptions are keyed on.
+    act(() => {
+      emit("terminal.data", { id: "term-existing", data: "back again\r\n" });
+    });
+    expect(xtermState.instances[0]?.written).toContain("back again\r\n");
+  });
+
+  /** `defaultRenderer="always"` keeps a hidden tab mounted, so a restored
+   *  layout would otherwise spawn a shell behind another tab. */
+  it("[C] waits for the tab to be visible before opening its first shell", async () => {
+    const api = fakePanelApi(false);
+    render(<TerminalPane {...props} api={api} />);
+    await Promise.resolve();
+    expect(ipcInvoke).not.toHaveBeenCalledWith("terminal.create", expect.anything());
+
+    act(() => api.setVisible(true));
+
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith("terminal.create", expect.anything()));
   });
 
   it("pushes a resize once the terminal is fitted", async () => {

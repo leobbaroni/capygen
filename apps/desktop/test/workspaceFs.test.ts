@@ -7,6 +7,7 @@
  * renderer.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -129,6 +130,46 @@ describe("fs.read / fs.write", () => {
     expect(fs.readFileSync(path.join(h.root, "src/new/file.ts"), "utf8")).toBe("export {};\n");
     expect(fs.readdirSync(path.join(h.root, "src", "new"))).toEqual(["file.ts"]);
   });
+
+  /**
+   * A junction inside the project is lexically indistinguishable from a
+   * folder: `path.relative` says `<root>/escape/x.txt` is inside the root, and
+   * the OS then follows the link and writes outside it. `read`/`list` have
+   * always realpath-checked; `write` is the one that creates bytes, so it is
+   * the one that mattered.
+   */
+  it("refuses a write that leaves the project through a junction/symlink", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-outside-"));
+    let linked = false;
+    try {
+      // Windows: a directory junction needs no elevation; POSIX: a symlink.
+      fs.symlinkSync(outside, path.join(h.root, "escape"), "junction");
+      linked = true;
+    } catch {
+      // No permission to create one (a locked-down profile) — nothing to
+      // prove here, and a skipped assertion beats a false red.
+    }
+    if (!linked) {
+      fs.rmSync(outside, { recursive: true, force: true });
+      return;
+    }
+
+    expect(() =>
+      service.write({ projectId: h.projectId, path: "escape/pwned.txt", content: "x" }),
+    ).toThrow(/escapes the project/);
+    expect(fs.existsSync(path.join(outside, "pwned.txt"))).toBe(false);
+
+    // A directory *below* the junction that does not exist yet is the same
+    // attack with one more component; the nearest-existing-ancestor check is
+    // what catches that one.
+    expect(() =>
+      service.write({ projectId: h.projectId, path: "escape/deep/pwned.txt", content: "x" }),
+    ).toThrow(/escapes the project/);
+    expect(fs.existsSync(path.join(outside, "deep"))).toBe(false);
+
+    fs.rmSync(path.join(h.root, "escape"), { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
 });
 
 describe("fs.search", () => {
@@ -199,6 +240,54 @@ describe("fs.watch", () => {
     expect(closed).toBe(true);
     // Idempotent both ways.
     expect(await withFake.unwatch({ projectId: h.projectId })).toEqual({ ok: true });
+  });
+
+  /**
+   * Two Files panes can want the same project watched at once — two sessions
+   * on one directory, or the tray's "New Window" (R2). The second `watch` is
+   * a no-op on the same chokidar instance, so without a subscriber count the
+   * *first* pane to unmount closed the watcher and the other pane silently
+   * stopped receiving `fs.changed` for the rest of the app's life.
+   */
+  it("is reference-counted: one unwatch of two does not close the shared watcher", async () => {
+    const listeners = new Map<string, (p: string) => void>();
+    let closed = false;
+    let watchersCreated = 0;
+    const withFake = new FsService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      createWatcher: () => {
+        watchersCreated += 1;
+        return {
+          on: (event, handler) => listeners.set(event, handler),
+          close: () => {
+            closed = true;
+          },
+        };
+      },
+    });
+
+    await withFake.watch({ projectId: h.projectId });
+    await withFake.watch({ projectId: h.projectId });
+    expect(watchersCreated).toBe(1);
+
+    // Pane A goes away…
+    await withFake.unwatch({ projectId: h.projectId });
+    expect(closed).toBe(false);
+
+    // …and pane B still gets its events.
+    listeners.get("change")?.(path.join(h.root, "still-watched.txt"));
+    await sleep(WATCH_DEBOUNCE_MS + 60);
+    expect(
+      (h.eventsOn("fs.changed") as { changes: { path: string }[] }[]).some((e) =>
+        e.changes.some((c) => c.path === "still-watched.txt"),
+      ),
+    ).toBe(true);
+
+    // The last one out closes it.
+    await withFake.unwatch({ projectId: h.projectId });
+    expect(closed).toBe(true);
   });
 
   it("a real chokidar watcher reports a real write", async () => {

@@ -86,3 +86,41 @@ export function resolveExistingInside(root: string, candidate: string): string {
   }
   return resolved;
 }
+
+/**
+ * `resolveExistingInside` for a destination that does not exist yet — a save
+ * to a brand-new file, or into a directory `write` is about to create.
+ *
+ * [C] `resolveInside` alone is a *lexical* check, and a lexical check cannot
+ * see a junction. A project containing `shared` → `%APPDATA%\…\Startup` makes
+ * `shared/update.ps1` resolve to `<root>\shared\update.ps1`, which `path.relative`
+ * happily calls "inside" — and then `mkdirSync`/`writeFileSync` follow the
+ * junction at the OS level and put the bytes in the Startup folder. So the
+ * *nearest existing ancestor* of the target is realpath-checked (that is the
+ * deepest component an OS-level link can actually live on), and so is the leaf
+ * itself when it already exists.
+ */
+export function resolveNewInside(root: string, candidate: string): string {
+  const resolved = resolveInside(root, candidate);
+  const realRoot = realIfExists(root);
+
+  let probe = path.dirname(resolved);
+  for (;;) {
+    if (fs.existsSync(probe)) break;
+    const parent = path.dirname(probe);
+    // `path.dirname("C:\\")` is `"C:\\"`: the walk has reached a filesystem
+    // root and there is nothing left to check.
+    if (parent === probe) break;
+    probe = parent;
+  }
+  if (!isInside(realRoot, realIfExists(probe))) {
+    throw new Error(`path escapes the project through a link: ${candidate}`);
+  }
+  // The leaf may itself be an existing symlink pointing out of the tree; when
+  // it does not exist `realIfExists` returns the (already lexically checked)
+  // candidate, so this is a no-op for the common new-file case.
+  if (!isInside(realRoot, realIfExists(resolved))) {
+    throw new Error(`path escapes the project through a link: ${candidate}`);
+  }
+  return resolved;
+}

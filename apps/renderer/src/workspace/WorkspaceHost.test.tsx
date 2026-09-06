@@ -232,6 +232,78 @@ describe("WorkspaceHost", () => {
     expect(saved.panels.terminal.params).toEqual({ projectId: "p-old", sessionId: "s-old" });
   });
 
+  /**
+   * Closing every pane through the toolbar toggles is legal, and dockview's
+   * `onDidRemovePanel` also fires `onDidLayoutChange` — so that state is
+   * saved like any other. Treating "0 panels" as a failed restore put
+   * Files+Agents back on every relaunch and undid the user's choice for good.
+   */
+  it("[C] restores a saved layout that legitimately has no panels, instead of re-defaulting", async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === "layout.get") {
+        return Promise.resolve({
+          projectId: "p1",
+          layoutJson: { grid: { root: { type: "branch", data: [] } }, panels: {} },
+          updatedAt: 0,
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    render(<WorkspaceHost projectId="p1" sessionId="s1" onClose={vi.fn()} />);
+    const api = ready();
+    // A real `fromJSON` of an empty layout adds nothing and throws nothing.
+    api.fromJSON.mockImplementation(() => undefined);
+
+    await waitFor(() => expect(api.fromJSON).toHaveBeenCalled());
+    // Give the default-layout path every chance to run before asserting it
+    // did not.
+    await Promise.resolve();
+    expect(api.panels).toHaveLength(0);
+    expect(api.addPanel).not.toHaveBeenCalled();
+  });
+
+  /** "Rearrange the panes, then close the workspace" is one gesture and takes
+   *  well under the 400 ms debounce; dropping the pending write threw the
+   *  rearrangement away (R17). */
+  it("[C] flushes a pending layout.set on unmount instead of dropping it", async () => {
+    const { unmount } = render(<WorkspaceHost projectId="p1" sessionId="s1" onClose={vi.fn()} />);
+    const api = ready();
+    await waitFor(() => expect(api.panels.length).toBeGreaterThan(0));
+    invoke.mockClear();
+
+    fireEvent.click(screen.getByTestId("workspace-pane-toggle-editor"));
+    // Still inside the debounce window: nothing written yet.
+    expect(invoke.mock.calls.filter((c) => c[0] === "layout.set")).toHaveLength(0);
+
+    unmount();
+
+    const writes = invoke.mock.calls.filter((c) => c[0] === "layout.set");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]![1]).toEqual({ projectId: "p1", layoutJson: { marker: true } });
+  });
+
+  /** A width chosen on a wide window must not survive onto a narrow one and
+   *  squeeze the chat column (and the workspace's own close button) away. */
+  it("[C] re-clamps the stored width against the window", async () => {
+    window.localStorage.setItem("capygen.workspace.width.p1", "1200");
+    const originalWidth = window.innerWidth;
+    try {
+      Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+      render(<WorkspaceHost projectId="p1" sessionId="s1" onClose={vi.fn()} />);
+      const host = screen.getByTestId("workspace-host");
+      // 1280 - 360 (the chat column's floor) = 920, not the stored 1200.
+      await waitFor(() => expect(host.style.width).toBe("920px"));
+
+      Object.defineProperty(window, "innerWidth", { value: 900, configurable: true });
+      fireEvent(window, new Event("resize"));
+      // Never below the host's own minimum, even when the window is tiny.
+      await waitFor(() => expect(host.style.width).toBe("540px"));
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: originalWidth, configurable: true });
+      window.localStorage.removeItem("capygen.workspace.width.p1");
+    }
+  });
+
   it("falls back to the default layout when the saved one fails to restore", async () => {
     invoke.mockImplementation((channel: string) => {
       if (channel === "layout.get") {

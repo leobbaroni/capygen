@@ -13,6 +13,7 @@ import {
   isWebUrl,
   normaliseUrl,
   type BrowserViewHandlers,
+  type PartitionSessionLike,
 } from "../src/workspace/BrowserViewService.js";
 import { makeHarness, type Harness } from "./workspaceHarness.js";
 
@@ -94,6 +95,37 @@ class FakeView {
   }
 }
 
+/** One fake shell window; `id` is what scopes the service's view map, so the
+ *  multi-window test below hands out two of these. */
+function makeWindow(id: number, added: FakeView[], removed: FakeView[]): BaseWindow {
+  return {
+    id,
+    isDestroyed: () => false,
+    contentView: {
+      addChildView: (view: FakeView) => void added.push(view),
+      removeChildView: (view: FakeView) => void removed.push(view),
+    },
+  } as unknown as BaseWindow;
+}
+
+/** The permission handlers each partitioned session was given, by partition. */
+interface FakeSession {
+  partition: string;
+  request: ((contents: unknown, permission: string, cb: (ok: boolean) => void) => void) | null;
+  check: (() => boolean) | null;
+}
+
+let sessions: FakeSession[];
+
+function fakeSessionFromPartition(partition: string): PartitionSessionLike {
+  const entry: FakeSession = { partition, request: null, check: null };
+  sessions.push(entry);
+  return {
+    setPermissionRequestHandler: (handler) => void (entry.request = handler),
+    setPermissionCheckHandler: (handler) => void (entry.check = handler),
+  };
+}
+
 let h: Harness;
 let service: BrowserViewHandlers;
 let added: FakeView[];
@@ -106,16 +138,13 @@ beforeEach(() => {
   added = [];
   removed = [];
   opened = [];
-  const window = {
-    contentView: {
-      addChildView: (view: FakeView) => void added.push(view),
-      removeChildView: (view: FakeView) => void removed.push(view),
-    },
-  } as unknown as BaseWindow;
+  sessions = [];
+  const window = makeWindow(1, added, removed);
 
   service = createBrowserViewService({
     window: () => window,
     WebContentsView: FakeView as unknown as typeof WebContentsViewClass,
+    sessionFromPartition: fakeSessionFromPartition,
     openExternal: (url) => void opened.push(url),
     broadcast: h.broadcast,
     log: h.log,
@@ -170,6 +199,7 @@ describe("attach", () => {
     const orphan = createBrowserViewService({
       window: () => null,
       WebContentsView: FakeView as unknown as typeof WebContentsViewClass,
+      sessionFromPartition: fakeSessionFromPartition,
       openExternal: vi.fn(),
       broadcast: h.broadcast,
       log: h.log,
@@ -177,6 +207,65 @@ describe("attach", () => {
     expect(orphan.attach({ viewId: "p", bounds: { x: 0, y: 0, width: 1, height: 1 } })).toEqual({
       ok: false,
     });
+  });
+
+  /**
+   * Electron approves *every* permission request on a session that has no
+   * handler registered, so a page in this pane could have turned on the
+   * camera with no dialog. Both handlers are installed before the view is
+   * created — the assertion is that the callback is given `false`.
+   */
+  it("denies every permission on the view's own partition", () => {
+    service.attach({ viewId: "p", bounds: { x: 0, y: 0, width: 1, height: 1 } });
+    const entry = sessions.find((s) => s.partition === "persist:capygen-browser-p");
+    expect(entry).toBeDefined();
+    expect(entry!.request).toBeTypeOf("function");
+    expect(entry!.check).toBeTypeOf("function");
+
+    const granted: boolean[] = [];
+    for (const permission of ["media", "geolocation", "notifications", "midi"]) {
+      entry!.request!(null, permission, (ok) => granted.push(ok));
+    }
+    expect(granted).toEqual([false, false, false, false]);
+    expect(entry!.check!()).toBe(false);
+  });
+
+  /**
+   * Two shell windows (the tray's "New Window", R2) share one service, and
+   * React's `useId` hands two identical component trees the same `viewId` —
+   * so the key has to carry the window too, or window 2's pane drives window
+   * 1's native view.
+   */
+  it("scopes views by window, so the same viewId in two windows is two views", () => {
+    const addedB: FakeView[] = [];
+    const removedB: FakeView[] = [];
+    const windowA = makeWindow(1, added, removed);
+    const windowB = makeWindow(2, addedB, removedB);
+    let current: BaseWindow = windowA;
+    const twoWindows = createBrowserViewService({
+      window: () => current,
+      WebContentsView: FakeView as unknown as typeof WebContentsViewClass,
+      sessionFromPartition: fakeSessionFromPartition,
+      openExternal: vi.fn(),
+      broadcast: h.broadcast,
+      log: h.log,
+    });
+
+    twoWindows.attach({ viewId: "same", bounds: { x: 0, y: 0, width: 10, height: 10 } });
+    current = windowB;
+    twoWindows.attach({ viewId: "same", bounds: { x: 5, y: 5, width: 20, height: 20 } });
+
+    // One view *per window*, each added to its own window's content view.
+    expect(added).toHaveLength(1);
+    expect(addedB).toHaveLength(1);
+    expect(added[0]).not.toBe(addedB[0]);
+
+    // A setBounds from window B moves B's view and leaves A's alone.
+    twoWindows.setBounds({ viewId: "same", bounds: { x: 7, y: 7, width: 30, height: 30 } });
+    expect(addedB[0]!.bounds).toEqual({ x: 7, y: 7, width: 30, height: 30 });
+    expect(added[0]!.bounds).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+
+    twoWindows.dispose();
   });
 });
 

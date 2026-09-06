@@ -48,10 +48,18 @@ import { cn } from "@/lib/utils";
 import "./dockviewTheme.css";
 import "@/panes";
 import { buildDefaultLayout } from "./defaultLayout";
+import { suppressBrowserOverlay } from "./browserOverlay";
 import { getPaneRegistration, listPaneRegistrations } from "./registry";
 import type { WorkspacePaneParams } from "./types";
 
-const WIDTH_STORAGE_KEY = "capygen.workspace.width";
+/** Per project, not one global key: a width that suits a wide monorepo on the
+ *  big monitor is not the width the little utility repo wants. */
+function widthStorageKey(projectId: string): string {
+  return `capygen.workspace.width.${projectId}`;
+}
+/** What the single global key used to be; read once so an existing user's
+ *  width is not silently forgotten on upgrade. */
+const LEGACY_WIDTH_STORAGE_KEY = "capygen.workspace.width";
 /** 300, not a rounder 280: `AgentsPane` (SPEC R13, unmodified — see
  *  `panes/agents/AgentsWorkspacePane.tsx`) keeps its historical 288px fixed
  *  width, and this is the smallest host width that never clips it. */
@@ -65,23 +73,47 @@ const MAX_WIDTH = 1200;
 const DEFAULT_WIDTH = 560;
 /** One save per settle, not one per drag frame (R23-R26). */
 const SAVE_DEBOUNCE_MS = 400;
+/**
+ * [C] What the chat column keeps no matter how wide the workspace is asked to
+ * be. `MAX_WIDTH` alone is not a bound on anything: the aside is `shrink-0`,
+ * so a 1200px workspace on a later-shrunk 1280px window squeezes the
+ * transcript *and* the composer to zero and pushes the workspace's own "+"
+ * and close buttons off the right edge, where `.app-shell`'s `overflow-hidden`
+ * clips them — with the offending value persisted, there is then no way back.
+ */
+const MIN_CHAT_WIDTH = 360;
+
+/** The widest this host may be given the room the window actually has. */
+function maxWidthFor(availableWidth: number): number {
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) return MAX_WIDTH;
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, availableWidth - MIN_CHAT_WIDTH));
+}
+
+function clampWidth(width: number, availableWidth: number): number {
+  return Math.min(maxWidthFor(availableWidth), Math.max(MIN_WIDTH, width));
+}
 
 /** Per-viewer convenience only (SPEC's `localStorage` guidance) — never
  *  reachable during SSR/tests where `window` may throw on a locked-down
  *  storage backend. */
-function readStoredWidth(): number {
+function readStoredWidth(projectId: string): number {
   try {
-    const raw = window.localStorage.getItem(WIDTH_STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(widthStorageKey(projectId)) ??
+      window.localStorage.getItem(LEGACY_WIDTH_STORAGE_KEY);
     const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed) ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parsed)) : DEFAULT_WIDTH;
+    const wanted = Number.isFinite(parsed) ? parsed : DEFAULT_WIDTH;
+    // Clamped against the window here too: a value stored on a 1920px display
+    // must not open a 1280px one with no chat column at all.
+    return clampWidth(wanted, window.innerWidth);
   } catch {
     return DEFAULT_WIDTH;
   }
 }
 
-function writeStoredWidth(width: number): void {
+function writeStoredWidth(projectId: string, width: number): void {
   try {
-    window.localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(width)));
+    window.localStorage.setItem(widthStorageKey(projectId), String(Math.round(width)));
   } catch {
     // Per-viewer convenience only — a blocked store just means the next
     // session opens at the default width again.
@@ -97,7 +129,7 @@ export interface WorkspaceHostProps {
 export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostProps) {
   const apiRef = useRef<DockviewApi | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [width, setWidth] = useState(readStoredWidth);
+  const [width, setWidth] = useState(() => readStoredWidth(projectId));
   const [ready, setReady] = useState(false);
   const [openKinds, setOpenKinds] = useState<ReadonlySet<PaneKind>>(new Set());
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -118,23 +150,41 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
     setOpenKinds(new Set(api.panels.map((p) => p.id as PaneKind)));
   }, []);
 
-  const scheduleSave = useCallback(
+  const saveNow = useCallback(
     (api: DockviewApi) => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        void ipc()
-          .invoke("layout.set", { projectId, layoutJson: api.toJSON() })
-          .catch(() => undefined);
-      }, SAVE_DEBOUNCE_MS);
+      void ipc()
+        .invoke("layout.set", { projectId, layoutJson: api.toJSON() })
+        .catch(() => undefined);
     },
     [projectId],
   );
 
+  const scheduleSave = useCallback(
+    (api: DockviewApi) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        saveTimer.current = null;
+        saveNow(api);
+      }, SAVE_DEBOUNCE_MS);
+    },
+    [saveNow],
+  );
+
+  // [C] Flush, do not drop. "Rearrange the panes, then close the workspace"
+  // is one gesture, and it takes well under the 400 ms debounce — clearing
+  // the timer without sending would throw the rearrangement away and restore
+  // the *previous* layout next time, which is precisely what R17 promises not
+  // to do. The same cleanup runs on a session/project switch, where the
+  // pending write is just as real.
   useEffect(
     () => () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (!saveTimer.current) return;
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const api = apiRef.current;
+      if (api) saveNow(api);
     },
-    [],
+    [saveNow],
   );
 
   const handleReady = useCallback(
@@ -213,6 +263,31 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
     [openPane],
   );
 
+  // [C] Re-clamp whenever the window changes size. Without this, a width
+  // chosen on a maximised 1920px window survives a restore to 1280px and
+  // leaves the chat column at 0px with the workspace's own "+" and close
+  // buttons clipped past the right edge — unrecoverable, and persisted.
+  useEffect(() => {
+    const onResize = (): void => {
+      setWidth((current) => {
+        const next = clampWidth(current, window.innerWidth);
+        if (next !== current) writeStoredWidth(projectId, next);
+        return next;
+      });
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [projectId]);
+
+  // The "+" menu is a DOM overlay, and the Browser pane's native view is
+  // composited above the DOM — so the menu has to ask the view to step aside
+  // for as long as it is open (see `browserOverlay.ts`).
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    return suppressBrowserOverlay();
+  }, [addMenuOpen]);
+
   function startResize(e: ReactPointerEvent<HTMLDivElement>): void {
     e.preventDefault();
     resizing.current = true;
@@ -222,15 +297,14 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
       if (!resizing.current) return;
       // The handle sits on the host's left edge — dragging left (negative
       // delta) grows the host, matching a right-docked panel's resize feel.
-      const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + (startX - ev.clientX)));
-      setWidth(next);
+      setWidth(clampWidth(startWidth + (startX - ev.clientX), window.innerWidth));
     }
     function onUp(): void {
       resizing.current = false;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setWidth((w) => {
-        writeStoredWidth(w);
+        writeStoredWidth(projectId, w);
         return w;
       });
     }
@@ -371,10 +445,20 @@ export function WorkspaceHost({ projectId, sessionId, onClose }: WorkspaceHostPr
   );
 }
 
-/** A saved layout may name a pane kind an older or newer build removed, or
- *  simply fail `JSON`-shape validation inside dockview's own deserializer —
- *  either reads as "start fresh", never as a thrown error surfacing to the
- *  session. */
+/**
+ * A saved layout may name a pane kind an older or newer build removed, or
+ * simply fail `JSON`-shape validation inside dockview's own deserializer —
+ * either reads as "start fresh", never as a thrown error surfacing to the
+ * session.
+ *
+ * [C] "Restored" is whether `fromJSON` *ran*, not whether it produced panels.
+ * Closing every pane through the toolbar toggles is a legal thing to do, and
+ * dockview's `onDidRemovePanel` also fires `onDidLayoutChange`, so that state
+ * is saved like any other: a zero-panel `layoutJson` is a deliberate empty
+ * workspace, not a failed restore. Deriving the flag from `panels.length` put
+ * Files+Agents back on every single relaunch, undoing the user's choice for
+ * good (R17: "layout persists per project across restarts").
+ */
 function applySavedOrDefaultLayout(
   api: DockviewApi,
   layoutJson: unknown,
@@ -384,7 +468,7 @@ function applySavedOrDefaultLayout(
     let restored = false;
     try {
       api.fromJSON(rebindSerializedParams(layoutJson, params) as SerializedDockview);
-      restored = api.panels.length > 0;
+      restored = true;
     } catch {
       api.clear();
     }

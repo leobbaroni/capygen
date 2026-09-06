@@ -54,6 +54,16 @@ export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openLogsId, setOpenLogsId] = useState<string | null>(null);
   const [logsById, setLogsById] = useState<Record<string, string[]>>({});
+  /** [C] Which servers have had their ring-buffer tail fetched, tracked apart
+   *  from "has any lines". The live `servers.log` subscription creates a
+   *  `logsById` key the moment one line streams, so keying the backlog fetch
+   *  off that map meant a server already running when this pane mounted (an
+   *  adopted run after a relaunch, a start from another window) showed only
+   *  the lines since mount and never the earlier ones — including the
+   *  `Local: http://localhost:...` line G6 is about. */
+  const backlogFetched = useRef<Set<string>>(new Set());
+  /** The open log drawer's scroll box, so new lines are actually seen. */
+  const logBoxRef = useRef<HTMLDivElement | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   /** [C] Servers whose Start *this pane* asked for and that have not yet
    *  produced a URL. Only these auto-open the Browser pane (SPEC G6): a
@@ -68,6 +78,16 @@ export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
     (url: string) => openUrlInBrowserPane(containerApi, params, url),
     [containerApi, params],
   );
+
+  // Pin the drawer to its newest line, the way the reference log panel does
+  // (`ExecutionLogsPanel.tsx`: `el.scrollTop = el.scrollHeight` per event).
+  // The box is nine lines tall; a real Vite/Next startup prints more than
+  // that before it prints its URL.
+  useEffect(() => {
+    const el = logBoxRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [openLogsId, logsById]);
 
   async function detect(): Promise<void> {
     setLoading(true);
@@ -114,6 +134,11 @@ export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
   async function start(row: DevServerWithRun): Promise<void> {
     setBusyId(row.server.id);
     setRowErrors((prev) => ({ ...prev, [row.server.id]: "" }));
+    // A new run gets a new ring buffer; the previous run's lines are history
+    // this pane no longer has a way to fetch, so they go rather than sit
+    // above the new ones pretending to belong to them.
+    setLogsById((prev) => ({ ...prev, [row.server.id]: [] }));
+    backlogFetched.current.add(row.server.id);
     awaitingOpen.current.add(row.server.id);
     try {
       const run = await ipc().invoke("servers.start", { serverId: row.server.id });
@@ -172,11 +197,16 @@ export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
       return;
     }
     setOpenLogsId(id);
-    if (!logsById[id]) {
+    if (!backlogFetched.current.has(id)) {
+      backlogFetched.current.add(id);
       try {
         const { lines } = await ipc().invoke("servers.logs", { serverId: id, tail: LOG_TAIL });
-        setLogsById((prev) => ({ ...prev, [id]: lines }));
+        // The tail is the authoritative history; anything the live
+        // subscription added since mount is already in it (same ring buffer),
+        // so it replaces rather than appends.
+        setLogsById((prev) => ({ ...prev, [id]: lines.slice(-LOG_CAP) }));
       } catch (err) {
+        backlogFetched.current.delete(id);
         setRowErrors((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : String(err) }));
       }
     }
@@ -356,6 +386,7 @@ export function ServersPane({ params, containerApi }: WorkspacePaneProps) {
                   ) : null}
                   {openLogsId === row.server.id ? (
                     <div
+                      ref={logBoxRef}
                       data-testid="server-logs"
                       className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-border-weak bg-code-bg p-1.5 font-mono text-xs text-foreground"
                     >

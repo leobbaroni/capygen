@@ -44,9 +44,18 @@ const SUBAGENT_STATUS_VARIANT = {
 export interface AgentsPaneProps {
   sessionId: string;
   onClose: () => void;
+  /** [C] Overrides the fixed-width aside shell for the dockview panel that
+   *  wraps this component (`panes/agents/AgentsWorkspacePane.tsx`). As a
+   *  right-docked aside it is a 288px column with a left rule; inside a
+   *  dockview panel that same markup is a 288px card pinned to the top-left
+   *  of a panel of any size, with a border floating in the middle of the
+   *  workspace and bare group background beside it — and Agents is the
+   *  default layout's *active tab*, so that was the workspace's first
+   *  impression. */
+  className?: string;
 }
 
-export function AgentsPane({ sessionId, onClose }: AgentsPaneProps) {
+export function AgentsPane({ sessionId, onClose, className }: AgentsPaneProps) {
   const agents = useAppStore((s) => s.agents);
   const blocks = useAppStore((s) => s.blocks);
   const harnesses = useAppStore((s) => s.harnesses);
@@ -75,7 +84,7 @@ export function AgentsPane({ sessionId, onClose }: AgentsPaneProps) {
   return (
     <aside
       data-testid="agents-pane"
-      className="flex w-72 shrink-0 flex-col border-l border-border-weak bg-card"
+      className={cn("flex w-72 shrink-0 flex-col border-l border-border-weak bg-card", className)}
     >
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border-weak px-3">
         <UsersIcon className="size-3.5 text-muted-foreground" />

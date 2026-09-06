@@ -166,6 +166,47 @@ describe("stop", () => {
       status: "stopped",
     });
   });
+
+  /**
+   * A tree kill can *throw* (no `taskkill.exe`, a policy that blocks it), not
+   * merely fail quietly. `stop()` still deletes the run and broadcasts
+   * `status: "stopped"` as fact, so the direct `child.kill()` has to run
+   * anyway — `TerminalService.kill()` has always done it unconditionally, and
+   * this is that same rule.
+   */
+  it("still kills the child directly when the tree kill throws", async () => {
+    let directKills = 0;
+    const fakeChild = {
+      pid: 31337,
+      stdout: { on: () => undefined, setEncoding: () => undefined },
+      stderr: { on: () => undefined, setEncoding: () => undefined },
+      on: () => undefined,
+      kill: () => {
+        directKills += 1;
+        return true;
+      },
+    };
+    const service2 = new DevServerService({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      probe: async () => false,
+      probeWindowMs: 10,
+      probeIntervalMs: 5,
+      spawnProcess: () => fakeChild as never,
+      killTree: () => {
+        throw new Error("taskkill.exe is not available");
+      },
+    });
+    const server = saveServer({ name: "kill throws", port: 65_123 });
+    await service2.start({ serverId: server.id });
+
+    const stopped = await service2.stop({ serverId: server.id });
+    expect(stopped.status).toBe("stopped");
+    // The tree kill threw and was swallowed; the direct kill must still have
+    // been attempted, or "stopped" is a claim about a process that is alive.
+    expect(directKills).toBe(1);
+  });
 });
 
 describe("port already in use", () => {

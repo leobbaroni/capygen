@@ -362,6 +362,18 @@ export function parseComposeServices(text: string): { name: string; port?: numbe
     if (!current) continue;
 
     if (indent > serviceIndent && /^ports\s*:/.test(trimmed)) {
+      // `ports: ["3000:3000"]` — a flow sequence on the same line is as valid
+      // as the block form below, and used to be dropped entirely (no port
+      // meant `flush()` discarded the whole service).
+      const inline = /^ports\s*:\s*\[(.*)\]\s*$/.exec(trimmed);
+      if (inline) {
+        for (const item of inline[1]!.split(",")) {
+          const port = publishedHostPort(item.trim());
+          if (port !== undefined && current.port === undefined) current.port = port;
+        }
+        inPorts = false;
+        continue;
+      }
       inPorts = true;
       portsIndent = indent;
       continue;

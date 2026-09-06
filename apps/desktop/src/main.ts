@@ -15,6 +15,7 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   BrowserWindow,
   Menu,
@@ -28,7 +29,9 @@ import {
   protocol,
   safeStorage,
   screen,
+  session,
   shell,
+  webContents,
 } from "electron";
 import { openStore, type CapygenStore } from "@capygen/db";
 import {
@@ -123,6 +126,11 @@ protocol.registerSchemesAsPrivileged([WIDGET_SCHEME_PRIVILEGES]);
 // ---------------------------------------------------------------------------
 
 const shellWindows = new Set<BrowserWindow>();
+
+/** The `webContents.id` of the renderer whose IPC call is currently running.
+ *  Read only by the Browser pane's window resolution — see the
+ *  `createBrowserViewService` call and the `ipcMain.handle` loop. */
+const ipcSender = new AsyncLocalStorage<number>();
 
 function isDark(): boolean {
   // Never let a theme read decide the app's fate: this runs from timers that
@@ -334,8 +342,34 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   // the one workspace service that needs Electron, and `handlers.ts` keeps
   // its no-Electron-import rule by taking it as an injected dependency.
   const browserViews = createBrowserViewService({
-    window: () => [...shellWindows].find((win) => !win.isDestroyed()) ?? null,
+    // [C] The *calling* window, not "the first one still alive". Both windows
+    // (the tray's "New Window", R2) share this one service, and React's
+    // `useId` gives two identical component trees the same `viewId`, so a
+    // window-agnostic lookup put window 2's Browser pane inside window 1.
+    // `ipcSender` carries the in-flight event's sender id (see the
+    // `ipcMain.handle` loop below); the fallback only matters for the calls
+    // that do not originate from a renderer at all.
+    window: () => {
+      const senderId = ipcSender.getStore();
+      const sender = senderId === undefined ? null : webContents.fromId(senderId);
+      const owner = sender ? BrowserWindow.fromWebContents(sender) : null;
+      if (owner && !owner.isDestroyed()) return owner;
+      return [...shellWindows].find((win) => !win.isDestroyed()) ?? null;
+    },
     WebContentsView,
+    // Adapted, not passed through: `PartitionSessionLike` is the two calls the
+    // service makes, without Electron's 40-member permission union.
+    sessionFromPartition: (partition) => {
+      const partitionSession = session.fromPartition(partition);
+      return {
+        setPermissionRequestHandler: (handler) =>
+          partitionSession.setPermissionRequestHandler((contents, permission, callback) =>
+            handler(contents, permission, callback),
+          ),
+        setPermissionCheckHandler: (handler) =>
+          partitionSession.setPermissionCheckHandler(() => handler()),
+      };
+    },
     openExternal: (url) => void shell.openExternal(url),
     broadcast,
     log,
@@ -405,7 +439,13 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
         }
         const args = parseInvokeArgs(channel, raw);
         const handler = context.handlers[channel] as (a: unknown) => unknown;
-        const result = await handler(args);
+        // [C] The handler map is deliberately Electron-free and takes only
+        // `args` — but the Browser pane's five channels have to know *which
+        // window* asked, or a second window drives the first one's native
+        // view. `AsyncLocalStorage` carries the sender for the duration of
+        // the call (awaits included) without putting Electron's event into
+        // the contract; `BrowserViewDeps.window` above is its only reader.
+        const result = await ipcSender.run(event.sender.id, () => handler(args));
         return parseInvokeResult(channel as InvokeChannel, result);
       } catch (err) {
         // Fail loudly with the real text (SPEC §Edge Cases: never swallow).

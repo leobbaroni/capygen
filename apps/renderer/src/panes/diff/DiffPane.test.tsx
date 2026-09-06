@@ -107,7 +107,16 @@ describe("DiffPane", () => {
     fireEvent.change(screen.getByTestId("diff-commit-message"), { target: { value: "fix: thing" } });
     fireEvent.click(screen.getByTestId("diff-commit-submit"));
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("git.commit", { projectId: "proj-1", message: "fix: thing" }));
+    // Named paths, not `git commit --all`: the pane commits exactly the rows
+    // it shows as ticked, which is also what makes an untracked file
+    // committable (`GitService.commit` stages them first).
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("git.commit", {
+        projectId: "proj-1",
+        message: "fix: thing",
+        paths: ["src/App.tsx"],
+      }),
+    );
     await waitFor(() => expect(screen.getByTestId("diff-status-list")).toHaveTextContent("No changes."));
   });
 

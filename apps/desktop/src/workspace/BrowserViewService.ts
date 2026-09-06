@@ -25,20 +25,58 @@
  *      make;
  *   3. **no popups.** `setWindowOpenHandler` denies every new window and opens
  *      the URL externally instead, so a preview cannot spawn a chromeless
- *      Electron window with no address bar.
+ *      Electron window with no address bar;
+ *   4. **no permissions.** Electron's documented default, when a session has
+ *      no permission handler, is to *approve every request*. R16 calls this
+ *      pane "an embedded webview with URL bar", not a localhost-only preview,
+ *      so a page here could ask for camera, microphone, geolocation or
+ *      notifications and be granted them silently — the opposite of what an
+ *      address bar leads a user to expect. Both handlers deny outright.
+ *
+ * Views are keyed by **window and** `viewId`, not `viewId` alone: two shell
+ * windows (the tray's "New Window", R2) render the same component tree, and
+ * React's `useId` is deterministic by call order, so both would otherwise
+ * claim the same key and the second window's pane would drive the first
+ * window's view.
  */
 import type { BaseWindow, WebContentsView as WebContentsViewClass } from "electron";
 import type { Bounds } from "@capygen/shared";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
 
+/**
+ * The two permission entry points this service uses on a partitioned session,
+ * declared structurally rather than as `Pick<Session, …>`: Electron's own
+ * handler signatures carry a 40-member permission union and a `details`
+ * argument this file has no use for, and `main.ts` adapts the real `Session`
+ * to this shape in one place (so the adapter, not every caller, is where the
+ * Electron types live).
+ */
+export interface PartitionSessionLike {
+  setPermissionRequestHandler(
+    handler: (
+      webContents: unknown,
+      permission: string,
+      callback: (granted: boolean) => void,
+    ) => void,
+  ): void;
+  setPermissionCheckHandler(handler: () => boolean): void;
+}
+
 /** The Electron surface this service uses, injected so the file stays
  *  unit-testable and so `main.ts` remains the only place that imports the
  *  real classes. */
 export interface BrowserViewDeps {
-  /** The window the views are attached to; `null` when there is no window
-   *  open yet (a pane cannot be visible then either). */
+  /**
+   * The window the *calling renderer* belongs to; `null` when there is no
+   * window open yet (a pane cannot be visible then either). `main.ts`
+   * resolves it from the in-flight IPC event's sender — never from
+   * "whichever window happens to be first".
+   */
   window: () => BaseWindow | null;
   WebContentsView: typeof WebContentsViewClass;
+  /** The partitioned session a new view will use, so its permission handlers
+   *  can be installed before anything loads. */
+  sessionFromPartition: (partition: string) => PartitionSessionLike;
   openExternal: (url: string) => void;
   broadcast: Broadcast;
   log: EngineLogger;
@@ -59,10 +97,37 @@ export interface BrowserViewHandlers {
 const CONTROL_WORDS = new Set(["back", "forward", "reload"]);
 
 export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHandlers {
-  const views = new Map<string, InstanceType<typeof WebContentsViewClass>>();
+  interface Entry {
+    view: InstanceType<typeof WebContentsViewClass>;
+    window: BaseWindow;
+    viewId: string;
+  }
+  /** Keyed `<window id> <viewId>`; see the module comment on why the
+   *  `viewId` alone is not unique across windows. */
+  const views = new Map<string, Entry>();
+
+  function keyFor(window: BaseWindow, viewId: string): string {
+    // A fake window in tests has no `id`; 0 is as good a namespace as any
+    // when there is only ever one of them.
+    return `${(window as { id?: number }).id ?? 0} ${viewId}`;
+  }
+
+  /** The entry this call means: the current window's, falling back to a
+   *  unique match by `viewId` when the window has already gone (a detach
+   *  racing a window close). */
+  function entryFor(viewId: string): Entry | undefined {
+    const window = deps.window();
+    if (window) {
+      const own = views.get(keyFor(window, viewId));
+      if (own) return own;
+    }
+    const matches = [...views.values()].filter((entry) => entry.viewId === viewId);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
 
   function emitState(viewId: string): void {
-    const view = views.get(viewId);
+    const entry = entryFor(viewId);
+    const view = entry?.view;
     if (!view) return;
     const contents = view.webContents;
     if (contents.isDestroyed()) return;
@@ -77,6 +142,18 @@ export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHand
   }
 
   function create(viewId: string): InstanceType<typeof WebContentsViewClass> {
+    const partition = `persist:capygen-browser-${viewId}`;
+    // Before the view exists, so nothing can load and ask first. Electron
+    // approves *every* request on a session with no handler registered, so
+    // this is not hardening — it is the difference between "a page here can
+    // silently turn on the camera" and "it cannot".
+    const partitionSession = deps.sessionFromPartition(partition);
+    partitionSession.setPermissionRequestHandler((_contents, permission, callback) => {
+      deps.log.warn(`[browser] denied permission ${permission} for ${viewId}`);
+      callback(false);
+    });
+    partitionSession.setPermissionCheckHandler(() => false);
+
     const view = new deps.WebContentsView({
       webPreferences: {
         // No preload, no Node, no shared session: this is somebody else's page.
@@ -84,7 +161,7 @@ export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHand
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
-        partition: `persist:capygen-browser-${viewId}`,
+        partition,
       },
     });
     const contents = view.webContents;
@@ -128,40 +205,41 @@ export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHand
     attach(args) {
       const window = deps.window();
       if (!window) return { ok: false };
-      let view = views.get(args.viewId);
-      if (!view) {
-        view = create(args.viewId);
-        views.set(args.viewId, view);
+      const key = keyFor(window, args.viewId);
+      let entry = views.get(key);
+      if (!entry) {
+        const view = create(args.viewId);
+        entry = { view, window, viewId: args.viewId };
+        views.set(key, entry);
         window.contentView.addChildView(view);
         deps.log.info(`[browser] attached ${args.viewId}`);
       }
-      view.setBounds(toRect(args.bounds));
+      entry.view.setBounds(toRect(args.bounds));
       if (args.url !== undefined) {
         if (!isWebUrl(args.url)) throw new Error(`browser.attach: refused ${args.url}`);
-        void view.webContents.loadURL(args.url);
+        void entry.view.webContents.loadURL(args.url);
       }
       return { ok: true };
     },
 
     detach(args) {
-      const view = views.get(args.viewId);
-      if (!view) return { ok: true };
-      views.delete(args.viewId);
-      const window = deps.window();
+      const entry = entryFor(args.viewId);
+      if (!entry) return { ok: true };
+      views.delete(keyFor(entry.window, entry.viewId));
       try {
-        window?.contentView.removeChildView(view);
+        if (!entry.window.isDestroyed()) entry.window.contentView.removeChildView(entry.view);
       } catch (err) {
         deps.log.warn(`[browser] detach ${args.viewId}: ${(err as Error).message}`);
       }
       // Without this the renderer process behind the view stays alive for the
       // life of the app — one leaked process per pane the user ever opened.
-      if (!view.webContents.isDestroyed()) view.webContents.close();
+      if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
       deps.log.info(`[browser] detached ${args.viewId}`);
       return { ok: true };
     },
 
     navigate(args) {
-      const view = views.get(args.viewId);
+      const view = entryFor(args.viewId)?.view;
       if (!view) return { ok: false };
       const contents = view.webContents;
       const word = args.url.toLowerCase();
@@ -183,14 +261,14 @@ export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHand
     },
 
     setBounds(args) {
-      const view = views.get(args.viewId);
+      const view = entryFor(args.viewId)?.view;
       if (!view) return { ok: false };
       view.setBounds(toRect(args.bounds));
       return { ok: true };
     },
 
     devtools(args) {
-      const view = views.get(args.viewId);
+      const view = entryFor(args.viewId)?.view;
       if (!view) return { ok: false };
       const contents = view.webContents;
       if (contents.isDevToolsOpened()) contents.closeDevTools();
@@ -199,7 +277,15 @@ export function createBrowserViewService(deps: BrowserViewDeps): BrowserViewHand
     },
 
     dispose() {
-      for (const viewId of [...views.keys()]) handlers.detach({ viewId });
+      for (const entry of [...views.values()]) {
+        views.delete(keyFor(entry.window, entry.viewId));
+        try {
+          if (!entry.window.isDestroyed()) entry.window.contentView.removeChildView(entry.view);
+        } catch (err) {
+          deps.log.warn(`[browser] dispose ${entry.viewId}: ${(err as Error).message}`);
+        }
+        if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
+      }
     },
   };
   return handlers;

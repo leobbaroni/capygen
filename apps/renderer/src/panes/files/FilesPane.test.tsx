@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DockviewApi } from "dockview-react";
+import type { DockviewApi, DockviewPanelApi } from "dockview-react";
 import { registerPane } from "@/workspace/registry";
 import type { WorkspacePaneParams } from "@/workspace/types";
 import { FilesPane } from "./FilesPane";
@@ -18,6 +18,32 @@ vi.mock("@/lib/ipc", () => ({
 }));
 
 const params: WorkspacePaneParams = { projectId: "proj-1", sessionId: "sess-1" };
+
+/** A stand-in for the slice of `DockviewPanelApi` a pane reads: `isVisible`,
+ *  plus the event dockview fires when a stacked tab's visibility flips.
+ *  Dockview never unmounts a hidden tab (`WorkspaceHost` sets
+ *  `defaultRenderer="always"`), so visibility — not mounting — is what a pane
+ *  holding a live resource has to react to. */
+function fakePanelApi(initialVisible = true): DockviewPanelApi & {
+  setVisible: (v: boolean) => void;
+} {
+  const handlers = new Set<(e: { isVisible: boolean }) => void>();
+  let isVisible = initialVisible;
+  return {
+    get isVisible() {
+      return isVisible;
+    },
+    onDidVisibilityChange: (listener: (e: { isVisible: boolean }) => void) => {
+      handlers.add(listener);
+      return { dispose: () => handlers.delete(listener) };
+    },
+    onDidDimensionsChange: () => ({ dispose: () => undefined }),
+    setVisible(next: boolean) {
+      isVisible = next;
+      for (const h of handlers) h({ isVisible: next });
+    },
+  } as unknown as DockviewPanelApi & { setVisible: (v: boolean) => void };
+}
 
 function fakeContainerApi(): DockviewApi {
   return {
@@ -65,14 +91,14 @@ afterEach(() => {
 
 describe("FilesPane", () => {
   it("lists the project root via fs.list on mount", async () => {
-    render(<FilesPane params={params} api={{} as never} containerApi={fakeContainerApi()} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={fakeContainerApi()} />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("fs.list", { projectId: "proj-1", dir: "" }));
     expect(await screen.findByText("src")).toBeInTheDocument();
     expect(screen.getByText("README.md")).toBeInTheDocument();
   });
 
   it("lazily lists a directory's children on expand", async () => {
-    render(<FilesPane params={params} api={{} as never} containerApi={fakeContainerApi()} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={fakeContainerApi()} />);
     await screen.findByText("src");
     expect(invoke).not.toHaveBeenCalledWith("fs.list", { projectId: "proj-1", dir: "src" });
 
@@ -86,7 +112,7 @@ describe("FilesPane", () => {
 
   it("double-clicking a file opens it in the Editor pane exactly once", async () => {
     const containerApi = fakeContainerApi();
-    render(<FilesPane params={params} api={{} as never} containerApi={containerApi} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={containerApi} />);
     const readme = await screen.findByText("README.md");
 
     // A real double-click fires two ordinary `click` events before the
@@ -109,7 +135,7 @@ describe("FilesPane", () => {
 
   it("a single click on a file does not open it", async () => {
     const containerApi = fakeContainerApi();
-    render(<FilesPane params={params} api={{} as never} containerApi={containerApi} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={containerApi} />);
     const readme = await screen.findByText("README.md");
 
     fireEvent.click(readme);
@@ -119,7 +145,7 @@ describe("FilesPane", () => {
 
   it("searches via fs.search and renders matches, debounced", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<FilesPane params={params} api={{} as never} containerApi={fakeContainerApi()} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={fakeContainerApi()} />);
     await vi.waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("fs.list", { projectId: "proj-1", dir: "" }),
     );
@@ -135,7 +161,7 @@ describe("FilesPane", () => {
   });
 
   it("watches the project and refreshes the tree on fs.changed", async () => {
-    render(<FilesPane params={params} api={{} as never} containerApi={fakeContainerApi()} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={fakeContainerApi()} />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("fs.watch", { projectId: "proj-1" }));
     const callsBefore = invoke.mock.calls.filter(
       (c) => c[0] === "fs.list" && (c[1] as { dir: string }).dir === "",
@@ -158,7 +184,7 @@ describe("FilesPane", () => {
       if (channel === "fs.list") return Promise.reject(new Error("disk unavailable"));
       return Promise.resolve({ ok: true });
     });
-    render(<FilesPane params={params} api={{} as never} containerApi={fakeContainerApi()} />);
+    render(<FilesPane params={params} api={fakePanelApi()} containerApi={fakeContainerApi()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("disk unavailable");
   });
 });

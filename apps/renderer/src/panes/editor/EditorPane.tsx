@@ -36,6 +36,9 @@ interface TabInfo {
   binary: boolean;
   readOnly: boolean;
   size: number;
+  /** Something outside this pane (an agent, another editor) rewrote the file
+   *  since it was opened or last saved — see the `fs.changed` effect. */
+  externallyChanged: boolean;
 }
 
 function basename(path: string): string {
@@ -59,6 +62,8 @@ export function EditorPane({ params }: WorkspacePaneProps) {
   const [cursor, setCursor] = useState<{ line: number; col: number } | null>(null);
   const [savingPaths, setSavingPaths] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  /** The tab whose close is waiting on "you have unsaved changes". */
+  const [closeConfirm, setCloseConfirm] = useState<string | null>(null);
 
   activePathRef.current = activePath;
   const tabsRef = useRef<TabInfo[]>(tabs);
@@ -69,6 +74,10 @@ export function EditorPane({ params }: WorkspacePaneProps) {
    *  three) would otherwise both pass the "already open?" check and each
    *  add their own tab. */
   const pendingOpensRef = useRef<Set<string>>(new Set());
+  /** Paths whose "changed on disk" warning has already been shown once, so
+   *  the *second* Save is the deliberate overwrite. The banner stays up
+   *  either way until the tab is reloaded or actually written. */
+  const overwriteArmed = useRef<Set<string>>(new Set());
 
   const recomputeDirty = useCallback((path: string) => {
     const state = statesRef.current.get(path);
@@ -82,12 +91,32 @@ export function EditorPane({ params }: WorkspacePaneProps) {
     async (path: string) => {
       const state = statesRef.current.get(path);
       if (!state) return;
+      // [C] Refuse the first save over a file something else rewrote. The
+      // buffer here still holds the bytes read at open time, so writing it
+      // would silently drop the agent's edit — the common case in this app,
+      // where an agent is editing the same tree. One press explains it and
+      // disarms the guard; a second press is then a deliberate overwrite, and
+      // "Reload" beside it takes the file instead.
+      if (
+        tabsRef.current.find((t) => t.path === path)?.externallyChanged &&
+        !overwriteArmed.current.has(path)
+      ) {
+        overwriteArmed.current.add(path);
+        setError(
+          `${path} changed on disk since it was opened. Press Save again to overwrite it, or Reload to take the version on disk.`,
+        );
+        return;
+      }
+      overwriteArmed.current.delete(path);
       const content = state.doc.toString();
       setSavingPaths((prev) => new Set(prev).add(path));
       setError(null);
       try {
         await ipc().invoke("fs.write", { projectId, path, content });
         savedContentRef.current.set(path, content);
+        setTabs((prev) =>
+          prev.map((t) => (t.path === path ? { ...t, externallyChanged: false } : t)),
+        );
         recomputeDirty(path);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -146,7 +175,17 @@ export function EditorPane({ params }: WorkspacePaneProps) {
           statesRef.current.set(path, state);
           savedContentRef.current.set(path, result.content);
         }
-        setTabs((prev) => [...prev, { path, dirty: false, binary: result.binary, readOnly, size: result.size }]);
+        setTabs((prev) => [
+          ...prev,
+          {
+            path,
+            dirty: false,
+            binary: result.binary,
+            readOnly,
+            size: result.size,
+            externallyChanged: false,
+          },
+        ]);
         activate(path);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -171,7 +210,85 @@ export function EditorPane({ params }: WorkspacePaneProps) {
     }
   }
 
+  /**
+   * Replace one tab's buffer with what is on disk now. Used both by the
+   * `fs.changed` watcher (silently, for a tab with no unsaved edits) and by
+   * the "Reload" button on the changed-on-disk banner.
+   */
+  const reloadFromDisk = useCallback(
+    async (path: string, options: { onlyIfUnchanged?: boolean } = {}) => {
+      const view = viewRef.current;
+      const state = statesRef.current.get(path);
+      if (!state) return;
+      try {
+        const result = await ipc().invoke("fs.read", { projectId, path });
+        if (result.binary) return;
+        if (options.onlyIfUnchanged && result.content === savedContentRef.current.get(path)) {
+          // Our own write coming back through the watcher: nothing to do, and
+          // replacing the state here would throw away the cursor and undo
+          // history for no reason.
+          return;
+        }
+        const next = state.update({
+          changes: { from: 0, to: state.doc.length, insert: result.content },
+        }).state;
+        statesRef.current.set(path, next);
+        savedContentRef.current.set(path, result.content);
+        overwriteArmed.current.delete(path);
+        if (path === activePathRef.current && view) view.setState(next);
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.path === path ? { ...t, dirty: false, externallyChanged: false } : t,
+          ),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [projectId],
+  );
+
+  // [C] An agent rewriting a file the user has open is the normal case in this
+  // app, not an edge case. Without this the tab kept the bytes read at open
+  // time, showed no sign of it, and the next Ctrl+S wrote the stale buffer
+  // over the agent's work. `FilesPane` and `DiffPane` both already subscribe
+  // to `fs.changed`; the Editor — the one pane that can *destroy* the change
+  // it missed — did not.
+  useEffect(() => {
+    return ipc().on("fs.changed", (event) => {
+      if (event.projectId !== projectId) return;
+      const touched = new Set(
+        event.changes.filter((c) => c.kind === "change" || c.kind === "add").map((c) => c.path),
+      );
+      if (touched.size === 0) return;
+      const affected = tabsRef.current.filter((t) => touched.has(t.path) && !t.binary);
+      for (const tab of affected) {
+        // Unsaved edits are never thrown away silently: that tab is flagged
+        // and the banner offers Reload. A clean tab just follows the file.
+        if (tab.dirty) {
+          setTabs((prev) =>
+            prev.map((t) => (t.path === tab.path ? { ...t, externallyChanged: true } : t)),
+          );
+        } else {
+          void reloadFromDisk(tab.path, { onlyIfUnchanged: true });
+        }
+      }
+    });
+  }, [projectId, reloadFromDisk]);
+
+  /** The tab's own X. A tab with unsaved edits asks first — `closeTab` below
+   *  is the unconditional one, and it is only reached from a confirmed
+   *  answer or from a clean tab. */
+  function requestCloseTab(path: string): void {
+    if (tabsRef.current.find((t) => t.path === path)?.dirty) {
+      setCloseConfirm(path);
+      return;
+    }
+    closeTab(path);
+  }
+
   function closeTab(path: string): void {
+    if (closeConfirm === path) setCloseConfirm(null);
     statesRef.current.delete(path);
     savedContentRef.current.delete(path);
     setTabs((prev) => {
@@ -220,6 +337,37 @@ export function EditorPane({ params }: WorkspacePaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * [C] Closing the *pane* (its dockview tab's X, or clicking the Editor
+   * toolbar toggle while it is active) unmounts this component outright, and
+   * dockview 8 exposes no cancellable "will close" hook to put a dialog in
+   * front of — verified against `dockview-core@8.2.0`'s `DockviewPanelApi`,
+   * which has no `onWillClose`. So the last thing this pane does is **write**
+   * the unsaved buffers rather than drop them: a surprise save is recoverable
+   * (undo, git), a silent loss is not.
+   *
+   * The one exception is a tab flagged `externallyChanged` — writing that one
+   * would clobber the newer bytes something else put on disk, which is the
+   * failure this whole pass is about.
+   */
+  useEffect(() => {
+    return () => {
+      for (const tab of tabsRef.current) {
+        if (!tab.dirty || tab.externallyChanged) continue;
+        const content = statesRef.current.get(tab.path)?.doc.toString();
+        if (content === undefined) continue;
+        // A teardown must not throw, whatever state the bridge is in.
+        try {
+          void Promise.resolve(
+            ipc().invoke("fs.write", { projectId, path: tab.path, content }),
+          ).catch(() => undefined);
+        } catch {
+          /* the pane is going away; there is nowhere left to report this */
+        }
+      }
+    };
+  }, [projectId]);
+
   const activeTab = tabs.find((t) => t.path === activePath) ?? null;
   const ext = activeTab ? activeTab.path.split(".").pop() ?? "" : "";
 
@@ -262,7 +410,7 @@ export function EditorPane({ params }: WorkspacePaneProps) {
                 data-testid="editor-tab-close"
                 onClick={(e) => {
                   e.stopPropagation();
-                  closeTab(tab.path);
+                  requestCloseTab(tab.path);
                 }}
                 className="shrink-0 rounded p-0.5 hover:bg-accent"
               >
@@ -270,6 +418,71 @@ export function EditorPane({ params }: WorkspacePaneProps) {
               </button>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {closeConfirm ? (
+        <div
+          role="alertdialog"
+          aria-label="Unsaved changes"
+          data-testid="editor-close-confirm"
+          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-weak bg-warning/10 px-2 py-1.5 text-xs text-foreground"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {basename(closeConfirm)} has unsaved changes.
+          </span>
+          <button
+            type="button"
+            data-testid="editor-close-confirm-save"
+            className="shrink-0 rounded-md border border-border px-2 py-0.5 hover:bg-accent"
+            onClick={() => {
+              const path = closeConfirm;
+              void saveFile(path).then(() => {
+                // Only close if the save actually landed — a refused
+                // overwrite (changed on disk) leaves the tab open with its
+                // explanation rather than closing over the top of it.
+                if (!tabsRef.current.find((t) => t.path === path)?.dirty) closeTab(path);
+              });
+            }}
+          >
+            Save and close
+          </button>
+          <button
+            type="button"
+            data-testid="editor-close-confirm-discard"
+            className="shrink-0 rounded-md border border-destructive/40 px-2 py-0.5 text-destructive hover:bg-destructive/10"
+            onClick={() => closeTab(closeConfirm)}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            data-testid="editor-close-confirm-cancel"
+            className="shrink-0 rounded-md px-2 py-0.5 text-muted-foreground hover:bg-accent"
+            onClick={() => setCloseConfirm(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
+
+      {activeTab?.externallyChanged ? (
+        <div
+          role="status"
+          data-testid="editor-external-change"
+          className="flex shrink-0 items-center gap-2 border-b border-border-weak bg-info/10 px-2 py-1.5 text-xs text-foreground"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {basename(activeTab.path)} changed on disk.
+          </span>
+          <button
+            type="button"
+            data-testid="editor-reload-from-disk"
+            className="shrink-0 rounded-md border border-border px-2 py-0.5 hover:bg-accent"
+            onClick={() => void reloadFromDisk(activeTab.path)}
+          >
+            Reload
+          </button>
         </div>
       ) : null}
 
@@ -308,6 +521,20 @@ export function EditorPane({ params }: WorkspacePaneProps) {
           className="flex shrink-0 items-center gap-3 border-t border-border-weak px-2 py-1 text-[11px] text-muted-foreground"
           data-testid="editor-status-bar"
         >
+          {/* [C] The only save path used to be `Mod-s` inside CodeMirror's own
+              keymap, which does nothing unless the document itself has focus —
+              a user who clicked the tab strip, the status bar or another pane
+              had no way to save and no way to find out there was one. */}
+          <button
+            type="button"
+            data-testid="editor-save"
+            aria-label={`Save ${basename(activeTab.path)}`}
+            disabled={activeTab.readOnly || !activeTab.dirty || savingPaths.has(activeTab.path)}
+            onClick={() => void saveFile(activeTab.path)}
+            className="rounded px-1.5 py-0.5 text-foreground hover:bg-accent disabled:pointer-events-none disabled:text-muted-foreground disabled:opacity-60"
+          >
+            Save
+          </button>
           {activeTab.readOnly ? <span data-testid="editor-readonly-badge">Read-only</span> : null}
           {ext ? <span className="uppercase">{ext}</span> : null}
           <span className="ml-auto tabular-nums" data-testid="editor-cursor-pos">

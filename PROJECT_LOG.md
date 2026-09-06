@@ -754,3 +754,42 @@ Not fixed, on purpose
   `workspace.spec.ts` re-run at 7/7 after `(g)` was added. Screenshots: `e2e-out/workspace-layout.png`,
   `workspace-server.png`, `workspace-server-view.png` (the native view's own pixels),
   `workspace-tasks.png`. PLAN.md Phase 5 ticked with six deviations; A5 held with the float asterisk.
+
+## Phase 5 review fixes (2026-09-06)
+
+- Ask: fix the verified findings from the Phase 5 review wave (7 high, 12 medium, 5 low) and re-run
+  the gate. Files touched: `apps/desktop/src/{main.ts,workspace/{paths,FsService,GitService,
+  DevServerService,BrowserViewService,detectors}.ts}`, `apps/renderer/src/{workspace/{WorkspaceHost.tsx,
+  browserOverlay.ts},panes/{editor,diff,browser,terminal,servers,files,agents}/**,components/
+  {TurnRail,AgentsPane}.tsx,pages/ChatPage.tsx}` plus their tests and `tests/e2e/workspace.spec.ts`.
+- Security: `fs.write` resolved its target lexically, so a junction inside a project let a save land
+  outside it (proved: `path.relative` calls `<root>/escape/x` inside, `realpath` does not) — new
+  `resolveNewInside` realpath-checks the nearest existing ancestor and the leaf. The Browser pane's
+  partitioned session had no permission handlers, which is Electron's *approve everything*; both
+  handlers now deny. `git.commit` passes `--` before its pathspecs, so `paths: ["-p"]` can no longer
+  become `git add -p` waiting on stdin forever.
+- Correctness: a legitimately-empty saved layout is no longer read as a failed restore (it was
+  re-defaulting Files+Agents on every relaunch); `layout.set` is flushed on unmount instead of
+  dropped inside the 400 ms debounce; `FsService.watch/unwatch` is reference-counted so a second
+  Files pane keeps the watcher; `DevServerService.stop` always attempts the direct child kill, as
+  `TerminalService.kill` always has; the Browser pane's native views are keyed by window and
+  resolved from the calling renderer (`AsyncLocalStorage` carries the IPC sender), so a second
+  window drives its own view.
+- UX: the Editor asks before a dirty tab closes, has a visible Save button, follows `fs.changed`
+  and refuses the first save over a file something else rewrote; the Diff pane commits the ticked
+  rows rather than `git commit --all`, and renders untracked/staged/binary entries instead of an
+  empty `+0 −0` card; the Terminal adopts `terminal.list` rather than orphaning a pty and spawning
+  another, and waits to be visible; the Browser pane's empty state is reachable (a view is created
+  by the first navigation) and parks itself while a DOM overlay or a dockview drag needs the box;
+  the workspace width re-clamps against the window and is stored per project; the turn rail is
+  anchored to the chat column, not the viewport; syntax keywords use `--brand-accent` (an opaque
+  token) instead of `--tag-pink` (a 6 %-alpha chip background at ~1.1:1 contrast).
+- Efficiency: `fs.changed` is debounced in both the Files and Diff panes, the Files pane re-lists
+  only the directories the batch actually touched (and defers entirely while hidden), and
+  `git.status` is sequence-guarded so a stale answer cannot overwrite a fresher one.
+- Deferred, deliberately: the `TasksPane` half of the hover-focus finding (another agent has that
+  file in flight this session — the identical `TerminalPane` control is fixed), and the Files pane's
+  "reveal ignored directories" toggle (a new UI affordance, not a fix); the two search backends were
+  made to agree instead, which was the machine-dependent half of that finding.
+- Gate: `pnpm typecheck` clean (6 projects), `pnpm test` 66 files / 967 passed, `pnpm build` clean,
+  `pnpm exec playwright test` 23 passed / 1 skipped (the API-key case) in 6.4 min.
