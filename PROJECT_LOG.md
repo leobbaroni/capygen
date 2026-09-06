@@ -130,6 +130,10 @@ Not fixed, on purpose
 - Re-ran the full gate independently: typecheck 5/5, vitest 967/967, build ok, Playwright 22 passed / 1 skipped (API key) / 1 failed — the live cross-backend delegation test (roundtable.spec.ts "Claude lead delegates to Codex") failed once and passed on an isolated re-run (1.1 m): model-choice flake, not a regression; tracked below. Workspace proven: files→editor→save, diff, TodoWrite→tasks, terminal echo, drag-restore layout, dev server detect→start→Browser pane, overlay tracking. Review fixes in b958927 (junction-escape write, permission handlers on browser views, git `--`, ref-counted watchers, zero-panel layout, per-window browser views, editor dirty guard/stale file, terminal orphan ptys, and more).
 - A separate user-started session is adding a `tasks.create` IPC channel in this worktree (8 uncommitted files); left untouched.
 
+## 2026-09-06 — Phase 6 accepted; handoff to GPT Astra
+- Orchestrator gate re-run: typecheck 5/5, vitest 1296 passed / 4 skipped, build ok, Playwright 24 passed / 10 skipped (all live-Claude tests skip: Claude Code OAuth session expired on this machine — user must run `claude` to sign in; plus the API-key case). Review fixes in 2222cd6 (skill.open path check, createSkill traversal, CLI positional guard, stale project cache, plugin ops behind the confirm gate, MCP dialog scope/args/env fixes, and more).
+- User decision: development stops here on Fable. Lead from Phase 7 = GPT Astra (Codex); Fable 5.1 / Opus 5 review for dev. Written: AGENTS.md (lead instructions), docs/POLICIES.md (routing, permissions/approvals, round-table, config source of truth, safety, efficiency), docs/HANDOFF.md (state, run, revert, open items), PLAN.md §Crew and CLAUDE.md updated.
+
 ## Open / next
 - Flaky live e2e: cross-backend delegation depends on the lead choosing delegate_task; harden the prompt or assert on the routed policy instead of the model's choice (Phase 11/12 hygiene). (superseded — see the entry for Task B1 below)
 - ~~Phase 2: A1 foundation landed (echo stub engine). Next: the real Claude harness behind the

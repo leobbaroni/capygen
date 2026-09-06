@@ -40,16 +40,19 @@ capygen/
 Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) · `pnpm e2e`
 (Playwright Electron) · `pnpm build:win` (electron-builder NSIS + portable).
 
-## Crew (user rule, 2026-09-05: "orchestrate between Opus 5 and Sonnet to save tokens; Fable is the orchestrator and task setter")
+## Crew (user rule, 2026-09-06: "from Phase 7 the project is led by GPT Astra; Fable 5.1 / Opus review alongside for dev")
 
 | Role | Model | Used for |
 |---|---|---|
-| Lead / task setter | session model (Claude Fable 5.1) — never a subagent | decomposition, task briefs, acceptance, final judgment |
-| Hard | Opus 5 (`model: "opus"`) | engine, dispatcher, routing, packaging, anything that failed once |
-| Mechanical | Sonnet 5 (`model: "sonnet"`) | page ports from the reference, boilerplate, docs, fixtures, consolidation |
-| Review | the other one: Sonnet reviews Opus work, Opus reviews Sonnet work | adversarial verify waves |
+| Lead / task setter | **GPT Astra** (Codex, `gpt-6-astra`) — reads `AGENTS.md` | decomposition, task briefs, acceptance, merges |
+| Hard implementation | GPT Astra, or Opus 5 when the lead delegates through Claude Code | engine, dispatcher, routing, packaging, anything that failed once |
+| Mechanical | Codex on a smaller GPT-5.6 tier, or Sonnet 5 via Claude Code | page ports from the reference, boilerplate, docs, fixtures |
+| Review (dev) | **Claude Fable 5.1 / Opus 5** — always a different model from the implementer | adversarial review waves before every phase tick; findings ranked, `file:line`, concrete failure scenario |
 
-Every workflow `agent()` call sets `model` explicitly; Fable does no subagent work itself.
+Phases 1–6 were orchestrated by Claude Fable 5.1 with Opus 5 (hard) / Sonnet 5 (mechanical) subagents
+and cross-model review; that crew is retired. The per-phase workflow scripts under
+`.claude/workflows/` document the exact task briefs that produced each phase and are the template
+for Phases 7–12 (`docs/HANDOFF.md` §How to run a phase).
 
 ## Build Phases
 
