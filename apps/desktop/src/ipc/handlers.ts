@@ -41,6 +41,13 @@ export interface SecretsStore {
   set(provider: ApiProvider, value: string): Promise<void> | void;
   has(provider: ApiProvider): Promise<boolean> | boolean;
   delete(provider: ApiProvider): Promise<void> | void;
+  /**
+   * The plaintext key, for the `api` harness only. Deliberately **not** an IPC
+   * channel: `secrets.has` is the whole renderer-facing read surface (R21), and
+   * this value only ever travels main-process-internal, from here into
+   * `ApiHarnessDeps.keys`.
+   */
+  get(provider: ApiProvider): Promise<string | null> | string | null;
 }
 
 /**
@@ -55,6 +62,7 @@ export function createInMemorySecretsStore(): SecretsStore {
     set: (provider, value) => void values.set(provider, value),
     has: (provider) => values.has(provider),
     delete: (provider) => void values.delete(provider),
+    get: (provider) => values.get(provider) ?? null,
   };
 }
 
@@ -99,13 +107,17 @@ export interface IpcContext {
 
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const { store, broadcast, log } = deps;
+  const secrets = deps.secrets ?? createInMemorySecretsStore();
   const engineDeps: EngineDeps = {
     store,
     broadcast,
     log,
     ...(deps.widgets ? { widgets: deps.widgets } : {}),
+    // R21: the engine never reads a key from disk. This is the only bridge
+    // between the stored ciphertext and an `api` harness, and it hands over a
+    // value the renderer can never ask for (`secrets.has` returns a boolean).
+    keys: { getKey: (provider) => secrets.get(provider) },
   };
-  const secrets = deps.secrets ?? createInMemorySecretsStore();
 
   /** Persist a block and push it to every renderer (upsert by id). */
   function emitBlock(block: Block): Block {
@@ -275,7 +287,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
       }));
       const seen = new Set(commands.map((c) => c.name));
-      for (const command of args.sessionId ? engine.listCommands(args.sessionId) : []) {
+      const backendCommands = args.sessionId
+        ? engine.listCommands(args.sessionId, args.agentId ?? null)
+        : [];
+      for (const command of backendCommands) {
         if (seen.has(command.name)) continue;
         seen.add(command.name);
         commands.push(command);
@@ -335,23 +350,24 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     /**
-     * Phase 3 stub: no elicitation source exists yet (no MCP client, no Codex
-     * user-input wiring), so there is nothing to route this to. Records the
-     * answer on the block — same shape a relaunch needs to render it — and
-     * reports `ok: false` (nothing delivered), matching how a stale
-     * permission/question answer is reported above.
+     * The block, not a request id, is what the card knows — an elicitation is
+     * addressed by the row the user is looking at — so the `requestId` the
+     * backend is blocked on is read back off that row and handed to the
+     * harness (R32). `ok: false` means nothing was waiting any more; the row is
+     * still updated so a relaunch renders the choice the user made rather than
+     * an eternally pending form.
      */
     "elicitation.answer": (args) => {
       const block = store.blocks.get(args.blockId);
-      if (block && block.kind === "elicitation") {
-        emitBlock({
-          ...block,
-          answers: args.answers,
-          status: args.answers === null ? "declined" : "accepted",
-          updatedAt: Date.now(),
-        });
-      }
-      return { ok: false };
+      if (!block || block.kind !== "elicitation") return { ok: false };
+      const delivered = engine.answerElicitation(block.requestId, args.answers);
+      emitBlock({
+        ...block,
+        answers: args.answers,
+        status: args.answers === null ? "declined" : "accepted",
+        updatedAt: Date.now(),
+      });
+      return { ok: delivered };
     },
 
     /**
@@ -376,14 +392,15 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
           backend: "codex" as const,
           label: "Codex",
           available: false,
-          reason: "not wired yet (Phase 3)",
+          reason: "no harness lister was wired, so the codex CLI was never probed",
           models: [],
           defaultModel: "",
         },
         {
           backend: "api" as const,
           label: "API model",
-          available: true,
+          available: false,
+          reason: "no harness lister was wired, so no stored API key was checked",
           models: [],
           defaultModel: "",
         },

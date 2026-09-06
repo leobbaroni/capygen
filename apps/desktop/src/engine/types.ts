@@ -7,6 +7,7 @@
  * is the echo double the handler tests run against.
  */
 import type { CapygenStore } from "@capygen/db";
+import type { KeyProvider } from "@capygen/engine";
 import type { EventChannel, EventInput, SlashCommand } from "@capygen/shared";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
 
@@ -30,6 +31,13 @@ export interface EngineDeps {
    * client at all.
    */
   widgets?: WidgetHostHandlers;
+  /**
+   * How the `api` backend gets its key (SPEC R21). The engine never reads a
+   * key from disk; the desktop injects one backed by Electron `safeStorage`
+   * (`apps/desktop/src/ipc/secrets.ts`). Absent in tests and in the stub
+   * engine, in which case the harness falls back to the documented env vars.
+   */
+  keys?: KeyProvider;
 }
 
 export interface EngineSendArgs {
@@ -55,8 +63,17 @@ export interface Engine {
   answerPermission(requestId: string, answer: EnginePermissionAnswer): boolean;
   /** Route an AskUserQuestion answer (`question text → option label`). */
   answerQuestion(requestId: string, answers: Record<string, string>): boolean;
-  /** The backend's own commands/skills/plugins for this session (R14). */
-  listCommands(sessionId?: string): SlashCommand[];
+  /**
+   * Route an elicitation form back to the backend that asked (R32); `null`
+   * declines it. False when nothing is waiting on that request any more — the
+   * same "stale card" answer `answerPermission`/`answerQuestion` give.
+   */
+  answerElicitation(requestId: string, answers: Record<string, unknown> | null): boolean;
+  /**
+   * The backend's own commands/skills/plugins for the agent that will receive
+   * the next message — the session's lead unless `agentId` names another (R14).
+   */
+  listCommands(sessionId?: string, agentId?: string | null): SlashCommand[];
   /**
    * Release every backend. Resolves only once each harness is down *and* the
    * final status of any turn it was running has been written, so a caller can

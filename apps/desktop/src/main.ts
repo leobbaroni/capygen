@@ -55,7 +55,7 @@ import {
   clampToDisplays,
   parseWindowState,
 } from "./win/windowState.js";
-import { resolveInitialProjectDir } from "./win/projectArg.js";
+import { longPath, resolveInitialProjectDir } from "./win/projectArg.js";
 import { createIpcContext, type IpcContext } from "./ipc/handlers.js";
 import { createSafeStorageSecretsStore } from "./ipc/secrets.js";
 import { createHarnessLister } from "./ipc/harnessList.js";
@@ -295,22 +295,29 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     });
   });
 
+  // R21: keys live in their own small ciphertext file next to the database,
+  // never in settings or logs — `secrets.ts` refuses to write plaintext if
+  // OS-level encryption is unavailable rather than falling back to it. The
+  // same store answers `harness.list`'s "is there a key?" question and, via
+  // `handlers.ts`, feeds the api harness's `KeyProvider`.
+  const secretsStore = createSafeStorageSecretsStore({
+    safeStorage,
+    filePath: path.join(app.getPath("userData"), "secrets.json"),
+    log: { warn: (m) => log.warn(m) },
+  });
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
     log,
     widgets,
     ...(useStub ? { makeEngine: createStubEngine } : {}),
-    // R21: keys live in their own small ciphertext file next to the database,
-    // never in settings or logs — `secrets.ts` refuses to write plaintext if
-    // OS-level encryption is unavailable rather than falling back to it.
-    secrets: createSafeStorageSecretsStore({
-      safeStorage,
-      filePath: path.join(app.getPath("userData"), "secrets.json"),
-      log: { warn: (m) => log.warn(m) },
-    }),
+    secrets: secretsStore,
     listHarnesses: createHarnessLister({
       defaultModel: () => activeStore.settings.all().defaultModel,
+      // `has` only: whether a key exists decides availability, and the value
+      // itself never leaves `secrets.get` for anything but the api harness.
+      secrets: secretsStore,
     }),
     pickDirectory: async () => {
       const owner = [...shellWindows][0];
@@ -324,7 +331,11 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
             properties: ["openDirectory", "createDirectory"],
           }));
       if (result.canceled || result.filePaths.length === 0) return null;
-      return result.filePaths[0] ?? null;
+      const picked = result.filePaths[0];
+      // The dialog returns long paths, but a shortcut target or a junction can
+      // still hand back an 8.3 name, and Codex's Windows sandbox refuses those
+      // (see `longPath`). Normalising here means every project row is long.
+      return picked ? longPath(picked) : null;
     },
     appInfo: () => ({
       name: app.getName(),

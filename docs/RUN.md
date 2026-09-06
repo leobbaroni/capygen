@@ -111,6 +111,8 @@ install. `workers: 1` — Electron windows are singletons per user-data-dir.
 |---|---|---|
 | `tests/e2e/launch.spec.ts` | `CAPYGEN_ENGINE=stub` (offline echo double) | none |
 | `tests/e2e/skeleton.spec.ts` | the real Claude harness | **real model calls, real money** |
+| `tests/e2e/harnesses.spec.ts` | the real Codex, Claude and API harnesses | **real model calls** (a few cents) |
+| `tests/e2e/widget.spec.ts` | the real Claude harness + a fixture MCP server | **real model calls** |
 
 `skeleton.spec.ts` is the PLAN Phase 2 proof: landing → live Claude reply with a usage/cost line
 → close → relaunch → same transcript out of SQLite; plus an `AskUserQuestion` card answered in
@@ -118,8 +120,21 @@ the UI whose answer reaches the model. It pins the session to `claude-sonnet-5` 
 own `settings.set` channel, so a full run costs a few cents and about a minute. It needs the
 Claude login; without one it fails with the backend's own error rather than hanging.
 
+`harnesses.spec.ts` is the Phase 3 proof. Each test asks `harness.list` first and **skips with
+that backend's own reason** rather than failing on a 401, so a machine with no Codex login still
+gets a green run and a sentence saying why:
+
+- Codex picked in the composer answers "pong" with a usage/cost line;
+- a Codex shell approval (`approvalPolicy: "untrusted"`, set through the agent's own config so the
+  card is guaranteed to appear) renders a permission card whose **Allow once** runs the command;
+- `/` in a Claude session lists Built-ins plus what Claude itself reports — on this machine the
+  `/cockpit:*` plugin commands;
+- the API-model test runs **only** with a key in Settings ▸ API keys or in
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`; otherwise it skips and says so.
+
 Every run writes screenshots to `e2e-out/`: `landing.png`, `chat.png` (offline),
-`chat-pong.png`, `restored.png`, `chat-question.png` (live).
+`chat-pong.png`, `restored.png`, `chat-question.png`, `codex-pong.png`, `codex-permission.png`,
+`codex-allowed.png`, `slash-menu.png` (live).
 
 Each spec launches into a fresh `mkdtemp` profile and a fresh temp project directory, so the real
 `%APPDATA%\capygen` is never touched.
@@ -197,3 +212,17 @@ logged with its real message before it is re-thrown to the renderer.
   terminal is fine.
 - **`pnpm start` shows a white window**: the renderer was not built, or was built after the
   desktop bundle. Re-run `corepack pnpm build`.
+- **Codex is greyed out in the model picker**: the reason is on the row — `harness.list` puts it
+  there. It probes with `account/read {refreshToken:true}`, not `codex login status`, so "Logged in
+  using ChatGPT" from the CLI is not a contradiction: that command only checks that
+  `~/.codex/auth.json` exists, and a dead refresh token passes it. The fix is `codex logout` then
+  `codex login`. The answer is cached for 60 s.
+- **Codex runs but every approved command fails with "Access to the path ... is denied"**: the
+  project folder is an 8.3 short path (`C:\Users\TUGAPL~1\...`). capygen expands
+  `--project`/`CAPYGEN_PROJECT_DIR` and the picker's answer with `longPath()`; a project row stored
+  before that keeps its short form — re-pick the folder.
+- **The app drove the wrong Codex**: the log line `[codex] app-server <path> (<source>)` says which
+  binary answered. It should say `(bundled)`; `(installed)` means the walk-up for
+  `node_modules/@openai/codex-sdk` failed and the machine's own CLI — a different protocol version
+  — is being driven, on which approvals never fire. `@openai/codex-sdk` must stay a dependency of
+  `apps/desktop`, not only of `packages/engine`.

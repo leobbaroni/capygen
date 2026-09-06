@@ -325,6 +325,19 @@ describe("launch-time project folder", () => {
     ).toBe(expected);
   });
 
+  it("expands an 8.3 short name — Codex's Windows sandbox refuses one", () => {
+    // `os.tmpdir()` on this machine is `C:\Users\TUGAPL~1\AppData\Local\Temp`;
+    // an *approved* Codex command still failed on a cwd in that form.
+    expect(
+      resolveInitialProjectDir({
+        argv: ["--project=C:/Users/TUGAPL~1/real"],
+        env: {},
+        isDirectory,
+        realPath: (p) => p.replace("TUGAPL~1", "TugaPlayz"),
+      }),
+    ).toBe(path.resolve("C:/Users/TugaPlayz/real"));
+  });
+
   it("takes --project <dir> as two arguments, and strips quotes", () => {
     expect(
       resolveInitialProjectDir({

@@ -211,6 +211,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         // meter has nothing to catch them otherwise (there is no push event
         // for usage the way there is for blocks/turn status).
         void refreshUsage(sessionId);
+        void refreshCommands(sessionId);
       }
     });
 
@@ -240,6 +241,21 @@ export const useAppStore = create<AppState>()((set, get) => {
     const { events } = await ipc().invoke("turns.usage", { sessionId });
     if (get().activeSessionId !== sessionId) return;
     set({ usageEvents: events });
+  }
+
+  /**
+   * Re-read the slash menu (R14).
+   *
+   * A backend only reports its own commands once it is running — Claude's
+   * arrive with `system/init` on the first turn, Codex's with `skills/list`
+   * after `thread/start` — so the list fetched when the session was opened is
+   * built-ins only. Refetching when a turn ends is what turns `/` from seven
+   * built-ins into the user's real skills and plugin commands.
+   */
+  async function refreshCommands(sessionId: string): Promise<void> {
+    const commands = await ipc().invoke("chat.listCommands", { sessionId });
+    if (get().activeSessionId !== sessionId) return;
+    set({ commands });
   }
 
   /** Keep any block that arrived by event and is newer than the fetched row. */
@@ -322,14 +338,23 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
       subscribe();
       const client = ipc();
-      const [settings, projects, sessions, commands, harnesses] = await Promise.all([
+      const [settings, projects, sessions, commands] = await Promise.all([
         client.invoke("settings.get", {}),
         client.invoke("projects.list", {}),
         client.invoke("sessions.list", {}),
         client.invoke("chat.listCommands", {}),
-        client.invoke("harness.list", {}),
       ]);
-      set({ ready: true, settings, projects, sessions, commands, harnesses, error: null });
+      set({ ready: true, settings, projects, sessions, commands, error: null });
+      // Deliberately **not** awaited above (G1: composer usable within 3 s).
+      // `harness.list` probes the machine — it spawns a short-lived `codex
+      // app-server` to ask `account/read` — so blocking the landing on it
+      // would put a process spawn between launch and the first keystroke. The
+      // picker renders with whatever it has and fills in when the answer
+      // lands; a failure leaves the list empty rather than blanking the app.
+      void client
+        .invoke("harness.list", {})
+        .then((harnesses) => set({ harnesses }))
+        .catch(() => undefined);
     },
 
     async pickProject() {

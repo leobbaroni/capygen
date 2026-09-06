@@ -53,6 +53,10 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 /** Which API an `api`-backend agent talks to directly (CONTEXT.md §Backend). */
 export const ApiProviderSchema = z.enum(["anthropic", "openai", "openrouter"]);
 export type ApiProvider = z.infer<typeof ApiProviderSchema>;
+/** Iteration order for anything that must visit every provider (Settings ▸ API
+ *  keys, the `harness.list` key probe). Derived from the enum, so a fourth
+ *  provider cannot be added without appearing here. */
+export const API_PROVIDERS = ApiProviderSchema.options;
 
 // ---------------------------------------------------------------------------
 // Project

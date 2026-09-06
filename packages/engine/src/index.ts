@@ -38,6 +38,12 @@ export {
   type CodexTransportHandlers,
 } from "./codex/CodexAppServerClient.js";
 export {
+  probeCodex,
+  type CodexAccountInfo,
+  type CodexProbeResult,
+  type ProbeCodexOptions,
+} from "./codex/account.js";
+export {
   resolveCodexBinary,
   resolveBundledCodex,
   resolveInstalledCodex,
@@ -66,7 +72,16 @@ export * from "./codex/protocol.js";
 export * from "./mcp/client/index.js";
 export * from "./mcp/apps/index.js";
 
+/**
+ * The API-model backend (SPEC R9). `api/index.ts` is a curated surface rather
+ * than a star re-export of the folder precisely so this line is safe: the three
+ * names that would collide with the Claude/Codex surface are pre-aliased there
+ * (`API_DEFAULT_MAX_TOOL_OUTPUT_CHARS`, `ApiHarnessLogger`, `apiPriceFor`).
+ */
+export * from "./api/index.js";
+
 import type { Backend } from "@capygen/shared";
+import { ApiHarness, type ApiHarnessDeps } from "./api/ApiHarness.js";
 import { ClaudeHarness, type ClaudeHarnessDeps } from "./claude/ClaudeHarness.js";
 import { CodexHarness, type CodexHarnessDeps } from "./codex/CodexHarness.js";
 import type { Harness } from "./harness.js";
@@ -76,14 +91,16 @@ import type { Harness } from "./harness.js";
  *
  * The session runner already owns one harness instance per agent
  * (`apps/desktop/src/engine/SessionRunner.ts`); all it lacks is a way to pick
- * the class from `agent.backend` without importing every harness itself. The
- * `api` backend is Phase 3's other task and throws here until it lands, so a
- * session created against it fails with a sentence instead of silently running
- * on Claude.
+ * the class from `agent.backend` without importing every harness itself.
+ *
+ * The `default` branch is not dead code: `Backend` is a zod enum that a future
+ * phase widens, and an unmapped backend has to fail with a sentence rather
+ * than silently running on Claude.
  */
 export interface HarnessRegistryDeps {
   claude?: ClaudeHarnessDeps;
   codex?: CodexHarnessDeps;
+  api?: ApiHarnessDeps;
 }
 
 export function createHarnessForBackend(
@@ -95,7 +112,9 @@ export function createHarnessForBackend(
       return new ClaudeHarness(deps.claude ?? {});
     case "codex":
       return new CodexHarness(deps.codex ?? {});
+    case "api":
+      return new ApiHarness(deps.api ?? {});
     default:
-      throw new Error(`capygen has no harness for the ${backend} backend yet`);
+      throw new Error(`capygen has no harness for the ${backend as string} backend yet`);
   }
 }

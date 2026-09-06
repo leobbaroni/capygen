@@ -52,6 +52,7 @@ export function createStubEngine(deps: EngineDeps, delayMs = ECHO_DELAY_MS): Eng
 
     answerPermission: () => false,
     answerQuestion: () => false,
+    answerElicitation: () => false,
     listCommands: () => [],
 
     dispose() {

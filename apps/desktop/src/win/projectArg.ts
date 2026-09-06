@@ -12,6 +12,13 @@
  * Anything else — a missing path, a file, a flag with no value — resolves to
  * null and the landing page shows "Choose a folder", which opens the native
  * picker. Nothing is ever opened implicitly.
+ *
+ * The answer is always the **long** form of the path. Windows 8.3 short names
+ * (`C:\Users\TUGAPL~1\...`, which is what `os.tmpdir()` hands back on this
+ * machine) are valid everywhere except inside Codex's Windows sandbox, which
+ * rejects them: during the Phase 3 Codex live run an *approved* command still
+ * failed with "Access to the path 'C:\Users\TUGAPL~1\...' is denied". The
+ * folder picker returns long paths already; this is the other way in.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,6 +30,17 @@ export interface ResolveProjectDeps {
   argv?: readonly string[];
   env?: NodeJS.ProcessEnv;
   isDirectory?: (candidate: string) => boolean;
+  /** Overridable in tests; the default expands 8.3 short names. */
+  realPath?: (candidate: string) => string;
+}
+
+/** Never throws: a path that cannot be expanded is returned as it came. */
+export function longPath(candidate: string): string {
+  try {
+    return fs.realpathSync.native(candidate);
+  } catch {
+    return candidate;
+  }
 }
 
 function defaultIsDirectory(candidate: string): boolean {
@@ -41,6 +59,7 @@ export function resolveInitialProjectDir(deps: ResolveProjectDeps = {}): string 
   const argv = deps.argv ?? process.argv;
   const env = deps.env ?? process.env;
   const isDirectory = deps.isDirectory ?? defaultIsDirectory;
+  const realPath = deps.realPath ?? longPath;
 
   const candidates: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -58,7 +77,7 @@ export function resolveInitialProjectDir(deps: ResolveProjectDeps = {}): string 
     const trimmed = raw.trim().replace(/^"|"$/g, "");
     if (trimmed === "") continue;
     const resolved = path.resolve(trimmed);
-    if (isDirectory(resolved)) return resolved;
+    if (isDirectory(resolved)) return realPath(resolved);
   }
   return null;
 }

@@ -18,11 +18,15 @@
  *   4. the per-user install (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`).
  *   5. bare `codex` / `codex.exe`, left for PATH to resolve.
  *
- * Step 3 only works where `@openai/codex-sdk` is resolvable from this module —
- * true under tsx/vitest and in a dev Electron run from the workspace, not
- * inside the packaged `main.cjs` (the engine is inlined there and the package
- * is not a dependency of `apps/desktop`). That is why steps 1, 2, 4 and 5
- * exist; `resolveCodexBinary().source` says which one answered.
+ * Step 3 needs `node_modules/@openai/codex-sdk` to exist somewhere *above*
+ * this file. Under tsx/vitest that is `packages/engine/node_modules`; inside
+ * the bundled `apps/desktop/dist/main.cjs` the engine is inlined and that
+ * directory is no longer on the way up, which is why `@openai/codex-sdk` is
+ * also a direct dependency of `apps/desktop` — without it the built app
+ * silently fell through to the machine's *installed* Codex (0.139.0 here,
+ * a different protocol version on which the approval never fired).
+ * `resolveCodexBinary().source` says which step answered, and the harness logs
+ * it on every start; steps 1, 2, 4 and 5 remain for machines with neither.
  */
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";

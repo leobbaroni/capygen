@@ -47,6 +47,8 @@ is a dependency **only** so its vendored binary ships with the app — its own
 |---|---|---|---|
 | binary | `@openai/codex` **0.153.4**, vendored inside `@openai/codex-sdk` 0.153.4 | `codex/binary.ts` `resolveBundledCodex()` | the machine's own install (0.139.0 here) is the fallback and speaks a *different* protocol — the live run on it lost approvals entirely. Order: `binaryPath` → `CAPYGEN_CODEX_BIN` → bundled → `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` → PATH |
 | finding the vendored binary | walk up for `node_modules/@openai/codex-sdk/package.json`, then `@openai/codex` → `@openai/codex-<platform>` → `vendor/<triple>/bin/codex.exe` | same | `@openai/codex-sdk`'s `exports` has **only** an `import` condition, so `require.resolve` throws and `import.meta.resolve` is absent under vitest/esbuild-CJS. A regression test pins this (`test/codexHarness.test.ts` › `resolveCodexBinary`) |
+| `@openai/codex-sdk` is also a **direct dependency of `apps/desktop`** | `apps/desktop/package.json` | the walk-up above, from `apps/desktop/dist/main.cjs` | the engine is inlined into `main.cjs`, so `packages/engine/node_modules` is no longer on the way up. Without the desktop dependency the built app silently fell back to the machine's *installed* Codex (0.139.0), a different protocol version on which the approval never fired. Packaging (Phase 12) must ship it |
+| a project path handed to Codex must be the **long** Windows path | live run, 2026-09-06 | `longPath()` in `apps/desktop/src/win/projectArg.ts`, applied to `--project`/`CAPYGEN_PROJECT_DIR` and to the folder picker's answer | Codex's Windows sandbox denies an *approved* command whose `cwd` is an 8.3 short name (`C:\Users\TUGAPL~1\…`, which is what `os.tmpdir()` returns here) |
 | `vendor/<triple>/codex-path` prepended to `PATH` | `dist/index.js:470,485-496` | `createStdioTransport` | Codex's search tools lose `rg.exe` |
 | framing | newline-delimited JSON, **no** `"jsonrpc"` member; server ids are their own space starting at 0 | `CodexAppServerClient` | spike §2; the schema bundle has no `jsonrpc` property |
 | `initialize` + `initialized` | `InitializeParams.ts` / `InitializeResponse.ts` | `CodexAppServerClient.start` | handshake; nothing else can be sent first |
@@ -62,12 +64,15 @@ is a dependency **only** so its vendored binary ships with the app — its own
 | cost | **not reported by app-server** — estimated from `codex/pricing.ts`, every entry tagged `[assumed]` | usage meter | an unknown model costs **0**, never a guess |
 | server requests: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` → `{decision}` | `v2/CommandExecutionApprovalDecision.ts` | permission cards (R27/R32) | `allow`→`accept`, `allow`+`scope:session\|always`→`acceptForSession`, `deny`→`decline`; no open turn → `decline` |
 | server request `item/tool/requestUserInput` → `{answers:{[questionId]:{answers:[label]}}}` | `v2/ToolRequestUserInputParams.ts` | question cards (R32) | Codex's AskUserQuestion equivalent; `isOther` becomes the card's `allowOther` |
-| server request `mcpServer/elicitation/request` → `{action, content, _meta}` | `v2/McpServerElicitationRequestParams.ts` | elicitation card (R32) | **declined today**: `EngineEvent` has no elicitation variant, so nothing can carry the answer back. `CodexHarness.answerElicitation` is the seam |
+| server request `mcpServer/elicitation/request` → `{action, content, _meta}` | `v2/McpServerElicitationRequestParams.ts` | elicitation card (R32) | round-trips since Phase 3's integration: an `elicitation` `EngineEvent` carries the `requestId` to the UI, `elicitation.answer` maps the block back to it, and `CodexHarness.answerElicitation` replies `accept`/`decline`. With no open turn, or on interrupt/dispose, the pending request is **declined**, never auto-accepted |
+| `account/read {refreshToken:true}` → `{account}` | `v2/Account.ts`, spike §3 | `harness.list` availability probe (`packages/engine/src/codex/account.ts`) | the **only** honest sign-in check: `codex login status` and `getAuthStatus` report the auth *mode* and pass with a dead token — on this machine both said "Logged in using ChatGPT" while every model call 401'd. `model/list` is asked in the same short-lived child, so the picker offers Codex's own catalogue |
 | server request `currentTime/read` → `{currentTimeAt}` | `ServerRequest.ts` | answered directly | every other server request is refused with `-32601` and Codex applies its own default |
 | MCP App widgets: `mcpToolCall.appContext.resourceUri` (`ui://…`) + `result._meta` kept verbatim | `v2/McpToolCallAppContext.ts`, `v2/McpToolCallResult.ts` | `widget` block (R31) | stripping `_meta` makes the widget unrenderable |
 
 Sign-in: ChatGPT OAuth (`account/read` → `{type:"chatgpt"}`). No API key is read or
-stored by the Codex harness. An `unauthorized` turn error renders "run `codex login`".
+stored by the Codex harness. An `unauthorized` turn error renders "run `codex login`",
+and `harness.list` runs the same `account/read` probe up front, so an unavailable Codex is
+a greyed-out picker row with a reason instead of a turn that fails on a 401.
 
 ## API models — `@anthropic-ai/sdk`, `openai`, MCP (`@modelcontextprotocol/sdk`)
 
@@ -103,6 +108,15 @@ three endpoints, against a live 401 (an invalid key, no tokens spent) —
 Keys: `${ANTHROPIC_API_KEY}` / `${OPENAI_API_KEY}` / `${OPENROUTER_API_KEY}` as a fallback only.
 In the app they arrive through the injected `KeyProvider` (Electron `safeStorage`); the engine
 never reads a key from disk and never logs one (`maskKey` is the only form allowed in a log).
+The bridge is one line in `apps/desktop/src/ipc/handlers.ts` — `keys: { getKey: (p) => secrets.get(p) }`
+— and `SecretsStore.get` exists only for it: `secrets.has` stays the whole renderer-facing read
+surface, so a decrypted key never crosses IPC. `harness.list` uses `has` alone to decide whether
+the `api` backend is offered at all.
+
+Conversation state: an `api` agent has **no** backend session id to resume (`backendSessionId()`
+returns `null`). Its memory is the SQLite transcript, replayed on `start()` by
+`apps/desktop/src/engine/history.ts` — which pairs every `tool_use` with a `tool_result` (both
+providers reject a conversation missing one) and drops unsigned `thinking`.
 
 ## MCP Apps widget host — `@modelcontextprotocol/ext-apps` (SPEC R31)
 
@@ -160,3 +174,6 @@ Evidence for every row: `docs/spikes/mcp-apps.md` (run 2026-09-06). The widget *
 | `CAPYGEN_USER_DATA_DIR` | isolated Electron profile |
 | `CAPYGEN_PROJECT_DIR` / `--project=<dir>` | pre-select a project folder |
 | `CAPYGEN_DEV_URL` | load the renderer from Vite |
+| `createHarnessForBackend(backend, deps)` | `packages/engine/src/index.ts` — the whole registry. `SessionRunner` calls it once per agent; `deps.api.keys` is the desktop's `safeStorage` bridge and `deps.api.loadHistory` the SQLite replay (`apps/desktop/src/engine/history.ts`) |
+| `Harness.answerElicitation?` | optional on purpose: only a backend that relays MCP `elicitation/create` emits the matching event (Codex today). A missing method reads as "not delivered", the same answer a stale request gets |
+| `BACKEND_BLOCK_PARITY` | `packages/shared/src/blockParity.ts` — which block kinds each backend can emit, and a written reason for each it cannot. Two suites read it (`apps/desktop/test/blockParity.test.ts`, `apps/renderer/src/components/blocks/blockParity.test.tsx`), so a new block kind fails both until the table answers for all three backends |

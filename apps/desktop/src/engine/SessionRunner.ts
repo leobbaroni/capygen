@@ -15,7 +15,7 @@
  *     starting a fresh conversation.
  */
 import {
-  ClaudeHarness,
+  createHarnessForBackend,
   type BlockPatch,
   type EngineEvent,
   type Harness,
@@ -29,6 +29,7 @@ import {
   type Session,
   type SlashCommand,
 } from "@capygen/shared";
+import { loadApiHistory } from "./history.js";
 import { emitBlock, errorBlock, finishTurn } from "./persist.js";
 import type { Engine, EngineDeps, EnginePermissionAnswer, EngineSendArgs } from "./types.js";
 
@@ -38,7 +39,11 @@ export function backendSessionKey(agentId: string): string {
 }
 
 export interface SessionRunnerDeps extends EngineDeps {
-  /** Overridden in tests; the default builds a real Claude harness. */
+  /**
+   * Overridden in tests; the default asks `@capygen/engine`'s registry for the
+   * harness that matches `agent.backend`, so the composer's backend choice is
+   * what decides which backend actually runs (SPEC R7/R8/R9).
+   */
   makeHarness?: (agent: HarnessAgent) => Harness;
 }
 
@@ -76,8 +81,28 @@ function withDeadline(work: Promise<unknown>, ms: number): Promise<unknown> {
 
 export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   const { store, broadcast, log } = deps;
+
+  /**
+   * The harness registry, wired once (SPEC R7/R8/R9).
+   *
+   * Everything backend-specific that needs the *desktop* is injected here and
+   * nowhere else: the API key provider (the engine never reads a key from
+   * disk, R21) and the transcript replay an `api` agent needs because it has
+   * no backend session to resume. Claude and Codex take only the logger — they
+   * resume from their own session id, which `harnessFor` reads out of settings.
+   */
   const makeHarness =
-    deps.makeHarness ?? ((): Harness => new ClaudeHarness({ log }));
+    deps.makeHarness ??
+    ((agent: HarnessAgent): Harness =>
+      createHarnessForBackend(agent.backend, {
+        claude: { log },
+        codex: { log },
+        api: {
+          log,
+          ...(deps.keys ? { keys: deps.keys } : {}),
+          loadHistory: (session, forAgent) => loadApiHistory(store, session, forAgent),
+        },
+      }));
 
   /** `sessionId:agentId` → harness. */
   const harnesses = new Map<string, Harness>();
@@ -272,6 +297,22 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           }
           break;
         }
+        case "elicitation": {
+          awaiting.set(event.requestId, turn.harness);
+          const slot = turn.blocks.get(event.key);
+          if (slot) {
+            broadcast("elicitation.request", {
+              sessionId: turn.sessionId,
+              turnId: turn.turnId,
+              blockId: slot.id,
+              requestId: event.requestId,
+              ...(event.title !== undefined ? { title: event.title } : {}),
+              ...(event.description !== undefined ? { description: event.description } : {}),
+              schema: event.schema,
+            });
+          }
+          break;
+        }
         case "usage": {
           const agentId = store.turns.get(turn.turnId)?.agentId ?? null;
           // `byModel` is the split the harness went to the trouble of
@@ -422,8 +463,30 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       return harness.answerQuestion(requestId, answers);
     },
 
-    listCommands(sessionId?: string): SlashCommand[] {
+    answerElicitation(requestId: string, answers: Record<string, unknown> | null): boolean {
+      const harness = awaiting.get(requestId);
+      // `answerElicitation` is optional on `Harness` — a backend that never
+      // emits the event has nothing to answer, which reads the same to the
+      // caller as a request whose turn has already ended.
+      if (!harness?.answerElicitation) return false;
+      awaiting.delete(requestId);
+      return harness.answerElicitation(requestId, answers);
+    },
+
+    /**
+     * The commands of the agent that will actually receive the message — the
+     * lead unless the caller names another (R14). Falling back to "the first
+     * harness whose key starts with this session" would, in a round-table
+     * session, offer the user Codex's `/review` while their message goes to a
+     * Claude agent that has never heard of it.
+     */
+    listCommands(sessionId?: string, agentId?: string | null): SlashCommand[] {
       if (!sessionId) return [];
+      const wanted = agentId ?? store.sessions.get(sessionId)?.leadAgentId ?? null;
+      if (wanted) {
+        const harness = harnesses.get(agentKey(sessionId, wanted));
+        if (harness) return harness.listCommands();
+      }
       const prefix = `${sessionId}:`;
       for (const [key, harness] of harnesses) {
         if (key.startsWith(prefix)) return harness.listCommands();

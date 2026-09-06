@@ -599,3 +599,82 @@ describe("the echo double", () => {
     engine.dispose();
   });
 });
+
+/**
+ * The default `makeHarness` — the one the app actually runs with. Every other
+ * test in this file injects a fake, so this is the only place that proves
+ * `agent.backend` reaches `createHarnessForBackend` at all.
+ */
+describe("the default harness factory", () => {
+  const ENV_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"];
+
+  it("runs an `api` agent on the API harness — not on Claude", async ({ skip }) => {
+    // A developer with a real key in the environment would spend money here:
+    // with one present the harness would reach the provider instead of
+    // stopping at the missing key.
+    skip(
+      ENV_KEYS.some((name) => Boolean(process.env[name])),
+      "an API key is set in this environment; the no-key failure cannot be observed",
+    );
+
+    // The proof is the *shape* of the failure. Before the registry, an `api`
+    // agent either threw "capygen has no harness for the api backend" or
+    // silently answered as Claude; now it reaches capygen's own loop and stops
+    // where it should — at the missing key (R21).
+    const context = createIpcContext({
+      store,
+      broadcast: (channel, payload) => events.push({ channel, payload }),
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      pickDirectory: async () => path.join(dir, "project"),
+      appInfo: () => ({
+        name: "capygen",
+        version: "0.1.0",
+        electron: "44.2.0",
+        chrome: "1",
+        node: "24.20.0",
+        platform: "win32",
+        userDataDir: dir,
+        logFile: path.join(dir, "logs", "capygen-desktop.log"),
+        dbFile: store.db.file,
+      }),
+    });
+    try {
+      const project = store.projects.upsertByPath({ path: path.join(dir, "project") });
+      const created = store.sessions.create({
+        projectId: project.id,
+        mode: "solo",
+        agents: [
+          {
+            name: "api",
+            backend: "api",
+            model: "claude-sonnet-4-5",
+            role: "lead",
+            config: { api: { provider: "anthropic", model: "claude-sonnet-4-5" } },
+          },
+        ],
+      });
+      const agentTurn = store.turns.create({
+        sessionId: created.session.id,
+        agentId: created.session.leadAgentId,
+        role: "agent",
+        status: "streaming",
+      });
+      context.engine.send({
+        sessionId: created.session.id,
+        turnId: agentTurn.id,
+        agentId: created.session.leadAgentId,
+        text: "hi",
+      });
+
+      await vi.waitFor(() => expect(store.turns.get(agentTurn.id)?.status).toBe("error"));
+      const errors = store.blocks
+        .listByTurn(agentTurn.id)
+        .filter((b): b is Extract<Block, { kind: "error" }> => b.kind === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]!.message).toMatch(/No API key for anthropic/);
+      expect(errors[0]!.message).toMatch(/Settings/);
+    } finally {
+      await context.dispose();
+    }
+  });
+});

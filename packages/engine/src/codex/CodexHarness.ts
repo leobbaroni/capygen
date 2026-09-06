@@ -36,7 +36,7 @@
  * | `thread/tokenUsage/updated` + `turn/completed` | `usage` event + `usage` block |
  * | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` | `permission` |
  * | `item/tool/requestUserInput` | `question` |
- * | `mcpServer/elicitation/request` | `elicitation` block (see the note on `answerElicitation`) |
+ * | `mcpServer/elicitation/request` | `elicitation` block + `elicitation` event |
  */
 import {
   newId,
@@ -1091,12 +1091,14 @@ export class CodexHarness implements Harness {
   }
 
   /**
-   * MCP `elicitation/create` relayed by Codex. The block renders (R32), but the
-   * answer cannot round-trip yet: `EngineEvent` has no elicitation variant and
-   * `Harness` no `answerElicitation`, both of which live in `harness.ts` (owned
-   * by another Phase 3 task). Until then the request is answered `decline` as
-   * soon as it is shown, which is the safe default, and `answerElicitation`
-   * below is the seam that makes it interactive with no change here.
+   * MCP `elicitation/create` relayed by Codex (R32).
+   *
+   * It travels as its own `elicitation` event — the same shape `permission`
+   * and `question` use — so the session runner learns the `requestId` the card
+   * is waiting on and `elicitation.answer` can route the user's form back here
+   * through `answerElicitation`. With no active turn nobody can be asked, so
+   * the request is declined rather than silently accepted (the R27 rule the
+   * approval path follows too).
    */
   private async askElicitation(params: CodexElicitationParams): Promise<unknown> {
     const turn = this.active;
@@ -1113,15 +1115,17 @@ export class CodexHarness implements Harness {
       answers: null,
       status: "pending",
     });
+    this.emit({
+      type: "elicitation",
+      requestId,
+      key,
+      title: params.serverName,
+      ...(params.message ? { description: params.message } : {}),
+      schema: params.requestedSchema ?? null,
+    });
 
     const answers = await new Promise<Record<string, unknown> | null>((resolve) => {
       this.pending.set(requestId, { kind: "elicitation", resolve });
-      // No `elicitation` event exists to carry `requestId` to the UI yet, so
-      // nothing can answer this promise; resolving it now keeps Codex moving
-      // instead of leaving the turn wedged behind a card nobody can fill in.
-      queueMicrotask(() => {
-        if (this.pending.delete(requestId)) resolve(null);
-      });
     });
 
     this.emitBlock(key, {
@@ -1154,7 +1158,7 @@ export class CodexHarness implements Harness {
     return true;
   }
 
-  /** Not part of `Harness` yet — see `askElicitation`. */
+  /** Resolve a pending `elicitation` event; `null` declines it. */
   answerElicitation(requestId: string, answers: Record<string, unknown> | null): boolean {
     const entry = this.pending.get(requestId);
     if (!entry || entry.kind !== "elicitation") return false;

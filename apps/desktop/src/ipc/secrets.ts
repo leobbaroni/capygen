@@ -78,6 +78,25 @@ export function createSafeStorageSecretsStore(deps: SafeStorageSecretsStoreDeps)
       return Boolean(readFile(filePath)[provider]);
     },
 
+    /**
+     * Decrypt, for the `api` harness alone (`ApiHarnessDeps.keys`). It never
+     * crosses IPC — `secrets.has` is the renderer's only read — and a failed
+     * decrypt returns null rather than throwing: on Windows DPAPI that means
+     * the file was written by another user account, which is "no key here",
+     * not a crash on every turn.
+     */
+    get(provider: ApiProvider): string | null {
+      const stored = readFile(filePath)[provider];
+      if (!stored) return null;
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      try {
+        return safeStorage.decryptString(Buffer.from(stored, "base64"));
+      } catch {
+        log?.warn(`[secrets] the stored ${provider} key could not be decrypted on this machine`);
+        return null;
+      }
+    },
+
     delete(provider: ApiProvider): void {
       const data = readFile(filePath);
       if (!(provider in data)) return;

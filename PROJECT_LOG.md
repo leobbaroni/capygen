@@ -403,13 +403,73 @@
 - `corepack pnpm typecheck` clean across all 5 packages; `corepack pnpm test` 441/441 (up from 358);
   `corepack pnpm build` clean. Screenshots: `e2e-out/cards.png`, `e2e-out/providers.png`.
 
+## 2026-09-06 — Phase 3 / C: harness layer integrated — Claude/Codex/API, widgets, cards
+
+- **The registry is now what picks the backend.** `createHarnessForBackend` gained the `api` case
+  (`packages/engine/src/index.ts`) and `SessionRunner`'s default `makeHarness` calls it with
+  `agent.backend` instead of always building a `ClaudeHarness`. Everything backend-specific that
+  needs the desktop is injected in that one place: the `api` key provider (`safeStorage` →
+  `SecretsStore.get`, main-process-only — `secrets.has` stays the whole renderer-facing read
+  surface, R21) and `loadHistory`, the SQLite transcript replay an `api` agent needs because it has
+  no backend session to resume (`apps/desktop/src/engine/history.ts`).
+- **Elicitation round-trips.** B1 and B2 both recorded the same blocker: `EngineEvent` had no
+  elicitation variant and `Harness` no `answerElicitation`, so `CodexHarness` declined every MCP
+  `elicitation/create` in a `queueMicrotask` the moment the card appeared. Added the event variant
+  and an **optional** `answerElicitation` (optional because only a backend that relays
+  `elicitation/create` ever emits the event); the runner routes it the way it routes permissions,
+  and `elicitation.answer` — which is addressed by `blockId`, not `requestId` — reads the id back
+  off the row. Interrupt/dispose still decline whatever is pending, so Codex is never left waiting.
+- **`harness.list` tells the truth.** Claude: `claude --version` plus a login signal (the CLI's
+  credentials file, existence only — never its contents — or `CLAUDE_CODE_OAUTH_TOKEN` /
+  `ANTHROPIC_API_KEY`). Codex: `account/read {refreshToken:true}` through a short-lived
+  `codex app-server`, which is the only check a dead token fails — `codex login status` printed
+  "Logged in using ChatGPT" on this machine while every model call 401'd (spike §3) — and the same
+  child returns `model/list`, so the picker offers Codex's own catalogue (`gpt-5.6-terra` &co).
+  API: a stored or env key, per provider. Results are cached 60 s and the renderer's bootstrap no
+  longer awaits them, because probing spawns a process and G1 budgets 3 s to a usable composer.
+- **Block parity is a contract, not a checklist.** `BACKEND_BLOCK_PARITY` in `@capygen/shared`
+  lists, per backend, the kinds it can emit and — for every other kind — the reason it cannot.
+  `apps/desktop/test/blockParity.test.ts` runs a recorded stream per backend through the real
+  runner, handlers and SQLite (including `maybeOpenWidget`'s detect→open path and the
+  permission/question/elicitation round-trips); `apps/renderer/src/components/blocks/blockParity.test.tsx`
+  renders every kind through `BlockRenderer`. Adding a kind to `BLOCK_KINDS` fails both suites
+  until the table has an answer for all three backends.
+- **Two real bugs the integration surfaced.** (1) The built app was resolving the *wrong Codex*:
+  `resolveBundledCodex` walks up for `node_modules/@openai/codex-sdk`, and from
+  `apps/desktop/dist/main.cjs` that walk never passes `packages/engine/node_modules` — so the
+  bundle silently fell back to the machine's installed 0.139.0, a different protocol version on
+  which the approval never fires. Fixed by making `@openai/codex-sdk` a direct dependency of
+  `apps/desktop`. (2) Codex's Windows sandbox denies an *approved* command whose `cwd` is an 8.3
+  short name, and `os.tmpdir()` returns exactly that here; `longPath()` now normalises
+  `--project`/`CAPYGEN_PROJECT_DIR` and the folder picker's answer.
+- **Slash menu refresh.** A backend only reports its commands once it is running (Claude's arrive
+  with `system/init`), so the list fetched at `openSession` was built-ins only. The store refetches
+  when a turn ends, and `chat.listCommands` now takes an `agentId` so a round-table session offers
+  the menu of the agent that will actually receive the message.
+- Gate, all re-run on the final tree: `corepack pnpm typecheck` clean across 5 packages +
+  `tests/tsconfig.json`; `corepack pnpm test` **494/494** in 32 files (441 before); `corepack pnpm
+  build` clean; `corepack pnpm exec playwright test` **11 passed, 1 skipped** in 2.5 m — the skip is
+  the API-model e2e, which names the missing key. New screenshots: `e2e-out/codex-pong.png`,
+  `codex-permission.png`, `codex-allowed.png`, `slash-menu.png`.
+
 ## Open / next
 - R2 (tray / close-to-tray) has no e2e — Playwright cannot drive the Windows tray; it is unit-tested
   in `apps/desktop/test/win.test.ts`.
-- Permission cards round-trip in unit tests only. A live proof would depend on the user's own
-  `~/.claude` allowlist not pre-approving the tool, so it is left for Phase 3's harness matrix.
+- Permission cards now have a **live** proof, on Codex rather than Claude: `harnesses.spec.ts` sets
+  the agent's `approvalPolicy: "untrusted"` and answers the card, which sidesteps the user's
+  `~/.claude` allowlist entirely. A live Claude permission is still machine-dependent.
 - `tests/e2e/skeleton.spec.ts` runs on every `pnpm e2e` and spends real tokens. If that becomes
   annoying in CI, gate it behind a tag rather than deleting it — it is the only proof the app talks
   to a real model.
 - Sub-agent routing policy is a stub (`ClaudeHarness` `routeSubagent` dep, fail-open) — Phase 4 fills it in.
 - Round-table queuing: the runner allows one in-flight turn per session; Phase 4 adds the dispatcher.
+- The `api` backend has never made a real call from this machine (no key). Everything below the
+  provider client is covered by mocked-provider tests plus a desktop test that proves an `api` turn
+  reaches capygen's own loop and stops at the missing key; the fourth e2e unskips the moment a key
+  is stored in Settings ▸ API keys.
+- `api` model ids in the picker are a curated list (the ones `api/pricing.ts` can price), not a
+  catalogue call. Prices stay `[assumed 2026-09-06]` until a key exists to check an invoice against.
+- Codex sub-agents (`collabAgentToolCall`, `subAgentActivity`) still render nothing; the parity
+  table records that as inapplicable rather than missing, and Phase 4 owns it.
+- `harness.list`'s Codex probe spawns a child every 60 s of use. If that ever shows up in a profile,
+  the fix is a longer TTL plus an explicit refresh button in Settings ▸ Harnesses, not a weaker check.

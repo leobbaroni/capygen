@@ -13,6 +13,7 @@
  *   `turn`       → `chat.turnStatus`
  *   `permission` → `permission.request` + the pending `canUseTool` promise
  *   `question`   → `question.request` (AskUserQuestion)
+ *   `elicitation`→ `elicitation.request` (MCP `elicitation/create`)
  *   `usage`      → one `usage_events` row (+ a `usage` block)
  *   `session`    → backend session id / model / command list for the caches
  */
@@ -67,6 +68,23 @@ export type EngineEvent =
       requestId: string;
       key: BlockKey;
       questions: Question[];
+    }
+  /**
+   * A structured input request that is neither a permission prompt nor
+   * `AskUserQuestion` — MCP `elicitation/create`, relayed by whichever backend
+   * hosts the server (R32). Answer with `Harness.answerElicitation`.
+   *
+   * The block itself is emitted by the harness as usual (`kind:"elicitation"`);
+   * this event exists only so the runner can learn the `requestId` that block
+   * is waiting on, exactly as `permission`/`question` do.
+   */
+  | {
+      type: "elicitation";
+      requestId: string;
+      key: BlockKey;
+      title?: string;
+      description?: string;
+      schema: unknown;
     }
   /** One accounting row. `byModel` includes sub-agent models (spike §6). */
   | {
@@ -156,6 +174,16 @@ export interface Harness {
   answerPermission(requestId: string, answer: PermissionAnswer): boolean;
   /** Resolve a pending `question` event with `question text → option label`. */
   answerQuestion(requestId: string, answers: Record<string, string>): boolean;
+  /**
+   * Resolve a pending `elicitation` event; `null` means declined/cancelled.
+   *
+   * Optional, and deliberately so: only a backend that relays MCP
+   * `elicitation/create` ever emits the matching event (Codex today), and a
+   * harness that never emits one has nothing to answer. The runner calls it
+   * with `?.` and treats a missing method as "not delivered", which is the
+   * same answer a stale request gets.
+   */
+  answerElicitation?(requestId: string, answers: Record<string, unknown> | null): boolean;
   /** The backend session id to store for `resume`, once known. */
   backendSessionId(): string | null;
   dispose(): Promise<void>;

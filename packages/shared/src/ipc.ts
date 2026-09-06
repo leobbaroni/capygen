@@ -139,8 +139,17 @@ export const INVOKE_CHANNELS = {
     z.object({ userTurnId: z.string(), agentTurnId: z.string() }),
   ),
   "chat.interrupt": channel(z.object({ sessionId: z.string().min(1) }), OkSchema),
+  /**
+   * Built-ins plus the backend's own commands/skills/plugins (R14). Scoped to
+   * the agent that will receive the message — the session's lead unless
+   * `agentId` names another — because in a round-table session two agents on
+   * different backends offer different menus.
+   */
   "chat.listCommands": channel(
-    z.object({ sessionId: z.string().min(1).optional() }),
+    z.object({
+      sessionId: z.string().min(1).optional(),
+      agentId: z.string().min(1).optional(),
+    }),
     z.array(SlashCommandSchema),
   ),
 

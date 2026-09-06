@@ -96,6 +96,22 @@ function blocks(
     .map((e) => ({ key: e.key, patch: e.patch as unknown as Record<string, unknown> }));
 }
 
+/**
+ * Poll until `read` returns something. Used where a *server request* has to
+ * travel to the harness before the test can react to it: the fake server's
+ * `ask()` deliberately does not resolve until the harness answers, so there is
+ * no promise to await for "the event has been emitted".
+ */
+async function waitFor<T>(read: () => T | undefined, timeoutMs = 2_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = read();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error("waitFor timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 /** The last patch emitted for a block key — blocks are upserted, not appended. */
 function latest(events: EngineEvent[], kind: string): Record<string, unknown> | undefined {
   const all = blocks(events, kind);
@@ -817,30 +833,89 @@ describe("CodexHarness — user input and elicitation server requests", () => {
     await harness.dispose();
   });
 
-  it("shows an MCP elicitation as a card and declines it (no answer channel yet)", async () => {
+  const ELICITATION = {
+    serverName: "notion",
+    mode: "form",
+    message: "Which workspace?",
+    requestedSchema: { type: "object", properties: { workspace: { type: "string" } } },
+    elicitationId: "el_1",
+  };
+
+  it("raises an elicitation event and sends the user's form back as accept", async () => {
     const { server, harness } = rig(TEXT_THREAD, TEXT_TURN);
     const turn = drain(harness.send({ turnId: "trn_1", text: "elicit" }));
     await server.waitForRequest("turn/start");
 
-    const answered = await server.ask("mcpServer/elicitation/request", {
+    const asked = server.ask("mcpServer/elicitation/request", {
       threadId: TEXT_THREAD.thread.id,
       turnId: TEXT_TURN.turn.id,
-      serverName: "notion",
-      mode: "form",
-      message: "Which workspace?",
-      requestedSchema: { type: "object", properties: { workspace: { type: "string" } } },
-      elicitationId: "el_1",
+      ...ELICITATION,
     });
-    expect(answered).toEqual({ action: "decline", content: null, _meta: null });
 
-    const card = latest(turn.events, "elicitation")!;
-    expect(card).toMatchObject({
+    // The event is what carries the requestId to the UI; without it the card
+    // would render but `elicitation.answer` would have nothing to address.
+    const request = await waitFor(() =>
+      turn.events.find(
+        (e): e is Extract<EngineEvent, { type: "elicitation" }> => e.type === "elicitation",
+      ),
+    );
+    expect(request).toMatchObject({
       title: "notion",
       description: "Which workspace?",
-      status: "declined",
+      schema: ELICITATION.requestedSchema,
+    });
+    expect(latest(turn.events, "elicitation")).toMatchObject({
+      status: "pending",
       answers: null,
     });
+
+    expect(harness.answerElicitation(request.requestId, { workspace: "capygen" })).toBe(true);
+    expect(await asked).toEqual({
+      action: "accept",
+      content: { workspace: "capygen" },
+      _meta: null,
+    });
+    expect(latest(turn.events, "elicitation")).toMatchObject({
+      status: "accepted",
+      answers: { workspace: "capygen" },
+    });
     await harness.interrupt();
+    await turn.done;
+    await harness.dispose();
+  });
+
+  it("declines when the card is cancelled, and when the turn ends first", async () => {
+    const { server, harness } = rig(TEXT_THREAD, TEXT_TURN);
+    const turn = drain(harness.send({ turnId: "trn_1", text: "elicit" }));
+    await server.waitForRequest("turn/start");
+
+    const cancelled = server.ask("mcpServer/elicitation/request", {
+      threadId: TEXT_THREAD.thread.id,
+      turnId: TEXT_TURN.turn.id,
+      ...ELICITATION,
+    });
+    const request = await waitFor(() =>
+      turn.events.find(
+        (e): e is Extract<EngineEvent, { type: "elicitation" }> => e.type === "elicitation",
+      ),
+    );
+    expect(harness.answerElicitation(request.requestId, null)).toBe(true);
+    expect(await cancelled).toEqual({ action: "decline", content: null, _meta: null });
+    // An id nobody is waiting on is refused rather than silently accepted.
+    expect(harness.answerElicitation(request.requestId, { workspace: "x" })).toBe(false);
+
+    // Interrupting resolves whatever is still pending, so Codex is never left
+    // holding a request capygen can no longer answer.
+    const orphan = server.ask("mcpServer/elicitation/request", {
+      threadId: TEXT_THREAD.thread.id,
+      turnId: TEXT_TURN.turn.id,
+      ...ELICITATION,
+    });
+    await waitFor(() =>
+      turn.events.filter((e) => e.type === "elicitation").length === 2 ? true : undefined,
+    );
+    await harness.interrupt();
+    expect(await orphan).toEqual({ action: "decline", content: null, _meta: null });
     await turn.done;
     await harness.dispose();
   });

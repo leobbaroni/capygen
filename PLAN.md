@@ -88,11 +88,37 @@ Every workflow `agent()` call sets `model` explicitly; Fable does no subagent wo
       Windows tray. Permission cards round-trip in unit tests (harness + runner + handlers), not
       live; a live proof needs a tool the user's own `~/.claude` allowlist does not pre-approve,
       which would make the spec machine-dependent.
-- [ ] Phase 3: Harness layer complete
+- [x] Phase 3: Harness layer complete
       Done when: fixture tests pass for all three harnesses (Claude, Codex, API model with a
       mocked API) rendering every block type; live smoke: Codex answers; slash menu lists
       built-ins + Claude skills/plugins; permission and AskUserQuestion cards round-trip;
       usage meter updates per turn.
+      **Done (2026-09-06).** `createHarnessForBackend` is the registry `SessionRunner` builds
+      every agent through, so the composer's backend/model choice is what decides which backend
+      runs. Block parity is a table in `@capygen/shared` (`BACKEND_BLOCK_PARITY`) that two suites
+      read: `apps/desktop/test/blockParity.test.ts` (recorded stream -> real runner -> persisted
+      rows, per backend) and `apps/renderer/src/components/blocks/blockParity.test.tsx` (RTL, one
+      card per kind). Live: `tests/e2e/harnesses.spec.ts` -- Codex picked in the composer answers
+      "pong" with a usage line (`e2e-out/codex-pong.png`), a Codex shell approval renders a
+      permission card whose Allow runs the command (`e2e-out/codex-permission.png`,
+      `e2e-out/codex-allowed.png`), and `/` lists Built-ins plus this machine's real
+      `/cockpit:*` plugin commands (`e2e-out/slash-menu.png`). Gate: typecheck clean,
+      `pnpm test` 494/494, `pnpm build` clean, `pnpm e2e` 11 passed + 1 skipped.
+      Deviations, all recorded rather than hidden:
+      * **API backend is not live-proven.** This machine has no Anthropic/OpenAI/OpenRouter key,
+        so the fourth e2e skips with the reason. It is covered by mocked-provider tests
+        (`packages/engine/test/api*.test.ts`) and by a desktop test that drives the *default*
+        harness factory and asserts an `api` turn fails at "No API key for anthropic" -- i.e. it
+        reached capygen's own loop, not Claude.
+      * **Elicitation now round-trips** (Codex `mcpServer/elicitation/request`). That needed an
+        `elicitation` variant on `EngineEvent` and an optional `Harness.answerElicitation`, which
+        the Phase 3 sub-tasks had each recorded as blocked; the previous auto-decline is gone.
+      * **Sub-agent blocks are Claude-only** and Codex/API say so in the parity table
+        (`capabilities().subagents === false`); Phase 4 owns them.
+      * `harness.list` probes for real -- `claude --version` + a login file, Codex
+        `account/read {refreshToken:true}` (the only check a dead token fails), a stored/env API
+        key -- and is deliberately **not** awaited by the renderer's bootstrap, so the G1 3 s
+        landing budget survives the Codex child spawn.
       Steps: `Harness` interface (start, send, interrupt, resume, listCommands, capabilities);
       Codex app-server client; API-model agent loop + local tool runtime + MCP client;
       permission modes; block renderer parity with reference `components/`; usage accounting;
