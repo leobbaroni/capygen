@@ -1,4 +1,4 @@
-# capygen — handoff (2026-09-07, end of Phase 8)
+# capygen — handoff (2026-09-07, Phase 9 in progress)
 
 Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied
@@ -92,9 +92,10 @@ No pushes were made; origin is not configured.
   review worker; isolated app test homes still have no login. API key never stored, so the `api`
   backend has never made a real call — the live e2e unskips when a key is set in Settings ▸ API
   keys. `api` model list is curated; prices `[assumed 2026-09-06]`.
-- Codex cannot receive `delegate_task` (app-server takes MCP servers only from `config.toml`);
-  cross-backend routing from a Codex lead falls open (ADR-0004). Option: register capygen's MCP
-  server in the isolated Codex config at session start.
+- Codex dynamic client-tool support is implemented and a bundled 0.153.4 loopback proof
+  confirms call/reply and tool restoration across process restart (202fe4d). Desktop
+  delegation wiring is in progress; live model choice remains unproved. The old claim
+  that config.toml is the only path was disproved; no personal config registration is needed.
 - Codex cost is estimated (tokens only from app-server); Codex sub-agent blocks carry no cost.
 - `harness.list` spawns a Codex probe child every 60 s of use; TTL/refresh button if it shows.
 - Dev-server preferences are unimplemented (no `GlobalSettings.devServers` yet); the inactive
@@ -174,3 +175,19 @@ e2e-out/mcp-root-review.log               5 focused files, 113 tests passed
 The native import e2e has one verified pass including restart/deduplication, unchanged source hash
 and the 380px screenshot. These
 checks preceded the final Phase 7–8 acceptance gate above. Packaged SDK smoke remains Phase 12 work, and Phase 11 live benchmark evidence awaits dedicated authenticated homes.
+
+
+## Phase 9 work in progress
+
+Reviewed commits on main: share bundle contract `5f72db8`, atomic share storage `c7f23fd`,
+Codex dynamic bridge `202fe4d`, informational MCP menu presentation `c5fbb85`.
+The independently verified local Hosts page is `da9e27a` (Phase 10 subtask only).
+No new phase is accepted. Codec/IPC/UI, runtime policies/members/approvals, session MCP
+catalogue integration, and Codex desktop delegation wiring remain in progress.
+
+Runtime policy design is ADR-0007; execution ownership/migration allocation is in
+`docs/plans/phase9.md`. ADR-0008 is a proposal for later dictation/extensions, not an
+accepted implementation. The current Windows machine enumerates an en-GB offline
+recognizer; microphone/accuracy tests remain pending. Font provenance is now documented
+from the embedded CC0 notice in `docs/font-provenance.md`; packaged asset verification
+remains Phase 12 work. Static PNG mascots remain the accepted asset behavior.

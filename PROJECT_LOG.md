@@ -2066,3 +2066,15 @@ in phase9-codex-bridge-test.log and phase9-codex-bridge-typecheck.log. Probe syn
 use only a loopback provider in owned homes; no remote model/auth. The initial conclusion
 that resume lost tools was disproved and corrected: the original set survives process restart.
 Live model choice, desktop delegation/persistence wiring and full phase gate remain pending.
+
+
+## Decisions and remaining work recorded — 2026-09-07
+
+ADR-0007 records Astra policy authority/precedence/grants/member boundaries after Opus
+review and follow-up corrections; implementation/proofs remain pending. The Phase 9 ledger
+allocates migrations 0009 sharing and 0010 local policies. ADR-0008 is explicitly a proposal
+for future dictation/extensions, awaiting Opus review. A read-only Windows recognizer probe
+returned MS-2057-80-DESK / en-GB; it never opened the microphone. Font metadata/hash was
+checked by Astra and Luna: the TTF carries CC0 - No Rights Reserved. Packaging preservation
+checks remain listed rather than claimed done. Handoff now distinguishes these partial
+results from accepted Phases 7–8 and corrects the obsolete Codex config-only claim.
