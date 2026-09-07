@@ -2038,3 +2038,31 @@ Tests 8 passed (8)
 Duration 2.50s
 ```
 Evidence: e2e-out/phase9-slashmenu-focused.log. Native renderer typecheck also passed.
+
+
+## Phase 9 Codex dynamic bridge review — 2026-09-07
+
+Opus implemented the typed bridge and fixed Astra review findings: one declaration/executor
+set, host permission gates, edited approval input, abort races for tool and output storage,
+strict frame identity/shape, generic errors, UTF-8 bounds and optional full-output reference.
+Astra inspected fixes and reproduced focused tests plus the actual bundled-CLI loopback probe.
+```text
+corepack pnpm exec vitest run packages/engine/test/codexDynamicTools.test.ts packages/engine/test/codexHarness.test.ts packages/engine/test/routing.test.ts
+Test Files 3 passed (3)
+Tests 95 passed (95)
+Duration 2.53s
+corepack pnpm --filter @capygen/engine typecheck
+$ tsc --noEmit
+probe:codex-dynamic-tools
+[ACCEPTED] control-no-dynamic-tools
+[ACCEPTED] dynamic-tools-experimental-api
+[ACCEPTED] resume-schema-tolerates-the-key
+[REJECTED] dynamic-tools-without-experimental-api
+[ACCEPTED] loopback-tool-call-and-resume
+```
+The rejection is the expected experimental-capability refusal. Five probe cases decided,
+exit 0. Full details: e2e-out/phase9-codex-dynamic-probe.json and .log; focused tests/types
+in phase9-codex-bridge-test.log and phase9-codex-bridge-typecheck.log. Probe synthetic turns
+use only a loopback provider in owned homes; no remote model/auth. The initial conclusion
+that resume lost tools was disproved and corrected: the original set survives process restart.
+Live model choice, desktop delegation/persistence wiring and full phase gate remain pending.

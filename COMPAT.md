@@ -601,3 +601,27 @@ is idempotent, conflicting content is refused. Deletion removes the artifact ide
 re-import then creates a fresh session. Comment identities are session-scoped.
 Shared artifacts have no agents/backend resume identity. Native continuation accepts
 only native-transcript sources; sharing needs its own fresh-continuation reader.
+
+
+## Codex dynamic client tools — pinned 0.153.4
+
+`thread/start.dynamicTools` accepts typed function declarations only with
+`initialize.capabilities.experimentalApi=true`. Calls arrive as `item/tool/call` with
+threadId, turnId, callId, tool, nullable namespace and object arguments. Replies use
+`{contentItems:[{type:"inputText",text}],success}`. The harness owns identity/duplicate/
+permission/cancellation checks; registered executors must validate their input schema.
+User-edited approval input replaces model input. Dynamic client tools run in capygen,
+so native Codex sandbox/approval settings are not their authorization boundary.
+
+A real bundled-binary loopback probe proves start, call/reply and restoration of the
+original tool set on same-process and fresh-process resume. `ThreadResumeParams` has no
+dynamicTools field: resume preserves but cannot change that set. No remote model or
+credentials were used; synthetic loopback responses selected the calls. This proves
+protocol routing, not live model choice. Removed local executors refuse old names;
+new declarations need a fresh thread. SessionRunner wiring remains pending.
+
+Dynamic results have a 64 KiB UTF-8 model budget including the stub. The optional
+storeDynamicToolOutput callback retains the full value and returns its reference;
+unwired/failed storage is explicitly reported as unavailable. Both tool and storage
+callbacks race cancellation, including callbacks that ignore abort. Desktop persistence
+wiring is needed before the shipping path can promise retained output references.

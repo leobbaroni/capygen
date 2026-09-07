@@ -14,7 +14,8 @@
     "live:codex": "tsx scripts/live-codex.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "live:api": "tsx scripts/live-api.ts"
+    "live:api": "tsx scripts/live-api.ts",
+    "probe:codex-dynamic-tools": "tsx scripts/probe-codex-dynamic-tools.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.261",

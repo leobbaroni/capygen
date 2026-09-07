@@ -78,6 +78,12 @@ export interface CodexAppServerClientOptions extends ResolveCodexBinaryOptions {
   /** Default per-request deadline. */
   requestTimeoutMs?: number;
   clientInfo?: CodexClientInfo;
+  /**
+   * `InitializeCapabilities` for the handshake. Defaults to the app's own
+   * `{experimentalApi: true, requestAttestation: false}`; a probe overrides it
+   * to find out which fields the binary gates behind `experimentalApi`.
+   */
+  capabilities?: { experimentalApi: boolean; requestAttestation: boolean };
   /** Called when the child exits, whether or not capygen asked it to. */
   onExit?: (info: CodexExitInfo) => void;
 }
@@ -240,7 +246,10 @@ export class CodexAppServerClient {
     };
     const result = (await this.request(CODEX_METHODS.initialize, {
       clientInfo,
-      capabilities: { experimentalApi: true, requestAttestation: false },
+      capabilities: this.options.capabilities ?? {
+        experimentalApi: true,
+        requestAttestation: false,
+      },
     })) as CodexInitializeResponse;
     this.notify(CODEX_METHODS.initialized);
     return result;

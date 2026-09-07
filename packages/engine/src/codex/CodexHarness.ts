@@ -43,6 +43,7 @@
 import {
   newId,
   type Backend,
+  type PermissionMode,
   type PermissionRequest,
   type Question,
   type SlashCommand,
@@ -51,7 +52,7 @@ import {
   type UsageTotals,
 } from "@capygen/shared";
 import { AsyncQueue } from "../asyncQueue.js";
-import type { EnvRecord } from "../env.js";
+import { cleanEnv, type EnvRecord } from "../env.js";
 import {
   type BlockPatch,
   type EngineEvent,
@@ -101,9 +102,15 @@ import {
   type CodexTurnPlanUpdatedNotification,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
+  type CodexDynamicToolCallOutputContentItem,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
+  type CodexDynamicToolSpec,
   type CodexUserInput,
   type CodexUserInputParams,
 } from "./protocol.js";
+import { gateFor, gateDenialMessage } from "../tools/registry.js";
+import { type ToolContext, type ToolDefinition } from "../tools/types.js";
 
 export interface HarnessLogger {
   info: (...args: unknown[]) => void;
@@ -131,11 +138,56 @@ export interface CodexHarnessDeps {
   compactGraceMs?: number;
   /** Per-request deadline for ordinary JSON-RPC calls. */
   requestTimeoutMs?: number;
+  /**
+   * Tools capygen hosts and lends to Codex for this thread (Phase 9
+   * prerequisite; ADR-0004's missing `delegate_task` path for the `codex`
+   * backend).
+   *
+   * The shape is the same `ToolDefinition` the `api` backend's registry uses,
+   * so `routing/delegate.ts`'s `delegateTaskTool()` can be handed straight in
+   * without a second adapter. They are declared **once**, on `thread/start`
+   * (`ThreadStartParams.dynamicTools`) — the tool list is part of the request
+   * shape the provider caches on (SPEC R24), and the protocol offers no
+   * per-turn override anyway.
+   *
+   * Absent or empty means the thread is started exactly as it is today and
+   * every `item/tool/call` is refused, so an agent with no delegation rule
+   * pays nothing for this existing.
+   */
+  dynamicTools?: readonly ToolDefinition[];
+  /**
+   * Persist a dynamic tool's **full** output and return an opaque reference the
+   * transcript can retrieve it by (SPEC R25).
+   *
+   * A result over the byte cap is stubbed before it reaches the model, and R25
+   * requires the original to remain reachable rather than be dropped. capygen's
+   * store lives in the desktop process, so the harness takes it as a callback
+   * instead of reaching for one.
+   *
+   * Returning `null`, or throwing, means "not saved" — the stub then says the
+   * output is unavailable. Left unwired (tests, older callers) the stub says
+   * the output was not retained. Neither ever claims a reference that does not
+   * exist.
+   *
+   * It is raced against the call's abort signal, so a store that hangs cannot
+   * hold the reply open and one that settles after a cancellation is ignored.
+   */
+  storeDynamicToolOutput?: (info: {
+    callId: string;
+    toolName: string;
+    output: string;
+  }) => Promise<string | null> | string | null;
 }
 
 export const DEFAULT_MAX_TOOL_OUTPUT_CHARS = 64 * 1024;
 const DEFAULT_INTERRUPT_GRACE_MS = 5_000;
 const DEFAULT_COMPACT_GRACE_MS = 60_000;
+/** How long `dispose()` waits for aborted dynamic-tool calls to answer. */
+const DYNAMIC_CALL_DRAIN_MS = 1_000;
+/** SPEC R25's ceiling on a dynamic-tool result, in UTF-8 bytes. */
+const DYNAMIC_RESULT_MAX_BYTES = 64 * 1024;
+/** A refusal is one sentence; the cap only exists so nothing can grow one. */
+const DYNAMIC_FAILURE_MAX_BYTES = 1_024;
 /** `turn/start` answers as soon as the turn is accepted, not when it finishes. */
 const TURN_START_TIMEOUT_MS = 120_000;
 /** Discovery must never hold a turn: it is decoration on the slash menu. */
@@ -189,6 +241,20 @@ interface ActiveTurn {
    *  id because that is the identifier every Codex item referencing a
    *  sub-agent shares). */
   subagents: Map<string, { name: string; description: string; model: string | null }>;
+  /**
+   * `callId` → the dynamic-tool call it named, for the turn it named.
+   *
+   * Codex mints one `callId` per model tool call, so a second frame carrying a
+   * `callId` this turn has already seen is a retransmission, not a second call.
+   * Re-running it would spend another sub-agent's tokens for one model
+   * decision, so the entry survives the call completing: `running` refuses the
+   * duplicate while the first is in flight, `settled` refuses it afterwards.
+   * The map dies with the turn, which is the only scope a `callId` has.
+   */
+  dynamicCalls: Map<
+    string,
+    { state: "running" | "settled"; abort: AbortController; done: Promise<void> }
+  >;
   /** `last` from the most recent `thread/tokenUsage/updated` for this turn. */
   usage: CodexTokenUsageBreakdown | null;
   /** Fatal `error` notification text, used when `turn/completed` says failed. */
@@ -241,6 +307,17 @@ export class CodexHarness implements Harness {
   private threadUsage: CodexTokenUsageBreakdown | null = null;
   private approvalPolicy = "on-request";
   private sandbox = "workspace-write";
+  /**
+   * Whether the *current* thread was actually started with capygen's tools.
+   *
+   * Not the same question as "were any configured": a `thread/start` that was
+   * refused must not leave the harness believing it owns tools the thread never
+   * heard of. A *resumed* thread does keep the set it was started with (proven
+   * against the pinned binary, see `startThread`), so this stays true there.
+   */
+  private dynamicToolsDeclared = false;
+  /** name → definition, built once per thread from what was actually declared. */
+  private dynamicToolsByName = new Map<string, ToolDefinition>();
 
   private active: ActiveTurn | null = null;
   private readonly pending = new Map<string, PendingAnswer>();
@@ -319,6 +396,7 @@ export class CodexHarness implements Harness {
       items: new Map(),
       streamed: new Map(),
       subagents: new Map(),
+      dynamicCalls: new Map(),
       usage: null,
       fatal: null,
       settled: false,
@@ -541,12 +619,36 @@ export class CodexHarness implements Harness {
       ...(agent.promptAddition ? { developerInstructions: agent.promptAddition } : {}),
     };
 
+    const tools = this.validatedDynamicTools();
+    const declared = this.dynamicToolSpecs(tools);
+
     if (this.threadId) {
       try {
         const resumed = await this.client!.request<CodexThreadStartResponse>(
           CODEX_METHODS.threadResume,
           { threadId: this.threadId, ...base, excludeTurns: true },
         );
+        // `ThreadResumeParams` has no `dynamicTools` field (schema v0.153.4),
+        // so a resume can neither declare nor change a tool set — but it does
+        // not lose one either. `scripts/probe-codex-dynamic-tools.ts` proves
+        // against the pinned binary that the set declared at `thread/start` is
+        // persisted in the rollout and restored on resume, and that a *fresh
+        // app-server process* still routes `item/tool/call` back to the client
+        // for it. So the executors stay registered here: switching them off
+        // would refuse a call the thread is entitled to make.
+        //
+        // What is genuinely lost is the ability to *change* the set. If this
+        // agent's configured tools differ from the ones its thread was started
+        // with, the thread keeps the old ones and a call for a name capygen no
+        // longer hosts is refused as `unknown_tool`.
+        this.setDynamicTools(tools.length > 0, tools);
+        if (declared.length > 0) {
+          this.log.info(
+            `[codex] resumed thread ${this.threadId}: its dynamic tool set is whatever ` +
+              "thread/start declared and cannot be changed on resume " +
+              "(ThreadResumeParams has no dynamicTools field)",
+          );
+        }
         this.applyThreadResponse(resumed, approvalPolicy, sandbox);
         return;
       } catch (err) {
@@ -565,9 +667,72 @@ export class CodexHarness implements Harness {
 
     const started = await this.client!.request<CodexThreadStartResponse>(
       CODEX_METHODS.threadStart,
-      base,
+      declared.length > 0 ? { ...base, dynamicTools: declared } : base,
     );
+    // Only after `thread/start` resolved: a rejected start (an app-server that
+    // does not know the field, an auth failure) must not leave the harness
+    // believing it owns tools the thread never heard of.
+    this.setDynamicTools(declared.length > 0, tools);
     this.applyThreadResponse(started, approvalPolicy, sandbox);
+  }
+
+  /**
+   * The one validated tool set, and the only source for both the specs Codex is
+   * sent and the executors a call resolves against.
+   *
+   * [review] These used to be derived separately — the spec list kept the
+   * *first* definition of a duplicated name and the executor map kept the
+   * *last*. Codex would then have been advertised one tool's JSON Schema and
+   * capygen would have run a different tool's code against arguments validated
+   * for the other one. Deduplicating once, here, is what makes that
+   * unrepresentable rather than merely unlikely.
+   */
+  private validatedDynamicTools(): ToolDefinition[] {
+    const kept: ToolDefinition[] = [];
+    const seen = new Set<string>();
+    for (const tool of this.deps.dynamicTools ?? []) {
+      const name = typeof tool?.name === "string" ? tool.name : "";
+      if (!name || typeof tool.run !== "function") {
+        this.log.warn("[codex] a dynamic tool without a name or a runner was ignored");
+        continue;
+      }
+      if (seen.has(name)) {
+        this.log.warn(`[codex] duplicate dynamic tool ${safeLabel(name)} ignored (first wins)`);
+        continue;
+      }
+      seen.add(name);
+      kept.push(tool);
+    }
+    return kept;
+  }
+
+  /** `thread/start`'s `dynamicTools`, derived from the validated set. */
+  private dynamicToolSpecs(tools: readonly ToolDefinition[]): CodexDynamicToolSpec[] {
+    return tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.parameters,
+    }));
+  }
+
+  private setDynamicTools(declared: boolean, tools: readonly ToolDefinition[]): void {
+    this.dynamicToolsDeclared = declared;
+    this.dynamicToolsByName = new Map(declared ? tools.map((tool) => [tool.name, tool]) : []);
+  }
+
+  /**
+   * Whether this thread can serve an `item/tool/call` for one of capygen's
+   * tools: true once a `thread/start` declared them, and true on a resumed
+   * thread, which keeps the set it was started with. False when `thread/start`
+   * was refused or nothing is configured.
+   *
+   * It does **not** promise the live set matches this agent's configuration: a
+   * resume cannot change a thread's tools, so a name added since that thread
+   * started is refused as `unknown_tool`.
+   */
+  dynamicToolsActive(): boolean {
+    return this.dynamicToolsDeclared && this.dynamicToolsByName.size > 0;
   }
 
   private applyThreadResponse(
@@ -1144,12 +1309,14 @@ export class CodexHarness implements Harness {
         return this.askUserInput(params as unknown as CodexUserInputParams);
       case CODEX_SERVER_REQUESTS.elicitation:
         return this.askElicitation(params as unknown as CodexElicitationParams);
+      case CODEX_SERVER_REQUESTS.dynamicToolCall:
+        return this.runDynamicTool(params as unknown as CodexDynamicToolCallParams);
       case CODEX_SERVER_REQUESTS.currentTime:
         return { currentTimeAt: Math.floor(Date.now() / 1000) };
       default:
-        // Everything else (permission-profile grants, dynamic client tools,
-        // token refresh, attestation) is declined with a JSON-RPC error rather
-        // than answered with a guess — Codex then applies its own default.
+        // Everything else (permission-profile grants, token refresh,
+        // attestation) is declined with a JSON-RPC error rather than answered
+        // with a guess — Codex then applies its own default.
         throw new Error(`capygen does not handle ${method} yet`);
     }
   }
@@ -1384,6 +1551,292 @@ export class CodexHarness implements Harness {
       : { action: "decline", content: null, _meta: null };
   }
 
+  // -------------------------------------------------------------------------
+  // server requests: dynamic (client-hosted) tools
+  // -------------------------------------------------------------------------
+
+  /**
+   * `item/tool/call` — the model called one of the tools capygen declared on
+   * `thread/start`.
+   *
+   * Three properties this has to hold, none of which the transport gives away:
+   *
+   *  - **It always answers.** Everything invalid is a `success: false` reply
+   *    carrying a short code, never a JSON-RPC error (which would tell Codex
+   *    the method is unimplemented and stop it routing calls here) and never a
+   *    silent drop (which would leave the app-server blocked forever). The
+   *    reply is bounded and generic: it names a code, not an exception message,
+   *    a stack, or an identifier the caller chose — a tool's error text can
+   *    carry a connection string, and this text goes straight into a model's
+   *    context.
+   *  - **Nothing runs without capygen's own permission gate.** Codex's sandbox
+   *    and `approvalPolicy` govern the tools *Codex* executes; a client-hosted
+   *    tool runs in capygen's process, outside all of it. `delegate_task` is
+   *    `permissionClass: "execute"` and spends another model's tokens, so it
+   *    goes through `gateFor` and the same permission card every other backend
+   *    raises (SPEC R27) — `plan` denies, `default` asks.
+   *  - **Cancellation is a deadline, not a request.** The tool is raced against
+   *    its abort signal, so a tool that ignores the signal cannot hold the
+   *    reply (and the app-server) open; its late result or rejection is
+   *    discarded rather than written after the fact.
+   *
+   * The identity checks are not defensive noise. `threadId` guards a frame
+   * belonging to another thread on the same process; `turnId` plus the active
+   * turn's own state guards a call that outlived, or was cancelled inside, the
+   * turn it was made in; `callId` guards re-executing one model decision twice,
+   * which for a delegating tool is a second sub-agent's bill.
+   */
+  private async runDynamicTool(
+    raw: CodexDynamicToolCallParams,
+  ): Promise<CodexDynamicToolCallResponse> {
+    const params = isRecord(raw) ? raw : ({} as Record<string, unknown>);
+
+    if (!this.dynamicToolsActive()) return dynamicFailure("unavailable");
+    if (!isNonEmptyString(params.threadId) || params.threadId !== this.threadId) {
+      this.log.warn("[codex] item/tool/call named a thread this harness does not own");
+      return dynamicFailure("wrong_thread");
+    }
+    const turn = this.active;
+    // `interrupted` matters as much as `settled`: `interrupt()` marks the turn
+    // and asks Codex to stop, but `turn/completed` arrives later. A call
+    // landing in that window must not start work the user already cancelled.
+    if (!turn || turn.settled || turn.interrupted) return dynamicFailure("no_active_turn");
+    // `codexTurnId` is null only between `turn/start` being sent and answered,
+    // and Codex cannot have called a tool inside that window.
+    if (!isNonEmptyString(params.turnId) || !turn.codexTurnId || params.turnId !== turn.codexTurnId) {
+      this.log.warn("[codex] item/tool/call named a turn that is not the active one");
+      return dynamicFailure("wrong_turn");
+    }
+    // capygen declares only `{type:"function"}` specs, so the pinned
+    // `namespace: string | null` may only arrive as `null` — or absent, which
+    // an older or partial serialiser may send for the same thing. Anything
+    // else (a number, `""`, an object) is a call for something never
+    // advertised, not a namespace to look up.
+    if (params.namespace !== null && params.namespace !== undefined) {
+      return dynamicFailure("namespace_unsupported");
+    }
+    if (!isNonEmptyString(params.callId)) return dynamicFailure("bad_call_id");
+    if (!isNonEmptyString(params.tool)) return dynamicFailure("unknown_tool");
+    const tool = this.dynamicToolsByName.get(params.tool);
+    // The name is not logged: it is caller-supplied, the code already says what
+    // happened, and capygen's own declared list is the useful half anyway.
+    if (!tool) return dynamicFailure("unknown_tool");
+    // `DynamicToolCallParams.arguments` is a required field and every tool
+    // capygen declares takes an object, so a missing or non-object value is a
+    // malformed frame rather than an empty argument list to guess at.
+    if (!isRecord(params.arguments)) return dynamicFailure("bad_arguments");
+    let input: Record<string, unknown> = params.arguments;
+    const callId = params.callId;
+    const existing = turn.dynamicCalls.get(callId);
+    if (existing) {
+      this.log.warn(`[codex] item/tool/call repeated a callId already ${existing.state}`);
+      return dynamicFailure("duplicate_call");
+    }
+
+    const abort = new AbortController();
+    let markDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      markDone = resolve;
+    });
+    turn.dynamicCalls.set(callId, { state: "running", abort, done });
+    const aborted = abortPromise(abort.signal);
+    const settleEntry = (): void => {
+      const entry = turn.dynamicCalls.get(callId);
+      if (entry) entry.state = "settled";
+      markDone();
+    };
+
+    try {
+      // R27's gate, before anything runs and before the card: `plan` refuses
+      // outright rather than offering a button that would break plan mode's
+      // contract, and `bypassPermissions` is the only mode that skips the card.
+      const mode: PermissionMode = this.agent?.permissionMode ?? "default";
+      const gate = gateFor(mode, tool.permissionClass);
+      if (gate === "deny") {
+        return dynamicFailure("denied_by_mode", gateDenialMessage(mode, tool));
+      }
+      if (gate === "ask") {
+        const requestId = newId("request");
+        const request: PermissionRequest = {
+          requestId,
+          toolName: tool.name,
+          input,
+          reason: `${tool.name} needs ${tool.permissionClass} access.`,
+          suggestions: [],
+        };
+        const answer = await Promise.race([
+          this.askPermission(`permission:dyn:${callId}`, requestId, request, {
+            title: "Tool permission",
+            description: "Codex asked capygen to run one of its own tools.",
+          }),
+          aborted,
+        ]);
+        // An interrupt while the card was open cancels the call itself, not
+        // just the question: `cancelPending` denies the card *and* aborts here.
+        if (answer === ABORTED || abort.signal.aborted) return dynamicFailure("cancelled");
+        if (answer.behavior !== "allow") return dynamicFailure("denied");
+        // The card may hand back edited arguments — the `api` backend already
+        // honours this, and a permission surface that shows an editable command
+        // and then runs the original would be worse than not offering the edit.
+        // A replacement that is not an object is refused outright rather than
+        // silently discarded back to the model's version: the user meant to
+        // change the call, and the tool (`delegate_task` validates its own
+        // arguments) would otherwise run on input nobody approved.
+        if (answer.updatedInput !== undefined) {
+          if (!isRecord(answer.updatedInput)) return dynamicFailure("bad_arguments");
+          input = answer.updatedInput;
+        }
+      }
+      if (abort.signal.aborted) return dynamicFailure("cancelled");
+
+      const maxOutputChars = this.deps.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS;
+      const ctx: ToolContext = {
+        cwd: this.session?.projectPath ?? process.cwd(),
+        signal: abort.signal,
+        env: cleanEnv(this.deps.env),
+        log: this.log,
+        maxOutputChars,
+        // No `ask` surface exists here: an interactive tool would have to raise
+        // its card inside a turn Codex is blocking on, and capygen declares no
+        // such tool. Refusing is honest; a silent empty answer would not be.
+        ask: () => Promise.reject(new Error("this tool cannot ask questions from a Codex dynamic call")),
+      };
+
+      // The whole point of the race: `signal` is advice a tool may ignore, and
+      // an ignored abort used to mean this promise — and the app-server's
+      // request — never settled. Whatever the tool eventually does is caught
+      // and dropped here, so a late rejection is never unhandled and a late
+      // result is never written after the reply.
+      const outcome = await Promise.race([
+        (async () => tool.run(input, ctx))().then(
+          (result) => ({ ok: true as const, result }),
+          (err: unknown) => ({ ok: false as const, err }),
+        ),
+        aborted,
+      ]);
+      if (outcome === ABORTED || abort.signal.aborted) return dynamicFailure("cancelled");
+      if (!outcome.ok) {
+        // Deliberately not `describe(outcome.err)`: a tool's message can carry
+        // a URL with credentials in it, and this string is both replied to the
+        // model and written to the log.
+        this.log.warn(`[codex] dynamic tool ${safeLabel(tool.name)} failed`);
+        return dynamicFailure("tool_error");
+      }
+      // A tool that already stubbed itself keeps the original in `fullOutput`
+      // (`ToolResult`); that is the value R25 is about, not the stub.
+      const produced =
+        typeof outcome.result.fullOutput === "string"
+          ? outcome.result.fullOutput
+          : (outcome.result.content ?? "");
+      // Raced like the tool itself, and for the same reason: persisting the
+      // output is somebody else's `await`. A store that never settles would
+      // otherwise hold `item/tool/call` open through an interrupt, and one that
+      // settles late would answer success for a call already cancelled. Its
+      // late result — or rejection — is caught here and dropped.
+      const bounded = await Promise.race([
+        this.boundDynamicOutput(callId, tool.name, produced).then(
+          (text) => ({ ok: true as const, text }),
+          () => ({ ok: false as const, text: "" }),
+        ),
+        aborted,
+      ]);
+      if (bounded === ABORTED || abort.signal.aborted) return dynamicFailure("cancelled");
+      if (!bounded.ok) return dynamicFailure("tool_error");
+      return {
+        contentItems: [{ type: "inputText", text: bounded.text }],
+        success: outcome.result.isError !== true,
+      };
+    } finally {
+      // Kept, not deleted: the entry is what refuses a retransmitted `callId`
+      // after the first call has finished.
+      settleEntry();
+    }
+  }
+
+  /**
+   * SPEC R25 for a dynamic-tool result: keep the model's copy under the byte
+   * cap, and keep the original reachable — or say plainly that it is not.
+   *
+   * The stub and its notice are budgeted **together**, so nothing above the cap
+   * ever reaches the model. Three honest endings, and no fourth that pretends:
+   * a reference when the store took it, "could not be saved" when the store
+   * refused or failed, "not retained" when there is no store wired at all.
+   */
+  private async boundDynamicOutput(
+    callId: string,
+    toolName: string,
+    output: string,
+  ): Promise<string> {
+    if (byteLength(output) <= DYNAMIC_RESULT_MAX_BYTES) return output;
+
+    let ending: string;
+    const store = this.deps.storeDynamicToolOutput;
+    if (!store) {
+      ending = "the full output was not retained and cannot be retrieved";
+    } else {
+      let reference: string | null = null;
+      try {
+        reference = await store({ callId, toolName, output });
+      } catch {
+        // Deliberately no message and no `describe(err)`: a store failure can
+        // name a path or a connection string, and this is written to the log.
+        this.log.warn("[codex] a dynamic tool's full output could not be stored");
+        reference = null;
+      }
+      ending =
+        typeof reference === "string" && reference.trim().length > 0
+          ? `the full output is saved as ${safeLabel(reference)}`
+          : "the full output could not be saved and is unavailable";
+    }
+    const notice = `\n… truncated by capygen at ${DYNAMIC_RESULT_MAX_BYTES} bytes; ${ending}`;
+    return `${headUtf8Bytes(output, DYNAMIC_RESULT_MAX_BYTES - byteLength(notice))}${notice}`;
+  }
+
+  /**
+   * Abort every dynamic-tool call still running on the active turn, so an
+   * interrupt, a settle or a dispose cannot leave a sub-agent billing against a
+   * turn nobody is watching. The call's own `await` resolves to a `success:
+   * false` answer, which is what unblocks the app-server.
+   */
+  private abortDynamicCalls(): Promise<void>[] {
+    const turn = this.active;
+    if (!turn) return [];
+    const running: Promise<void>[] = [];
+    for (const entry of turn.dynamicCalls.values()) {
+      if (entry.state !== "running") continue;
+      entry.abort.abort();
+      running.push(entry.done);
+    }
+    return running;
+  }
+
+  /**
+   * `dispose()`'s version: abort, then give the aborted calls a bounded moment
+   * to produce their `success: false` answer **before** the transport closes.
+   *
+   * Without the wait, a dispose that races an in-flight call closes the pipe
+   * first and the app-server is left blocked on a reply that can no longer be
+   * written. The deadline is what keeps a tool that ignores its abort signal
+   * from holding shutdown open.
+   */
+  private async drainDynamicCalls(): Promise<void> {
+    const running = this.abortDynamicCalls();
+    if (running.length === 0) return;
+    await Promise.race([
+      Promise.allSettled(running),
+      new Promise((resolve) => {
+        const timer = setTimeout(resolve, DYNAMIC_CALL_DRAIN_MS);
+        timer.unref?.();
+      }),
+    ]);
+    // One macrotask so the reply frames each call produced are actually written
+    // to the transport before the caller closes it.
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 0);
+      timer.unref?.();
+    });
+  }
+
   answerPermission(requestId: string, answer: PermissionAnswer): boolean {
     const entry = this.pending.get(requestId);
     if (!entry || entry.kind !== "permission") return false;
@@ -1492,6 +1945,9 @@ export class CodexHarness implements Harness {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Before `cancelPending`, and awaited: an in-flight dynamic tool has to get
+    // its refusal onto the wire while the transport is still open.
+    await this.drainDynamicCalls();
     this.cancelPending("closed");
     const turn = this.active;
     if (turn && !turn.settled) this.settle(turn, "interrupted");
@@ -1518,6 +1974,9 @@ export class CodexHarness implements Harness {
    * for the rest of the session and Codex waited forever for a decision.
    */
   private cancelPending(why: string): void {
+    // Dynamic-tool calls are outstanding server requests too — they just settle
+    // by aborting their tool rather than by answering a card.
+    this.abortDynamicCalls();
     for (const [requestId, entry] of [...this.pending]) {
       this.pending.delete(requestId);
       this.questionIds.delete(requestId);
@@ -1607,6 +2066,109 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The refusal vocabulary for `item/tool/call`.
+ *
+ * A fixed code plus a fixed sentence, and nothing else. The reply goes into a
+ * model's context and the log goes to disk, so neither may carry an exception
+ * message, a stack, or an identifier the caller chose — a tool error can quote
+ * a URL with a token in it, and a hostile `tool` name can be a megabyte long.
+ * The model is told what to do next; the operator reads the code.
+ */
+const DYNAMIC_FAILURES = {
+  unavailable: "capygen declared no client-hosted tools on this Codex thread.",
+  wrong_thread: "This call names a different Codex thread than the one capygen is running.",
+  no_active_turn: "The capygen turn this call belongs to has ended or was cancelled.",
+  wrong_turn: "This call names a Codex turn that is no longer the active one.",
+  namespace_unsupported: "capygen declares no tool namespace, so this call cannot be resolved.",
+  bad_call_id: "This call carries no usable callId, so capygen will not run it.",
+  unknown_tool: "capygen declares no tool under that name on this thread.",
+  bad_arguments: "The arguments must be a JSON object matching the tool's declared schema.",
+  duplicate_call: "capygen has already handled a call with this callId and will not run it twice.",
+  denied_by_mode: "capygen's current permission mode does not allow this tool.",
+  denied: "The user denied this tool call in capygen.",
+  cancelled: "This tool call was cancelled in capygen.",
+  tool_error: "The tool failed inside capygen. The failure was not reported here.",
+} as const;
+
+type DynamicFailureCode = keyof typeof DYNAMIC_FAILURES;
+
+/**
+ * A refused or failed `item/tool/call`. `success: false` with one text item is
+ * the schema's own way of saying "the tool ran and did not work" — the model
+ * reads the sentence and can pick another route.
+ *
+ * `detail` is only ever passed a string capygen composed itself (the permission
+ * gate's own explanation), never anything from the wire or a tool.
+ */
+function dynamicFailure(code: DynamicFailureCode, detail?: string): CodexDynamicToolCallResponse {
+  const text = clampUtf8Bytes(
+    `${code}: ${detail ?? DYNAMIC_FAILURES[code]}`,
+    DYNAMIC_FAILURE_MAX_BYTES,
+  );
+  const item: CodexDynamicToolCallOutputContentItem = { type: "inputText", text };
+  return { contentItems: [item], success: false };
+}
+
+/** The sentinel a raced abort resolves with; a unique object, so no tool result
+ *  can ever be mistaken for it. */
+const ABORTED: unique symbol = Symbol("capygen.dynamicToolAborted");
+
+function abortPromise(signal: AbortSignal): Promise<typeof ABORTED> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(ABORTED);
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(ABORTED), { once: true });
+  });
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * An identifier from the wire, made safe to put in a log line: bounded, on one
+ * line, and with control characters removed so it cannot forge log structure.
+ */
+function safeLabel(value: string): string {
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  return cleaned.length > 64 ? `${cleaned.slice(0, 64)}…` : cleaned;
+}
+
+/**
+ * SPEC R25's arithmetic, done in **UTF-8 bytes** rather than JS characters.
+ *
+ * `clampText` counts `String.length`, which is UTF-16 code units: 40 000 emoji
+ * are 80 000 units but 160 000 bytes, so a 64 K *character* budget lets a
+ * quarter of a megabyte through. `TextEncoder`/`TextDecoder` do it exactly.
+ */
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
+ * The longest prefix of `text` that fits in `maxBytes`, cut on a character
+ * boundary. Decoding a truncated buffer without `fatal` replaces the sequence
+ * the cut split; trimming that replacement character is what keeps the result
+ * valid text rather than ending in U+FFFD.
+ */
+function headUtf8Bytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const encoded = new TextEncoder().encode(text);
+  if (encoded.length <= maxBytes) return text;
+  return new TextDecoder("utf-8").decode(encoded.subarray(0, maxBytes)).replace(/\uFFFD+$/, "");
+}
+
+/** `headUtf8Bytes` plus a fixed notice, budgeted together so the result — the
+ *  notice included — never exceeds `maxBytes`. */
+function clampUtf8Bytes(text: string, maxBytes: number): string {
+  if (byteLength(text) <= maxBytes) return text;
+  const notice = "\n… truncated by capygen";
+  return `${headUtf8Bytes(text, maxBytes - byteLength(notice))}${notice}`;
 }
 
 function firstLine(text: string): string {

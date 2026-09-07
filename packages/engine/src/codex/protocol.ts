@@ -465,6 +465,71 @@ export interface CodexElicitationParams {
 export type CodexElicitationAction = "accept" | "decline" | "cancel";
 
 // ---------------------------------------------------------------------------
+// Dynamic (client-hosted) tools — `thread/start` + `item/tool/call`
+// ---------------------------------------------------------------------------
+
+/**
+ * `v2/DynamicToolFunctionSpec.ts`. One tool capygen implements and Codex
+ * advertises to the model. `inputSchema` is an arbitrary JSON value on the wire
+ * (`serde_json/JsonValue`); capygen always sends a JSON Schema object.
+ *
+ * `deferLoading` exists in the binding but is deliberately never set here: a
+ * deferred tool is one more round trip before the model can use it, and the
+ * whole list is two entries at most.
+ */
+export interface CodexDynamicToolFunctionSpec {
+  type: "function";
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  deferLoading?: boolean;
+}
+
+/** `v2/DynamicToolNamespaceSpec.ts` — declared for completeness; capygen never
+ *  sends one, and therefore never accepts a namespaced call (see
+ *  `CodexDynamicToolCallParams.namespace`). */
+export interface CodexDynamicToolNamespaceSpec {
+  type: "namespace";
+  name: string;
+  description: string;
+  tools: CodexDynamicToolFunctionSpec[];
+}
+
+/** `v2/DynamicToolSpec.ts` — the `dynamicTools` array on `ThreadStartParams`. */
+export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
+
+/**
+ * `v2/DynamicToolCallParams.ts` — the server→client request `item/tool/call`.
+ *
+ * Every field is typed as it arrives, not as it is promised: this is a frame
+ * from another process, so the harness validates each one before anything runs.
+ */
+export interface CodexDynamicToolCallParams {
+  threadId: string;
+  turnId: string;
+  callId: string;
+  namespace: string | null;
+  tool: string;
+  arguments: unknown;
+}
+
+/** `v2/DynamicToolCallOutputContentItem.ts`. capygen only ever returns text. */
+export type CodexDynamicToolCallOutputContentItem =
+  | { type: "inputText"; text: string }
+  | { type: "inputImage"; imageUrl: string }
+  | { type: "inputAudio"; audioUrl: string };
+
+/**
+ * `v2/DynamicToolCallResponse.ts`. `success: false` is a *tool* failure the
+ * model can read and act on — the JSON-RPC call itself still succeeded. A
+ * JSON-RPC error would tell Codex capygen cannot speak the method at all.
+ */
+export interface CodexDynamicToolCallResponse {
+  contentItems: CodexDynamicToolCallOutputContentItem[];
+  success: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Discovery (model/list, skills/list, mcpServerStatus/list)
 // ---------------------------------------------------------------------------
 
@@ -565,5 +630,11 @@ export const CODEX_SERVER_REQUESTS = {
   permissionsApproval: "item/permissions/requestApproval",
   requestUserInput: "item/tool/requestUserInput",
   elicitation: "mcpServer/elicitation/request",
+  /** A model call to one of the client-hosted tools declared on `thread/start`
+   *  (`ServerRequest.ts:20` `{method:"item/tool/call", params:
+   *  DynamicToolCallParams}`). Note the near-miss with `requestUserInput`
+   *  above: `item/tool/call` and `item/tool/requestUserInput` are different
+   *  requests with unrelated payloads. */
+  dynamicToolCall: "item/tool/call",
   currentTime: "currentTime/read",
 } as const;
