@@ -1,0 +1,6 @@
+{"timestamp": "2026-03-01T00:00:00.000Z", "type": "session_meta", "payload": {"id": "33333333-3333-4333-8333-333333333333", "session_id": "33333333-3333-4333-8333-333333333333", "cwd": "C:\\work\\repo", "originator": "codex_cli_rs", "cli_version": "0.153.4"}}
+{"timestamp": "2026-03-01T00:00:01.000Z", "type": "response_item", "payload": {"type": "custom_tool_call", "call_id": "c1", "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch"}}
+{"timestamp": "2026-03-01T00:00:02.000Z", "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "c1", "name": "apply_patch", "output": [{"type": "input_text", "text": "patch applied"}, {"type": "input_image", "image_url": "data:image/png;base64,AA"}]}}
+{"timestamp": "2026-03-01T00:00:03.000Z", "type": "response_item", "payload": {"type": "agent_message", "author": "planner", "recipient": "builder", "content": [{"type": "input_text", "text": "take the loader next"}]}}
+{"timestamp": "2026-03-01T00:00:04.000Z", "type": "response_item", "payload": {"type": "agent_message", "author": "planner", "recipient": "builder", "content": [{"type": "encrypted_content", "encrypted_content": "OPAQUEBLOB"}]}}
+{"timestamp": "2026-03-01T00:00:05.000Z", "type": "response_item", "payload": {"type": "some_future_item", "details": {"secret": "UNREADABLE PAYLOAD"}}}

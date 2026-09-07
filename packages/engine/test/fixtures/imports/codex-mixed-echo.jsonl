@@ -1,0 +1,6 @@
+{"timestamp": "2026-04-01T00:00:00.000Z", "type": "session_meta", "payload": {"id": "33333333-3333-4333-8333-333333333333", "session_id": "33333333-3333-4333-8333-333333333333", "cwd": "C:\\work\\repo", "originator": "codex_cli_rs", "cli_version": "0.153.4"}}
+{"timestamp": "2026-04-01T00:00:01.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "canonical question"}]}}
+{"timestamp": "2026-04-01T00:00:02.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "canonical question"}}
+{"timestamp": "2026-04-01T00:00:03.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "{\"command\":[\"ls\"]}", "call_id": "c9"}}
+{"timestamp": "2026-04-01T00:00:04.000Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "reply that has no canonical item"}}
+{"timestamp": "2026-04-01T00:00:05.000Z", "type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "developer context"}]}}

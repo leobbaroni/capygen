@@ -444,3 +444,21 @@ and command-override variables removed from the cleaned environment. Installed s
 sets `windowsHide: true` on its child spawns. Native isolated Git tests cover these semantics;
 repeat them when the dependency changes. IPC currently retains its legacy optional `paths`
 type; the service refuses omission, and schema tightening remains an integration follow-up.
+
+## Transcript import parser contracts (Phase 7 prerequisite)
+
+The isolated parser module `packages/engine/src/imports` is implemented; native picker,
+staging, persistence and fresh-session continuation are separate pending integration work.
+
+| Contract | Verified authority | Consumer / regression |
+|---|---|---|
+| Claude `getSessionMessages(sessionId, {dir, sessionStore})` | installed Agent SDK **0.3.261**, `sdk.d.ts` `GetSessionMessagesOptions`, `SessionStore`, `SessionStoreEntry` | injected reconstructor over allowlisted selected records; `imports.sdk.test.ts` loads the real SDK in an isolated child and proves canonical chain order through the production read-only store |
+| Claude JSONL parent chain | selected-record `uuid`, `parentUuid`, `sessionId`, message content; parser format `claude-jsonl/v1` | duplicate/conflicting identities refused; missing parents, compaction and omitted content produce warnings; the format label is Capygen's parser version, not a promise of every CLI format |
+| Codex rollout envelope and tagged payloads | pinned `rust-v0.153.4` history [envelope](https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/history/src/lib.rs), [payload](https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/history/src/rollout_payload.rs), [response types](https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/protocol/src/models.rs) | `codex-rollout/rust-v0.153.4`; canonical response messages, custom tool text and agent messages; exact role/text echo counts suppress only corresponding occurrences |
+| Injected context recognition | pinned `core/src/context/contextual_user_message.rs`, `core/src/event_mapping.rs` and [protocol marker constants](https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/protocol/src/protocol.rs) | known configuration fragments are excluded per content item; ordinary mixed text survives; historical structural notices stay inert; Claude meta/summary source UUIDs preserve historical labels |
+| Parser bounds | selected source 256 MiB, JSONL line 1 MiB, records/entries 100,000, serialized snapshot 256 MiB; message/tool text 64 KiB UTF-8 | streaming hash of actual selected bytes; malformed UTF-8/JSON refuses the snapshot; exact serialized accounting includes escaped characters, metadata and counts; overrides can only tighten limits |
+
+The parser never scans native homes, follows recorded history paths, writes the source,
+executes historical tools or assigns native resume identities. The SDK fixture uses explicit
+owned Claude/Codex homes and an inert project directory before importing the SDK; no provider
+call is made. Unsupported formats/content remain warned or refused, not claimed lossless.

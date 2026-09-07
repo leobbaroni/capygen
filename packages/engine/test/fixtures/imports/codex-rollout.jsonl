@@ -1,0 +1,12 @@
+{"timestamp": "2026-02-01T00:00:00.000Z", "type": "session_meta", "payload": {"id": "33333333-3333-4333-8333-333333333333", "session_id": "33333333-3333-4333-8333-333333333333", "timestamp": "2026-02-01T00:00:00.000Z", "cwd": "C:\\work\\repo", "originator": "codex_cli_rs", "cli_version": "0.153.4", "source": "cli", "history_mode": "full", "base_instructions": {"text": "SYSTEM INSTRUCTIONS THAT MUST NOT BE IMPORTED"}, "git": {"repository_url": "git@example.com:person/private.git", "commit_hash": "abc"}}}
+{"timestamp": "2026-02-01T00:00:01.000Z", "type": "turn_context", "payload": {"cwd": "C:\\work\\repo", "approval_policy": "on-request", "sandbox_policy": {"mode": "workspace-write"}, "model": "gpt-5.5", "effort": "medium"}}
+{"timestamp": "2026-02-01T00:00:02.000Z", "ordinal": 1, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Refatorar o carregador ✨"}]}}
+{"timestamp": "2026-02-01T00:00:02.100Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Refatorar o carregador ✨"}}
+{"timestamp": "2026-02-01T00:00:03.000Z", "ordinal": 2, "type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan the change"}], "encrypted_content": "ENCRYPTEDBLOBTHATMUSTNOTBEIMPORTED"}}
+{"timestamp": "2026-02-01T00:00:04.000Z", "ordinal": 3, "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I'll patch it."}]}}
+{"timestamp": "2026-02-01T00:00:04.100Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "I'll patch it."}}
+{"timestamp": "2026-02-01T00:00:05.000Z", "ordinal": 4, "type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "{\"command\":[\"ls\",\"-la\"]}", "call_id": "call_1"}}
+{"timestamp": "2026-02-01T00:00:06.000Z", "ordinal": 5, "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_1", "name": "shell", "output": "loader.ts\nindex.ts"}}
+{"timestamp": "2026-02-01T00:00:07.000Z", "type": "token_usage_record", "payload": {"info": {"total_token_usage": {"input_tokens": 10}}}}
+{"timestamp": "2026-02-01T00:00:08.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"input_tokens": 10}}}
+{"timestamp": "2026-02-01T00:00:09.000Z", "ordinal": 6, "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]}}

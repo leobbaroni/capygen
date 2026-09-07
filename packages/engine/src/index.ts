@@ -157,3 +157,17 @@ export function createHarnessForBackend(
       throw new Error(`capygen has no harness for the ${backend as string} backend yet`);
   }
 }
+
+// Inert transcript parsing; callers supply the isolated Claude reconstruction boundary.
+export {
+  parseTranscriptFile,
+  createSdkChainReconstructor,
+  ImportError,
+  IMPORT_LIMITS,
+  type ParseTranscriptOptions,
+  type ImportedTranscript,
+  type ImportedEntry,
+  type ImportCounts,
+  type ImportWarning,
+  type ClaudeChainReconstructor,
+} from "./imports/index.js";

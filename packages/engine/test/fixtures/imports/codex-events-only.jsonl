@@ -1,0 +1,3 @@
+{"timestamp": "2026-02-03T00:00:00.000Z", "type": "session_meta", "payload": {"id": "33333333-3333-4333-8333-333333333333", "session_id": "33333333-3333-4333-8333-333333333333", "timestamp": "2026-02-03T00:00:00.000Z", "cwd": "C:\\work\\repo", "originator": "codex_cli_rs", "cli_version": "0.153.4"}}
+{"timestamp": "2026-02-03T00:00:01.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "only an echo"}}
+{"timestamp": "2026-02-03T00:00:02.000Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "echoed reply"}}

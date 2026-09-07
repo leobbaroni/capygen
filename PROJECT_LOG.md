@@ -1517,3 +1517,33 @@ Duration 4.17s
 The two new late-commit cases first failed (2 failed / 13 passed), then passed after the fix.
 This accepts the service/UI corrective task only. Worktree operations, IPC schema tightening,
 the combined full gate and the remaining Phase 7 Done-when checks are still pending.
+
+Renderer typecheck for the selected-commit UI also exited 0 (`$ tsc --noEmit`).
+
+### Phase 7 import parser prerequisite — accepted, integration pending
+
+Opus implemented bounded, inert Claude/Codex transcript parsing. Astra reviewed source
+formats and resource bounds; Fable independently reviewed configuration filtering and
+historical labels. Luna corrected the pinned Codex injected-context marker dictionary.
+Astra's final fixes remove consecutive leading Claude reminders, normalize historical
+slash command labels, and warn/refuse unterminated command arguments. Fable's final
+review found no high or medium regressions in those changes.
+
+Native focused evidence (actual output tails, ANSI removed):
+
+```
+corepack pnpm vitest run --project engine packages/engine/test/imports.test.ts packages/engine/test/imports.sdk.test.ts
+Test Files 2 passed (2)
+Tests 70 passed (70)
+Duration 1.59s
+
+cd packages/engine && corepack pnpm exec tsc --noEmit
+$ tsc --noEmit
+exit 0
+```
+
+The last three edge cases first failed (3 failed / 66 passed), then passed after the fixes.
+The real SDK fixture uses owned homes and the production read-only custom store; it makes
+no CLI/model call. Exact parser shapes and bounds are in COMPAT.md. Parser code and fixtures
+are accepted; native picker, isolated production worker, staging, database import,
+read-only UI, continuation and the combined full gate remain pending. Phase 7 stays open.
