@@ -32,12 +32,12 @@ describe("automation persistence", () => {
     const legacy = openStore(legacyFile, { migrations: readMigrations(migrationsDir).filter((migration) => migration.id < "0007_automations_inbox") });
     const project = legacy.projects.upsertByPath({ path: path.join(dir, "legacy-project") });
     const created = legacy.sessions.create({ projectId: project.id, mode: "solo", agents: [{ name: "Lead", backend: "codex", model: "gpt", role: "lead", config: null }] });
-    legacy.db.run("INSERT INTO automations (id,project_id,title,schedule,prompt,enabled,last_run,created_at,updated_at) VALUES (?,?,?,?,?,1,NULL,1,1)", "old-auto", project.id, "Old", "0 * * * *", "Run");
+    legacy.db.run("INSERT INTO automations (id,project_id,title,schedule,prompt,enabled,last_run,created_at,updated_at) VALUES (?,?,?,?,?,1,NULL,1,1)", "old-auto", project.id, "", "", "");
     legacy.db.run("INSERT INTO automations (id,project_id,title,schedule,prompt,enabled,last_run,created_at,updated_at) VALUES (?,NULL,?,?,?,1,NULL,1,1)", "orphan-auto", "Orphan", "0 * * * *", "Run");
     legacy.db.run("INSERT INTO inbox_items (id,session_id,kind,body,read,created_at) VALUES (?,?,?,?,0,1)", "old-inbox", created.session.id, "old-kind", "Old body");
     legacy.close();
     const migrated = openStore(legacyFile, { migrationsDir });
-    expect(migrated.automations.get("old-auto")).toMatchObject({ agentId: null, enabled: false, disabledReason: "legacy_missing_agent" });
+    expect(migrated.automations.get("old-auto")).toMatchObject({ agentId: null, name: "Legacy automation", prompt: "Legacy automation prompt", rrule: "FREQ=DAILY", enabled: false, disabledReason: "legacy_missing_agent" });
     expect(migrated.db.get<{ id: string }>("SELECT id FROM legacy_automations WHERE id='orphan-auto'")?.id).toBe("orphan-auto");
     expect(migrated.db.get<{ id: string }>("SELECT id FROM legacy_inbox_items WHERE id='old-inbox'")?.id).toBe("old-inbox");
     migrated.close();

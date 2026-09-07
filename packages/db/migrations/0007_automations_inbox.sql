@@ -28,8 +28,11 @@ INSERT INTO automations
   (id, project_id, agent_id, name, prompt, rrule, time_zone,
    schedule_anchor_at, next_run_at, last_run_at, last_run_status,
    last_run_session_id, disabled_reason, enabled, created_at, updated_at)
-SELECT id, project_id, NULL, CASE WHEN title = '' THEN 'Legacy automation' ELSE title END,
-       prompt, schedule, 'UTC', created_at, NULL, last_run,
+SELECT id, project_id, NULL,
+       substr(CASE WHEN title = '' THEN 'Legacy automation' ELSE title END, 1, 200),
+       substr(CASE WHEN prompt = '' THEN 'Legacy automation prompt' ELSE prompt END, 1, 65536),
+       substr(CASE WHEN schedule = '' THEN 'FREQ=DAILY' ELSE schedule END, 1, 4096),
+       'UTC', created_at, NULL, last_run,
        CASE WHEN last_run IS NULL THEN NULL ELSE 'succeeded' END,
        NULL, 'legacy_missing_agent', 0, created_at, updated_at
 FROM automations_legacy
