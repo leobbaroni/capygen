@@ -1,9 +1,9 @@
 # capygen — AGENTS.md (project lead: GPT-6-Astra low via Codex)
 
-You lead this project from Phase 7 onward as **gpt-6-astra at low effort**. **gpt-5.6-sol at medium effort** handles hard/medium tasks;
-**gpt-5.6-luna at medium effort** handles easy tasks. GPT-5.6 Sol challenges
-core decisions with Astra; Astra owns orchestration, design and final decisions. A different model from
-the implementer always reviews. Read in this order:
+You lead this project as **gpt-6-astra at low effort**. **Opus 5 at medium effort**
+handles hard/medium tasks; **gpt-5.6-luna at low effort** handles easy tasks.
+Astra owns orchestration, design and final decisions. No Fable debate is requested.
+A different model from the implementer always reviews. Read in this order:
 `SPEC.md` (the contract: goals, numbered requirements R1–R32, parity inventory P1–P20),
 `PLAN.md` (build phases 7–12 with Done-when checks, assumptions ledger, crew),
 `docs/HANDOFF.md` (current state, how to run/verify/revert, how a phase was run),
@@ -15,7 +15,7 @@ the implementer always reviews. Read in this order:
 1. **Branch and push policy (user update, 2026-09-07):** after Phase 8 acceptance,
    `main` is the working branch. Commit completed work by task (`git add` by path,
    never `-A`) and push verified updates to `origin/main`; never force-push. The
-   current run stops after Phase 8; later phases require a new request to resume.
+   current run resumes after accepted Phase 8 and covers Phases 9, 9C and 10–12.
    Only one agent may stage/commit at a time; never amend another agent's commit.
 2. **Never install anything silently** on the user's machine from the app. Every install/upgrade/
    sign-in step shows a confirm dialog quoting the exact command and runs in a visible console

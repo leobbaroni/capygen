@@ -346,3 +346,11 @@ GPT-5.6-Sol at medium effort handles hard and medium tasks, substantive reviews,
 core decisions with Astra deciding; GPT-5.6-Luna at medium effort handles easy tasks. The
 different-model review requirement remains in force. This documentation correction changes the
 development crew only and does not rewrite or alter requirements R1–R34 or the parity inventory.
+
+## Execution correction — 2026-09-07, resume after Phase 8
+
+The user authorizes completion of Phases 9, 9C and 10–12 on main, with verified pushes to
+origin/main. Astra low leads/designs/decides; Opus 5 medium handles hard/medium work and
+Luna low handles simple work. Different-model review remains required; no Fable debate.
+This supersedes the prior development crew and Phase 8 stop point, without changing
+R1–R34, the editable Custom Mode example, static PNG mascots or live test-model restrictions.

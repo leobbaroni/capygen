@@ -1,15 +1,15 @@
 # capygen — agent instructions (Claude side)
 
 The project lead from Phase 7 on is **GPT-6-Astra (Codex), low**; its instructions live in `AGENTS.md`
-and are the source of truth for both CLIs. **GPT-5.6-Sol (medium)** handles hard/medium tasks and
-substantive reviews; **GPT-5.6-Luna (medium)** handles easy tasks. **GPT-5.6-Sol** challenges core
-decisions, frameworks and architecture with Astra. Astra owns orchestration, design and final decisions. Read `AGENTS.md`,
+and are the source of truth for both CLIs. **Opus 5 (medium)** handles hard/medium tasks;
+**GPT-5.6-Luna (low)** handles easy tasks. Astra owns orchestration, design and final decisions.
+No Fable debate is requested; a different model reviews each implementation. Read `AGENTS.md`,
 then `SPEC.md` (contract), `PLAN.md` (build order, assumptions, crew), `CONTEXT.md` (terms),
 `docs/POLICIES.md` (app policies), `docs/HANDOFF.md` (state and how to run a phase).
 
 - **Branch and push policy (user update, 2026-09-07):** after Phase 8 acceptance,
   work on `main` and push verified updates to `origin/main`; never force-push.
-  Stop this run after Phase 8. Only one agent may stage/commit at a time; never
+  Resume through Phases 9, 9C and 10–12 after accepted Phase 8. Only one agent may stage/commit at a time; never
   amend another agent's commit.
 - **Never install anything silently** on the user's machine from the app: every install/upgrade
   step confirms the exact command in a dialog and runs in a visible console.

@@ -1935,3 +1935,30 @@ e2e-out/phase8-final-playwright.log
 ```
 Phases 9, 9C and 10–12 remain open. Live benchmark and packaged/updater proofs remain their future phase work. The unrelated state.lock is preserved.
 Integration code commit: 5635edd. Final all-package/test typecheck was reconfirmed after the imported-session picker exclusion (e2e-out/phase8-final-typecheck-confirm.log: all Done). The native gate also passed the worktree and import acceptance paths on the integrated build.
+
+## Resume after Phase 8 — 2026-09-07
+
+User authorizes Phases 9, 9C and 10–12 on main with verified pushes. Current crew:
+Astra low lead/design/final decisions; Opus 5 medium hard/medium; Luna low simple
+tasks; different-model review, no Fable debate. AGENTS/CLAUDE/SPEC/PLAN/handoff
+and execution briefs now retain this instruction. Luna read-only review found no
+removed product requirements or test-model restrictions. The lead remains sole
+committer. Unrelated empty state.lock is preserved.
+
+Baseline, before product edits:
+```text
+corepack pnpm typecheck
+packages/db typecheck: Done
+packages/engine typecheck: Done
+apps/renderer typecheck: Done
+apps/desktop typecheck: Done
+corepack pnpm test
+Test Files 144 passed (144)
+Tests 1883 passed | 4 skipped (1887)
+Duration 76.54s
+```
+Logs: e2e-out/phase9-baseline-typecheck.log and phase9-baseline-test.log.
+Opus is investigating runtime policy/Codex delegation and sharing contracts in
+separate read-only tasks; Luna mapped Phase 9 renderer/IPC placeholders. No new
+phase acceptance is claimed. Existing dedicated-home live and packaged proofs
+remain open in Phases 11/12.

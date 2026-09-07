@@ -1,14 +1,15 @@
 # capygen — handoff (2026-09-07, end of Phase 8)
 
-Lead: GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
+Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied
 before acceptance. Phases 1–6 remain historical acceptance, preserved below.
 
 ## Current checkpoint
 
-Phases 7 and 8 are accepted. The user's latest instruction stops this run here: do not
-start Phase 9 without a new request. The accepted version is being promoted to `main`;
-future authorized work and verified pushes use `origin/main` (never force-push).
+Phases 7 and 8 are accepted at `f80500c` on `main`. The user has now authorized the
+remaining phases: 9, 9C and 10–12. Current crew: Astra low lead, Opus 5 medium hard/medium,
+Luna low simple tasks; different-model reviews, no Fable debate. Verified pushes use
+`origin/main` (never force-push). The lead stages and commits completed tasks serially.
 
 Phase 7 includes native worktree creation/registration/removal, session cwd, selected-file
 Diff commits, Claude/Codex inert transcript import, restart/deduplication, and a fresh-session
@@ -45,7 +46,7 @@ Preserve the unrelated untracked state.lock. AGENTS.md records the new main-bran
 | 6 Settings hub, two-way config sync, prerequisites | ✅ | `settings.spec.ts` |
 | 7 Projects/worktrees/imports | accepted | `worktrees.spec.ts`, `imports.spec.ts`, scoped MCP fixture |
 | 8 Tasks/Inbox/Usage/Automations | accepted | `activity.spec.ts`, scheduler/Inbox/usage suites |
-| 9, 9C, 10–12 | open; stopped by user | `PLAN.md` |
+| 9, 9C, 10–12 | open; resumed by user | `PLAN.md` |
 
 Historical gate on parent revision `2222cd6` (2026-09-06; handoff committed as `067a7dc`): typecheck 5/5 packages;
 vitest 99 files, 1296 passed, 4 skipped; build ok; Playwright 24 passed, 10 skipped. The skips

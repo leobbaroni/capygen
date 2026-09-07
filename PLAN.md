@@ -4,13 +4,11 @@ One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contrac
 
 ## Current State
 
-- Phases 1–6 were accepted historically at `067a7dc` (2026-09-06); Phases 7–12 remain open.
-- Astra's new review identifies integration gaps in MCP resolution/pool identity, settings
-  consumption and project scope. Historical acceptance does not close these findings.
-- Review and imported context: `docs/reviews/phase1-6.md`. Concrete next-phase task briefs,
-  dependencies and acceptance: `docs/plans/phases7-12.md`. Start Phase 7 with its corrective batch.
-- Fresh verification is recorded in PROJECT_LOG.md. Opus independently reviewed the findings and Fable debated core decisions after the
-  user restored the Claude connection. Runtime fixes still require implementation and gates.
+- Phases 1–8 are accepted; latest checkpoint `f80500c` on `main`.
+- The user resumes all remaining phases (9, 9C, 10–12). Work and verified pushes use `main`.
+- Phase 8 gate: typecheck/build passed; 1883 unit tests passed / 4 skipped;
+  46 Playwright tests passed / 12 skipped. See `PROJECT_LOG.md` for evidence.
+- Dedicated live benchmark and packaged/updater proofs remain open in their assigned phases.
 
 ## Approach
 
@@ -45,9 +43,9 @@ Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) �
 | Role | Model | Responsibility |
 |---|---|---|
 | Lead / orchestrator / designer / decision maker | **GPT-6-Astra**, low (`gpt-6-astra`) | orchestration, plans, design, core decisions, task briefs, final acceptance |
-| Hard and medium tasks | **GPT-5.6-Sol**, medium (`gpt-5.6-sol`) | implementation and substantive reviews |
-| Easy tasks | **GPT-5.6-Luna**, medium (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
-| Core-decision challenge | **GPT-5.6-Sol**, medium | challenge frameworks, architecture and core policy changes; Astra decides |
+| Hard and medium tasks | **Opus 5**, medium (`opus`) | implementation and substantive reviews |
+| Easy tasks | **GPT-5.6-Luna**, low (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
+| Core decisions | **GPT-6-Astra**, low | owns architecture and policy decisions; no Fable debate |
 | Independent review | different model from implementer | verify concrete findings and fixes before phase acceptance |
 
 The original Fable/Opus/Sonnet crew built Phases 1–6. Its workflow scripts remain historical
@@ -300,7 +298,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       native toast rules have focused tests. Recurrence covers DST/month ends, durable claims
       prevent overlap, and unknown costs remain explicit. Full gate: typecheck/build passed;
       144 unit files, 1883 passed/4 skipped; 46 Playwright passed/12 skipped.
-      User stop point: finish Phase 8, promote this version to main, then stop before Phase 9.
+      Historical stop point completed; the user has now authorized Phase 9 onward.
 - [ ] Phase 9: MCP catalogue, sharing, members, policies, approvals (M5–M6)
       Done when: session MCP servers page adds a stdio server and its tools appear in the slash
       menu; Sharing exports a session bundle (HTML/JSON) and re-imports; Members/Policies/Approve
@@ -313,7 +311,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       assignments; Apply persists the mode; task/difficulty routes and conditional same-chat
       round-table debate execute under existing permission/hop/budget limits; restart preserves
       mode and history. Offline fixtures exercise the exact example from the user's diagram.
-      Steps: Astra/Sol contract challenge; versioned declarative policy schema; generator draft
+      Steps: Astra contract review; versioned declarative policy schema; generator draft
       and preview; visual/text editors; route/debate runtime; persistence and e2e.
       Dependencies: Phase 9 permissions and cross-backend delegation proof.
 - [ ] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
@@ -391,10 +389,12 @@ silently substitute models. Review status and failed Claude attempts are recorde
   Reference, R23–R26, Phase 2/11).
 Count: 6; none failed the necessity test.
 
-## Execution amendment — 2026-09-07
+## Execution amendment — 2026-09-07 (latest)
 
-Updated stop point: finish Phase 8 only, promote the verified version to main and push it, then stop. Future authorized work and pushes use main. Phases 9–12 and 9C remain planned, not implemented in this run.
-Test prompts use only GPT Luna low / Sonnet 5 low; record resolved backend model IDs and
-effort in test evidence, refuse silent substitutions. Fixture tests remain model-free.
-Astra remains lead/orchestrator/design/decisions; Sol handles hard/medium implementation; Luna
-handles easy implementation; Sol challenges core decisions with Astra deciding.
+The user resumes all remaining phases after accepted Phase 8: 9, 9C and 10–12.
+Work on main; commit by task and push verified updates to origin/main, never force-push.
+Astra low leads and decides; Opus 5 medium implements hard/medium tasks; Luna low handles
+simple tasks. Different-model review remains required; no Fable debate. Root alone stages
+and commits during parallel work. Historical acceptance and decision records remain evidence.
+Live test prompts use only GPT Luna low / Sonnet 5 low, with dedicated test homes and
+resolved model/effort recorded. Fixture tests remain model-free; no silent substitutions.

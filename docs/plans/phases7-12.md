@@ -1,6 +1,6 @@
 # Phase 7–12 execution briefs
 
-Current run boundary (user update, 2026-09-07): Phases 7–8 accepted; stop before Phase 9. Promote the verified version to main and use main for future authorized work and pushes. The later briefs remain the roadmap.
+Current run boundary (latest user update, 2026-09-07): Phases 7–8 accepted; resume Phases 9, 9C and 10–12 on main. Push verified updates to origin/main.
 
 Prepared by GPT Astra (medium), 2026-09-06, against `067a7dc`.
 Status: Astra-prepared, independently reviewed by Opus 5, debated with Fable 5.1 medium in two rounds.
@@ -12,10 +12,10 @@ This document adds dependencies, concrete tests and work ownership; it does not 
 | Role | Assignment |
 |---|---|
 | Lead, orchestration, design, final decisions, integration acceptance | GPT-6-Astra (`gpt-6-astra`), low |
-| Hard and medium implementation | GPT-5.6-Sol (`gpt-5.6-sol`), medium |
-| Easy mechanical implementation and inventories | GPT-5.6-Luna (`gpt-5.6-luna`), medium |
-| Core architecture/framework/trust-model challenge | GPT-5.6-Sol, medium, with Astra deciding |
-| Independent review | Different model from implementer; Sol reviews Astra work, Astra reviews Sol work |
+| Hard and medium implementation | Opus 5 (`opus`), medium |
+| Easy mechanical implementation and inventories | GPT-5.6-Luna (`gpt-5.6-luna`), low |
+| Core architecture/framework/trust-model decisions | Astra low; Opus supplies technical findings; no Fable debate |
+| Independent review | Different model from implementer; Opus reviews substantive Astra work, Astra reviews Opus work |
 
 This current crew assignment supersedes active Phase 7–12 owner references below; the dated
 preparation and review provenance above remains historical.
@@ -23,12 +23,12 @@ preparation and review provenance above remains historical.
 No silent model substitution. Check actual availability before dispatch. Missing reviewers
 leave an explicit gate open. Bound each batch to three workers and two review rounds; if
 serious findings remain, open a corrective batch rather than declaring success. A failed task
-gets one clarified attempt, then Sol diagnosis/fix; unavailable Sol means a recorded blocker.
+gets one clarified attempt, then Opus diagnosis/fix; unavailable Opus means a recorded blocker.
 
 For every phase: Astra freezes contracts and task briefs; assign disjoint files; the integrator
-alone owns shared IPC registration/main wiring; builders commit only their task files by path.
-Retain completed changes and unknown user edits. No push, release, install or sign-in is
-implied by this plan. Read the reference before UI work; keep its tokens and NOTICE.
+alone owns shared IPC registration/main wiring and stages/commits task files by path.
+Retain completed changes and unknown user edits. Verified pushes to main are authorized;
+release publication, installation and sign-in remain separate actions. Read the reference before UI work; keep its tokens and NOTICE.
 
 Acceptance sequence: implementation → focused checks → independent four-lens review
 (correctness, security, UX parity, efficiency) → fixes → independent re-review → full gate
@@ -117,12 +117,12 @@ Build on existing TasksService, notification tap and usage_events. The Codex
 This phase completes local policy enforcement; current unenforced rows stay clearly labelled
 until then. Existing backend permission files remain authoritative (R29).
 
-- Astra/Sol decision gate: precedence and limits of local policy relative to Claude/Codex
+- Astra decision gate: precedence and limits of local policy relative to Claude/Codex
   native permissions, scope of member identity on one local machine, share schema/redaction.
   A policy UI must never claim it can intercept backend operations the protocol does not expose.
-- Sol: enforcement at the actual tool/approval boundary, explicit allow/deny/ask precedence,
+- Opus: enforcement at the actual tool/approval boundary, explicit allow/deny/ask precedence,
   scoped grants and revocation, audit metadata, no grant imported from history.
-- Sol: inert HTML/JSON export/import with schema version, bounded assets, safe filenames,
+- Opus: inert HTML/JSON export/import with schema version, bounded assets, safe filenames,
   no scripts or active widgets on import, credential redaction, atomic import.
 - GPT-5.6-Luna: catalogue/member/share/approval pages against agreed contracts and reference layouts.
 - Acceptance: deny through the actual runtime despite UI tampering; ask reaches user and answer
@@ -132,7 +132,7 @@ until then. Existing backend permission files remain authoritative (R29).
 
 ## Phase 10: dictation, local hosts, terminal attach, extensions
 
-Two genuinely unresolved core decisions require Sol challenge and Astra's written decision:
+Two genuinely unresolved core decisions require Astra's written decision after technical investigation:
 
 1. Dictation: verify native Windows speech support/availability versus a local whisper runtime;
    language coverage, offline operation, microphone permission, installer size and CPU budget.
@@ -143,14 +143,14 @@ Two genuinely unresolved core decisions require Sol challenge and Astra's writte
 
 Local hosts means this machine's harness status, not remote hosting (SPEC scope). Terminal
 attach means explicitly launching a raw CLI in the existing terminal; no claim to reconnect
-an SDK session unless the installed CLI supports and proves it. Sol handles lifecycle/security,
+an SDK session unless the installed CLI supports and proves it. Opus handles lifecycle/security,
 GPT-5.6-Luna handles reference-page plumbing. Acceptance includes mic cancel/denied/no-device,
 terminal interrupt/close, and a hostile sample extension denied privileged operations.
 
 ## Additional corrective acceptance: output byte bounds
 
 `ApiHarness.ts` currently uses `DEFAULT_MAX_TOOL_OUTPUT_CHARS`; multibyte content can exceed
-64 KB. Add a Sol corrective task at the tool-result boundary: enforce UTF-8 bytes without
+64 KB. Add an Opus corrective task at the tool-result boundary: enforce UTF-8 bytes without
 splitting a character, store the full output behind an outputRef, and prove the displayed stub
 retrieves the original after restart. Do not loosen AGENTS R25 to match the current code.
 This shares tool-output/persistence ownership, so schedule it serially with runtime wiring.
@@ -181,7 +181,7 @@ features land; Phase 11 closes quantitative G9 and compaction/output requirement
 - Smoke the installed app: launch/focus budget, real terminal, browser overlay, SQLite restart,
   config isolation, tray manual checklist, and uninstall behavior without deleting user data.
 - Updater fixture: all four modes, explicit install click, failure/cancellation, older build
-  reads test feed. Preparing workflow/artifacts is authorized; publishing/tagging/pushing is not.
+  reads test feed. Preparing workflow/artifacts is authorized; verified pushes to main are authorized, publishing/tagging is separate.
 - Start resolving font redistribution by Phase 10; Phase 12 acceptance requires resolution: converting a font to an SVG does not establish a right
   to distribute its artwork. Obtain license evidence or select an authorized fallback through
   the design decision process; no legal conclusion is inferred from a missing license file.
