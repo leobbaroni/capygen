@@ -2119,3 +2119,27 @@ $ tsc --noEmit
 Root confirmation: e2e-out/phase9-codec-final-test.log and phase9-codec-final-typecheck.log.
 This accepts the codec subtask, not Phase 9: staged native pick/save, comments, IPC and UI
 remain pending. Oversized/malformed content is refused rather than silently exported in part.
+
+## Phase 9 desktop Codex delegation reviewed — 2026-09-07
+
+Opus wired the dynamic client tool into SessionRunner, persisted full outputs behind the
+native call block, and tracked declaration signatures for restart/resume. Astra review
+required tool-removal handling, bounded inert continuity, cancellation during startup,
+bounded iterator/disposal cleanup and listener removal. Regression tests were run red before
+those corrective edits. Luna removed the obsolete Codex routing UI restriction; Astra reviewed
+the patch and independently ran the five renderer tests.
+```text
+corepack pnpm exec vitest run packages/engine/test/routing.test.ts packages/engine/test/codexDynamicTools.test.ts apps/desktop/test/sessionRunnerCodexDelegation.test.ts apps/desktop/test/sessionRunnerRoundTable.test.ts
+Test Files 4 passed (4)
+Tests 114 passed (114)
+Duration 6.40s
+corepack pnpm exec vitest run --project renderer apps/renderer/src/components/AgentInfoDrawer.test.tsx
+Test Files 1 passed (1)
+Tests 5 passed (5)
+```
+Logs: e2e-out/phase9-delegation-astra-final.log and agent-info-drawer-astra.log.
+Worker engine gate: 23 files, 493 passed/4 skipped; engine typecheck passed. Desktop typecheck
+currently reports only the sharing worker's newly declared, not-yet-wired IPC handlers;
+the full integrated gate remains pending. This is task acceptance, not Phase 9 acceptance.
+Review also identified an existing unbounded RoundTable history read, retained for the
+efficiency wave rather than silently dropped. Live model selection remains a separate proof.

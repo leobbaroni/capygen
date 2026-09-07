@@ -2,6 +2,9 @@
 
 Date: 2026-09-06 · Status: accepted · Supersedes nothing · Implements SPEC R12, ADR-0002
 
+Updated 2026-09-07: the pinned Codex dynamic client-tool protocol supplies the cross-backend
+path. The earlier config-only limitation is superseded by the measured protocol below.
+
 ## Context
 
 SPEC R12: *"WHEN any agent spawns a sub-agent THE SYSTEM SHALL apply the routing policy
@@ -47,9 +50,9 @@ returns `{backend, model, sameBackend, source}` or `null`.
 |---|---|---|
 | `claude` | `createSdkMcpServer` — an MCP server inside capygen's process, named `capygen`; the model sees `mcp__capygen__delegate_task` | yes |
 | `api` | one more `ToolDefinition` in capygen's own tool registry | yes |
-| `codex` | none — `codex app-server` takes MCP servers from the user's `~/.codex/config.toml`, not from a client | **no** (see Consequences) |
+| `codex` | `thread/start.dynamicTools`, executed in capygen through `item/tool/call` | yes; pinned 0.153.4 loopback proof |
 
-**2. Fail open, everywhere, with no exceptions.**
+**2. Routing failures preserve the parent turn.**
 
 Every failure lands on "the backend spawns its sub-agent exactly as it would have without
 capygen": no rule; a rule naming what the parent already runs; a malformed rule; a resolver that
@@ -58,6 +61,9 @@ throws; a cross-backend rule on a backend that cannot be handed a tool; an SDK w
 tool answers with a sentence saying so and telling the caller to do the work itself; the parent's
 turn is never lost. `resolveRoute` never throws — it is handed values straight out of a database
 row.
+
+This fallback concerns routing preferences. Permission denials, cancellation and local
+execution restrictions are never converted into authorization to run elsewhere.
 
 **3. Delegation is one hop, not a tree.** A delegated sub-agent is built with no delegation
 extras of its own, so it cannot delegate again. It is disposed at the end of the call and its
@@ -69,16 +75,23 @@ asked (SPEC R27).
 
 ## Consequences
 
-- A Codex agent with a cross-backend routing rule fails open: it spawns its own sub-agent on its
-  own model, and its prompt says nothing about `delegate_task`. Writing an MCP server into a
-  user's `~/.codex/config.toml` behind their back is exactly the kind of silent change CLAUDE.md
-  forbids. The follow-up, when it is worth it, is a capygen stdio MCP server the user opts into
-  from Settings ▸ MCP servers (Phase 6), which Codex would then pick up like any other.
+- Codex declares `delegate_task` through its experimental client-tool protocol without writing
+  backend configuration. An owned loopback Responses fixture drove actual calls and proved
+  declaration persistence through same-process and fresh-process resume; it did not test a
+  remote model's choice to delegate. The host's explicit permission mode governs this tool;
+  native sandbox settings do not authorize a host-side child.
 - The tool list and MCP server list an agent is started with are fixed for the backend session:
   they are part of the request shape a provider caches on (R24), so they are chosen once in
   `harnessFor`. What stays dynamic is the *target* — `delegate_task`'s runner re-reads the routing
   rule on every call, so a rule edited in Settings applies to the next spawn without restarting
-  the backend. Turning delegation on for an agent that had none does need a new backend session.
+  the backend. Codex declaration additions/removals require a fresh thread. A stored schema
+  signature detects changes and unknown legacy tool sets. The visible restart notice is
+  accompanied by a single bounded historical quotation of recent user/assistant prose on
+  the first send, without tool results, configuration or native identities. Existing history
+  stays intact; unchanged declarations resume normally.
+- Cancellation races child startup and stream reads; interrupt, bounded disposal and registry
+  release prevent an unresponsive child from holding its caller indefinitely. Late responses
+  after abandonment are ignored. The target retains its own permission configuration.
 - `ApiHarness.capabilities().subagents` now keys on whether the agent actually has the tool, so
   the agent tree is never promised a sub-agent that cannot happen.
 - Live "which model is this sub-agent on" is still not observable mid-run: neither `task_started`

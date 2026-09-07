@@ -102,6 +102,7 @@ import {
   type CodexTurnPlanUpdatedNotification,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
+  type CodexDynamicToolCallItem,
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
@@ -174,6 +175,13 @@ export interface CodexHarnessDeps {
    */
   storeDynamicToolOutput?: (info: {
     callId: string;
+    /**
+     * The block key Codex's own `dynamicToolCall` item owns (`tool:<callId>`).
+     * `tool_outputs.block_id` is a foreign key, so a caller that cannot resolve
+     * this key to a persisted block must return `null` rather than orphan the
+     * row.
+     */
+    blockKey: string;
     toolName: string;
     output: string;
   }) => Promise<string | null> | string | null;
@@ -255,6 +263,14 @@ interface ActiveTurn {
     string,
     { state: "running" | "settled"; abort: AbortController; done: Promise<void> }
   >;
+  /**
+   * `callId` → the `tool_outputs` reference its full result was stored under.
+   *
+   * Written when the call is answered, read when Codex's own
+   * `dynamicToolCall` item completes — that item, not a block of the harness's
+   * own, is where R25's `outputRef` belongs.
+   */
+  dynamicRefs: Map<string, string>;
   /** `last` from the most recent `thread/tokenUsage/updated` for this turn. */
   usage: CodexTokenUsageBreakdown | null;
   /** Fatal `error` notification text, used when `turn/completed` says failed. */
@@ -397,6 +413,7 @@ export class CodexHarness implements Harness {
       streamed: new Map(),
       subagents: new Map(),
       dynamicCalls: new Map(),
+      dynamicRefs: new Map(),
       usage: null,
       fatal: null,
       settled: false,
@@ -1011,6 +1028,9 @@ export class CodexHarness implements Harness {
       case "fileChange":
         this.emitFileChange(item);
         return;
+      case "dynamicToolCall":
+        this.emitDynamicToolCall(item);
+        return;
       case "mcpToolCall":
         this.emitMcpToolCall(item);
         return;
@@ -1086,6 +1106,46 @@ export class CodexHarness implements Harness {
         additions,
         deletions,
       });
+    });
+  }
+
+  /**
+   * Codex's own `dynamicToolCall` item → the one `tool_call` block for that
+   * call.
+   *
+   * The harness deliberately emits **no block of its own** when it answers
+   * `item/tool/call`: Codex already opens this item before it asks, under an
+   * `id` that is the `callId`, so a second block would be a duplicate card for
+   * one tool call. The reply path only records the reference (`dynamicRefs`),
+   * and it is stamped on here.
+   *
+   * R25's contract in one place: `output` is the stub, `outputRef` points at
+   * the stored original, and the payload never carries the original itself —
+   * a delegated answer can be megabytes, and a block row is not where that
+   * belongs.
+   */
+  private emitDynamicToolCall(item: CodexDynamicToolCallItem): void {
+    const text = (item.contentItems ?? [])
+      .map((entry) => (entry.type === "inputText" ? entry.text : `[${entry.type}]`))
+      .join("");
+    const ref = this.active?.dynamicRefs.get(item.id);
+    const status: ToolCallStatus =
+      item.status === "completed"
+        ? item.success === false
+          ? "error"
+          : "success"
+        : item.status === "failed"
+          ? "error"
+          : "running";
+    this.emitBlock(`tool:${item.id}`, {
+      kind: "tool_call",
+      name: item.tool,
+      family: "task",
+      input: isRecord(item.arguments) ? item.arguments : {},
+      output: text,
+      status,
+      toolUseId: item.id,
+      ...(ref ? { truncated: true, outputRef: ref } : {}),
     });
   }
 
@@ -1776,17 +1836,21 @@ export class CodexHarness implements Harness {
     } else {
       let reference: string | null = null;
       try {
-        reference = await store({ callId, toolName, output });
+        reference = await store({ callId, blockKey: `tool:${callId}`, toolName, output });
       } catch {
         // Deliberately no message and no `describe(err)`: a store failure can
         // name a path or a connection string, and this is written to the log.
         this.log.warn("[codex] a dynamic tool's full output could not be stored");
         reference = null;
       }
-      ending =
-        typeof reference === "string" && reference.trim().length > 0
-          ? `the full output is saved as ${safeLabel(reference)}`
-          : "the full output could not be saved and is unavailable";
+      if (typeof reference === "string" && reference.trim().length > 0) {
+        // Recorded, not emitted: the block this belongs on is Codex's own item,
+        // which completes after the reply (`emitDynamicToolCall`).
+        this.active?.dynamicRefs.set(callId, reference);
+        ending = `the full output is saved as ${safeLabel(reference)}`;
+      } else {
+        ending = "the full output could not be saved and is unavailable";
+      }
     }
     const notice = `\n… truncated by capygen at ${DYNAMIC_RESULT_MAX_BYTES} bytes; ${ending}`;
     return `${headUtf8Bytes(output, DYNAMIC_RESULT_MAX_BYTES - byteLength(notice))}${notice}`;

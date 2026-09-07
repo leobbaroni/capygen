@@ -291,7 +291,7 @@ machine's real file has ~80 literal-quoted `[projects.'…']` headers to lose.
 | `McpPoolRegistry` | `apps/desktop/src/ipc/mcpPools.ts` — one `McpClientPool` per distinct resolved server list, reference-counted, shared by `ApiHarness` (`deps.acquirePool`) and the widget host (`WidgetHostDeps.pools`). Without it both built their own pool for the same project and every stdio server was spawned twice per session (R26) |
 | `secrets.has` → `{has, source}` | `source` is `stored` \| `environment` \| `none`. `harness.list` counts `ANTHROPIC_API_KEY` & co. as a key, so a bare boolean made Settings ▸ API keys say "Not set" for a provider the composer was offering |
 | `BACKEND_BLOCK_PARITY` | `packages/shared/src/blockParity.ts` — which block kinds each backend can emit, and a written reason for each it cannot. Two suites read it (`apps/desktop/test/blockParity.test.ts`, `apps/renderer/src/components/blocks/blockParity.test.tsx`), so a new block kind fails both until the table answers for all three backends |
-| `delegate_task` | `packages/engine/src/routing/delegate.ts` — capygen's own cross-backend sub-agent tool (SPEC R12, ADR-0004). Exposed to `claude` through `createSdkMcpServer` and to `api` as one more `ToolDefinition`; **not** to `codex`, whose MCP servers come from the user's `~/.codex/config.toml` and which capygen will not write to behind the user's back. A Codex agent with a cross-backend rule therefore fails open |
+| `delegate_task` | `packages/engine/src/routing/delegate.ts` — capygen's cross-backend sub-agent tool (SPEC R12, ADR-0004). Claude uses `createSdkMcpServer`, API a `ToolDefinition`, and Codex `thread/start.dynamicTools` plus `item/tool/call`. No backend configuration is rewritten. The child uses its target backend's permission configuration. |
 | `HarnessAgent.promptAddition` | the round table's session-stable prompt text, applied once per backend session: Claude `systemPrompt.append`, Codex `thread/start.developerInstructions`, `api` `buildSystemPrompt({extra})`. Nothing per-turn may go in it (R24) |
 | `HarnessAgent.permissionMode` | the **highest**-priority permission mode a harness knows (`ClaudeHarness`: `agent.permissionMode ?? config.claude.permissionMode ?? "default"`). `SessionRunner` therefore fills it from `agent.config.<backend>.permissionMode` first and only then from the global setting — passing the global one unconditionally made the per-agent override dead (SPEC R19's "per-agent overrides") |
 | `Harness.describeSnapshot?()` | optional, duck-typed, one shape per backend: Claude returns its last `system/init` (`ClaudeInitSnapshot`), Codex `{mcpServers, skills}` from `mcpServerStatus/list` + `skills/list`, `api` `{tools, mcpServers}` from the tool list it was built with. `apps/desktop/src/engine/describeSnapshot.ts` narrows it and merges the config-only halves; a harness without the method, or one whose method throws, simply has no snapshot — an info card never fails a lookup (SPEC R13) |
@@ -618,13 +618,16 @@ original tool set on same-process and fresh-process resume. `ThreadResumeParams`
 dynamicTools field: resume preserves but cannot change that set. No remote model or
 credentials were used; synthetic loopback responses selected the calls. This proves
 protocol routing, not live model choice. Removed local executors refuse old names;
-new declarations need a fresh thread. SessionRunner wiring remains pending.
+new declarations need a fresh thread. SessionRunner persists a declaration signature, detects
+addition/removal/legacy mismatch, and supplies a one-time bounded prose reference on a fresh
+thread. Unchanged declarations and target-only edits preserve the resumable thread.
 
 Dynamic results have a 64 KiB UTF-8 model budget including the stub. The optional
 storeDynamicToolOutput callback retains the full value and returns its reference;
 unwired/failed storage is explicitly reported as unavailable. Both tool and storage
 callbacks race cancellation, including callbacks that ignore abort. Desktop persistence
-wiring is needed before the shipping path can promise retained output references.
+uses the native dynamicToolCall item's callId as its block key, storing full output behind
+that block's foreign key. The streamed block contains the reference and bounded stub only.
 
 
 Sharing codec (`apps/desktop/src/sharing`) validates at both encode and decode boundaries.

@@ -183,11 +183,9 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
  * — could never be given a routing rule at all, and a rule set at creation
  * could never be seen or changed.
  *
- * It also says when a rule cannot take effect. `codex app-server` takes MCP
- * servers only from `~/.codex/config.toml`, so capygen cannot hand a Codex
- * agent the `delegate_task` tool a cross-backend route needs (ADR-0004,
- * `canDelegateFrom`): such a rule fails open onto Codex's own model, and until
- * now the only trace of that was a log line.
+ * The runtime validates the selected target and supplies the stable delegation
+ * tools at the host boundary for each backend. This panel therefore describes
+ * the effective target without making a config-file-only claim.
  */
 function RoutingSection({ agent }: { agent: Agent }) {
   const updateAgent = useAppStore((s) => s.updateAgent);
@@ -204,8 +202,6 @@ function RoutingSection({ agent }: { agent: Agent }) {
     setSaveError(null);
   }, [agent.id, agent.subagentRouting?.backend, agent.subagentRouting?.model]);
 
-  const crossBackend = backend !== "" && backend !== agent.backend;
-  const failsOpen = crossBackend && agent.backend === "codex";
   const dirty =
     backend !== (agent.subagentRouting?.backend ?? "") ||
     model.trim() !== (agent.subagentRouting?.model ?? "");
@@ -239,11 +235,11 @@ function RoutingSection({ agent }: { agent: Agent }) {
             className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
           >
             <option value="">Inherit ({BACKEND_LABEL[agent.backend]})</option>
-            <option value="claude" disabled={agent.backend === "codex"}>
+            <option value="claude">
               {BACKEND_LABEL.claude}
             </option>
             <option value="codex">{BACKEND_LABEL.codex}</option>
-            <option value="api" disabled={agent.backend === "codex"}>
+            <option value="api">
               {BACKEND_LABEL.api}
             </option>
           </select>
@@ -258,9 +254,7 @@ function RoutingSection({ agent }: { agent: Agent }) {
           />
         </div>
         <p className="text-xs text-muted-foreground" data-testid="agent-info-routing-effect">
-          {failsOpen
-            ? "This rule cannot be applied: capygen cannot give a Codex agent a delegation tool (ADR-0004), so its sub-agents run on its own model."
-            : backend || model.trim()
+          {backend || model.trim()
               ? `Sub-agents run on ${BACKEND_LABEL[(backend || agent.backend) as Backend]}${
                   model.trim() ? ` / ${model.trim()}` : ""
                 }.`

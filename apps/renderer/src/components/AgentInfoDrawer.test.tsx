@@ -90,24 +90,31 @@ describe("sub-agent routing is reachable after creation (SPEC R12)", () => {
     });
   });
 
-  it("says a Codex agent's cross-backend rule cannot be applied", async () => {
-    useAppStore.setState({ describeAgent: async () => describeOf("x") });
+  it.each([
+    ["claude", "claude-haiku-4-5"],
+    ["api", "claude-sonnet-4-5"],
+  ] as const)("lets a Codex agent route to %s", async (target, targetModel) => {
+    const user = userEvent.setup();
+    const updateAgent = vi.fn().mockResolvedValue(agent({}));
+    useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent });
     render(
       <AgentInfoDrawer
         agent={agent({
           backend: "codex",
           model: "gpt-5.5",
-          subagentRouting: { backend: "claude", model: "claude-haiku-4-5" },
         })}
         onBack={vi.fn()}
       />,
     );
 
     await waitFor(() => expect(screen.getByTestId("agent-info-routing")).toBeInTheDocument());
-    // ADR-0004: `codex app-server` takes MCP servers only from config.toml, so
-    // the rule fails open — and until now nothing but a log line said so.
-    expect(screen.getByTestId("agent-info-routing-effect")).toHaveTextContent(
-      "cannot be applied",
-    );
+    await user.selectOptions(screen.getByTestId("agent-info-routing-backend"), target);
+    await user.clear(screen.getByTestId("agent-info-routing-model"));
+    await user.type(screen.getByTestId("agent-info-routing-model"), targetModel);
+    await user.click(screen.getByTestId("agent-info-routing-save"));
+    expect(updateAgent).toHaveBeenCalledWith("a-alice", {
+      subagentRouting: { backend: target, model: targetModel },
+    });
+    expect(screen.getByTestId("agent-info-routing-effect")).toHaveTextContent("Sub-agents run on");
   });
 });

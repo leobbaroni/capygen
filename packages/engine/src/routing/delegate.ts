@@ -83,6 +83,17 @@ export interface DelegateRequest {
   prompt: string;
   /** Overrides the routed model; the routed backend is never overridable. */
   model?: string | undefined;
+  /**
+   * The calling tool's own cancellation signal (`ToolContext.signal`).
+   *
+   * `onHarness` already lets the desktop stop a delegated child when the *user*
+   * presses Stop. This is the other direction: the tool call itself was
+   * cancelled — a Codex `item/tool/call` abandoned by an interrupt, an `api`
+   * turn that ended — and the child must not keep running (and billing) for a
+   * caller that is no longer listening. Aborting one call's signal never
+   * touches another call's child.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 export interface DelegateResult {
@@ -164,6 +175,12 @@ export interface DelegateRunnerDeps {
   log?: DelegationLogger;
   /** Hard ceiling on one delegated turn; the harness is disposed after it. */
   timeoutMs?: number;
+  /**
+   * How long an aborted child is given to end its own turn after `interrupt()`
+   * before it is disposed anyway. A backend that ignores the interrupt must not
+   * be able to keep the call — or the billing — alive.
+   */
+  abortGraceMs?: number;
   /** Characters of the sub-agent's final text handed back to the caller. */
   maxResultChars?: number;
 }
@@ -178,6 +195,25 @@ export const DEFAULT_DELEGATE_TIMEOUT_MS = 10 * 60 * 1000;
  * context on every later turn of that conversation.
  */
 export const DEFAULT_DELEGATE_RESULT_CHARS = 64 * 1024;
+/** Grace between interrupting an aborted child and disposing it regardless. */
+export const DEFAULT_DELEGATE_ABORT_GRACE_MS = 2_000;
+
+/** Raced against a child's startup and its stream; unique, so nothing matches. */
+const STOPPED: unique symbol = Symbol("capygen.delegateStopped");
+
+/** Resolves with `fn`'s value, or simply resolves when the deadline passes. */
+async function withDeadline(work: Promise<unknown>, ms: number): Promise<void> {
+  await Promise.race([
+    work,
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/** What a cancelled delegation answers, whatever stage it was cut at. */
+const CANCELLED_TEXT = "capygen cancelled this delegated task before the sub-agent produced an answer.";
 
 export function createDelegateRunner(
   deps: DelegateRunnerDeps,
@@ -284,6 +320,14 @@ export function createDelegateRunner(
       config: { [routed.backend]: childConfig } as HarnessAgent["config"],
     };
 
+    // Cancelled before anything was built: constructing a child here would
+    // spawn a process (or lease a pool) for a caller that has already gone, and
+    // the only thing left to do with it would be to tear it down again.
+    if (req.signal?.aborted) {
+      log.info("[delegate] the caller had already cancelled; no sub-agent was built");
+      return { ok: false, text: CANCELLED_TEXT, backend: routed.backend, model, status: "interrupted" };
+    }
+
     let harness: Harness;
     try {
       harness = deps.makeHarness({ backend: routed.backend, model }, childAgent);
@@ -317,6 +361,47 @@ export function createDelegateRunner(
     // child is still starting must still reach it.
     const release = deps.onHarness?.(harness);
 
+    const grace = deps.abortGraceMs ?? DEFAULT_DELEGATE_ABORT_GRACE_MS;
+    let aborted = false;
+    let abortTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed: Promise<void> | null = null;
+    const disposeOnce = (): Promise<void> => {
+      disposed ??= harness.dispose().catch(() => undefined);
+      return disposed;
+    };
+    /** Resolves once this call has given up waiting for the child, whatever
+     *  the child is doing. Never resolves while the call is running normally. */
+    let resolveStop: (value: typeof STOPPED) => void = () => {};
+    const stopped = new Promise<typeof STOPPED>((resolve) => {
+      resolveStop = resolve;
+    });
+
+    /**
+     * Every escalation this call can perform, in order and on a clock.
+     *
+     * `interrupt()` is a request, `dispose()` is a request, and an
+     * `AsyncIterator` that never yields is not obliged to notice either. So
+     * each step has a deadline and the last one does not depend on the child at
+     * all: after `grace * 2` this call stops reading and answers, and the
+     * caller — a Codex `item/tool/call`, an `api` tool result — is unblocked
+     * whatever the child has decided to do.
+     */
+    const beginStop = (): void => {
+      if (aborted) return;
+      aborted = true;
+      void harness.interrupt().catch(() => undefined);
+      abortTimer = setTimeout(() => void disposeOnce(), grace);
+      abortTimer.unref?.();
+      stopTimer = setTimeout(() => resolveStop(STOPPED), grace * 2);
+      stopTimer.unref?.();
+    };
+    const onAbort = (): void => beginStop();
+    if (req.signal) {
+      if (req.signal.aborted) onAbort();
+      else req.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     emit(subagentBlock("running"), harness);
 
     const agent = childAgent;
@@ -327,14 +412,59 @@ export function createDelegateRunner(
     let error: string | null = null;
 
     try {
-      await harness.start(deps.session, agent);
+      /**
+       * Startup is raced, not merely awaited.
+       *
+       * `start()` is where a backend takes hold of something real — a child
+       * process, an SDK session, a pool lease — and it can be slow or, for a
+       * backend that is wedged, endless. Awaiting it plainly meant an abort
+       * that landed here was noticed only *after* it returned, and the loop
+       * below then sent a turn the user had already stopped.
+       */
+      const startedOk = await Promise.race([
+        harness.start(deps.session, agent).then(
+          () => "started" as const,
+          (err: unknown) => ({ failed: err }),
+        ),
+        stopped,
+      ]);
+      if (startedOk === STOPPED || req.signal?.aborted) {
+        status = "interrupted";
+        error = "the caller cancelled this delegated task";
+        throw new CancelledDelegation();
+      }
+      if (typeof startedOk === "object") throw startedOk.failed;
+
       const turnId = newId("turn");
-      const timer = setTimeout(() => {
-        void harness.interrupt().catch(() => undefined);
-      }, deps.timeoutMs ?? DEFAULT_DELEGATE_TIMEOUT_MS);
+      // The existing hard ceiling on one delegated turn, now with the teardown
+      // its own doc comment promised: interrupt, then dispose, then stop
+      // reading. Before this it only ever asked, and a backend that ignored the
+      // request kept the call open for good.
+      const timer = setTimeout(() => beginStop(), deps.timeoutMs ?? DEFAULT_DELEGATE_TIMEOUT_MS);
       timer.unref?.();
+      // Driven by hand rather than by `for await`, because `for await` offers
+      // no way to stop waiting on a `next()` that never settles.
+      const iterator = harness.send({ turnId, text: req.prompt })[Symbol.asyncIterator]();
       try {
-        for await (const event of harness.send({ turnId, text: req.prompt })) {
+        for (;;) {
+          const step = await Promise.race([
+            iterator.next().then(
+              (result) => ({ result }),
+              (err: unknown) => ({ failed: err }),
+            ),
+            stopped,
+          ]);
+          // Given up on: nothing this child produces from here is emitted, and
+          // the abandoned `next()` above already has both handlers attached, so
+          // a late rejection cannot go unhandled.
+          if (step === STOPPED) {
+            status = status === "done" ? "interrupted" : status;
+            error ??= "the delegated sub-agent stopped responding and was abandoned";
+            break;
+          }
+          if ("failed" in step) throw step.failed;
+          if (step.result.done === true) break;
+          const event = step.result.value;
           switch (event.type) {
             case "block": {
               // Text is what the caller gets back; every block is also
@@ -372,13 +502,40 @@ export function createDelegateRunner(
         }
       } finally {
         clearTimeout(timer);
+        // Asked for, never waited on: a generator's own cleanup can hang too.
+        void Promise.resolve(iterator.return?.()).catch(() => undefined);
       }
     } catch (err) {
-      status = "error";
-      error = describe(err);
+      // A cancellation is not a failure to report as one: `status`/`error` are
+      // already set, and the teardown below still runs.
+      if (!(err instanceof CancelledDelegation)) {
+        status = "error";
+        error = describe(err);
+      }
     } finally {
-      await harness.dispose().catch(() => undefined);
-      release?.();
+      if (abortTimer) clearTimeout(abortTimer);
+      if (stopTimer) clearTimeout(stopTimer);
+      // Removed on every path, including the ordinary one. The caller's signal
+      // belongs to a whole parent turn and outlives many delegated calls; a
+      // listener left on it per call is a leak that grows with the session.
+      req.signal?.removeEventListener("abort", onAbort);
+      try {
+        // Bounded: a `dispose()` that hangs must not hold the caller.
+        await withDeadline(disposeOnce(), grace);
+      } finally {
+        // Its own `finally`, so a wedged teardown cannot keep this child in the
+        // desktop's interrupt registry for the rest of the session.
+        release?.();
+      }
+    }
+
+    // A child torn down mid-flight has not completed, whatever its stream did
+    // or did not say on the way out: a backend that ignores `interrupt()` emits
+    // no `turn` event at all, and reporting that as a successful empty answer
+    // would tell the caller its cancelled sub-task had simply found nothing.
+    if (aborted && status === "done") {
+      status = "interrupted";
+      error ??= "the caller cancelled this delegated task";
     }
 
     // Bounded here rather than at the two call sites, so the Claude in-process
@@ -444,6 +601,9 @@ export function delegateTaskTool(
         description,
         prompt,
         ...(typeof input.model === "string" && input.model ? { model: input.model } : {}),
+        // The caller's cancellation travels with the request: a tool call that
+        // is abandoned must not leave a sub-agent running behind it.
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
       // `createDelegateRunner` already clamps to its own ceiling; this honours
       // the *caller's* budget as every other tool in `tools/` does, so a
@@ -453,6 +613,9 @@ export function delegateTaskTool(
     },
   };
 }
+
+/** Thrown only to leave the try block; never surfaces to a caller. */
+class CancelledDelegation extends Error {}
 
 function safely<T>(fn: () => T, log: DelegationLogger): T | null {
   try {

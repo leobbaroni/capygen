@@ -307,6 +307,7 @@ export type CodexItem =
   | CodexCommandExecutionItem
   | CodexFileChangeItem
   | CodexMcpToolCallItem
+  | CodexDynamicToolCallItem
   | CodexWebSearchItem
   | CodexCollabAgentToolCallItem
   | CodexSubAgentActivityItem;
@@ -524,6 +525,22 @@ export type CodexDynamicToolCallOutputContentItem =
  * model can read and act on — the JSON-RPC call itself still succeeded. A
  * JSON-RPC error would tell Codex capygen cannot speak the method at all.
  */
+/** `v2/ThreadItem.ts` — Codex's own item for a client-hosted tool call. Its
+ *  `id` **is** the `callId` of the matching `item/tool/call`, and `item/started`
+ *  arrives before that request (both verified against the pinned binary through
+ *  the loopback provider, `scripts/probe-codex-dynamic-tools.ts`). */
+export interface CodexDynamicToolCallItem {
+  type: "dynamicToolCall";
+  id: string;
+  namespace: string | null;
+  tool: string;
+  arguments?: unknown;
+  status?: string;
+  contentItems?: CodexDynamicToolCallOutputContentItem[] | null;
+  success?: boolean | null;
+  durationMs?: number | null;
+}
+
 export interface CodexDynamicToolCallResponse {
   contentItems: CodexDynamicToolCallOutputContentItem[];
   success: boolean;

@@ -12,16 +12,20 @@ the contract the new lead keeps; changes go through an ADR under `docs/adr/`.
   Claude `PreToolUse` hook on `Task|Agent` by rewriting `updatedInput.model`; recorded on the
   `subagent` block as `{backend, model, delegated: false}`. Proven live (haiku accounting).
 - **Different backend** (e.g. Claude lead, sub-agents on Codex): the lead is given the capygen tool
-  `delegate_task` (Claude: in-process MCP server `capygen`; api: a registry tool; Codex: not
-  available — app-server takes MCP servers only from `config.toml`) and a session-stable prompt
+  `delegate_task` (Claude: in-process MCP server `capygen`; api: a registry tool; Codex:
+  app-server dynamic client tool) and a session-stable prompt
   telling it when to use it. capygen runs the sub-agent itself on the routed backend/model in the
   same project, streams it into the parent's turn under a `subagent` block `{delegated: true}`,
   bills tokens to the model that spent them, and returns the final text (size-bounded).
-- **Fail open, always:** any resolver/harness/tool failure means the backend spawns its own
-  sub-agent exactly as it would without capygen; the parent turn is never lost.
-- **Interrupt** stops delegated children too (`SessionRunner.delegated` registry).
+- **Routing fallback:** a routing failure leaves the parent able to continue and returns a
+  failed tool result explaining the fallback. It never overrides a permission denial or Stop.
+- **Interrupt** stops delegated children too (`SessionRunner.delegated` registry). Startup,
+  stream reads and teardown have bounded cancellation; late output is discarded.
+- Codex fixes dynamic tool declarations at thread creation. Adding/removing declarations
+  starts a fresh thread with a visible notice and one bounded quotation of recent prose.
+  An unchanged declaration set resumes normally, including across an app restart.
 - UI: routing editable per agent in the Agent info drawer and per session in Session settings;
-  the effective route is shown; Codex agents cannot be given a cross-backend rule.
+  the effective route is shown, including Codex cross-backend rules.
 
 ## 2. Permissions, approvals and interaction (SPEC R27, R32)
 

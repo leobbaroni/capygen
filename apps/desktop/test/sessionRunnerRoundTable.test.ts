@@ -570,7 +570,12 @@ describe("sub-agent routing wiring (SPEC R12)", () => {
     ).toBeNull();
   });
 
-  it("fails open for a Codex agent, which cannot be handed a tool", async () => {
+  it("hands a Codex agent the tool as a client-hosted dynamic tool", async () => {
+    // ADR-0004 recorded that this had to fail open, because `codex app-server`
+    // takes MCP servers only from the user's `config.toml`. That is still true
+    // of MCP servers and still not something capygen writes behind the user's
+    // back — but the pinned binary also has `ThreadStartParams.dynamicTools`,
+    // which needs no such file (`packages/engine/scripts/probe-codex-dynamic-tools.ts`).
     const table = await roundTable();
     await call("agents.update", {
       agentId: table.codex,
@@ -580,9 +585,15 @@ describe("sub-agent routing wiring (SPEC R12)", () => {
     await idle(table.sessionId);
 
     const wiring = started.find((s) => s.agent.agentId === table.codex)!;
+    // Not Claude's in-process MCP server, and not the `api` registry entry:
+    // Codex gets its own mechanism.
     expect(wiring.extras.mcpServers).toBeUndefined();
     expect(wiring.extras.extraTools).toBeUndefined();
-    expect(wiring.agent.promptAddition).not.toContain("delegate_task");
+    expect(wiring.extras.dynamicTools?.map((tool) => tool.name)).toEqual(["delegate_task"]);
+    expect(wiring.extras.storeDynamicToolOutput).toBeTypeOf("function");
+    // And it is told about the tool in the same session-stable prompt addition
+    // every other delegating backend gets.
+    expect(wiring.agent.promptAddition).toContain("delegate_task");
   });
 });
 

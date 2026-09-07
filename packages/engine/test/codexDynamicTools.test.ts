@@ -1014,3 +1014,124 @@ describe("CodexHarness dynamic tools — the store cannot outlive the abort", ()
     }
   });
 });
+
+describe("CodexHarness dynamic tools — the native item is the block (no duplicates)", () => {
+  const OVER = "🙂".repeat(40_000);
+
+  /** Codex's own frames for a dynamic call: `item/started` arrives *before* the
+   *  `item/tool/call` request and the item id **is** the callId (verified
+   *  against the pinned binary through the loopback provider). */
+  function itemFrame(status: string, extra: Record<string, unknown> = {}) {
+    return {
+      threadId: "thread_dyn",
+      turnId: "turn_dyn",
+      item: {
+        type: "dynamicToolCall",
+        id: "call_1",
+        namespace: null,
+        tool: "delegate_task",
+        arguments: { prompt: "hello" },
+        status,
+        contentItems: null,
+        success: null,
+        durationMs: null,
+        ...extra,
+      },
+    };
+  }
+
+  it("maps the native dynamicToolCall item onto one tool_call block", async () => {
+    const { server, harness, events, done } = await rig([echoTool()]);
+    server.notify("item/started", itemFrame("inProgress"));
+    await settle();
+    const response = (await server.ask("item/tool/call", call())) as CallResponse;
+    expect(response.success).toBe(true);
+    server.notify(
+      "item/completed",
+      itemFrame("completed", {
+        contentItems: [{ type: "inputText", text: "ran:hello" }],
+        success: true,
+        durationMs: 12,
+      }),
+    );
+    await settle();
+    const toolBlocks = events.filter(
+      (e): e is Extract<EngineEvent, { type: "block" }> =>
+        e.type === "block" && e.patch.kind === "tool_call",
+    );
+    // One key for the whole call: the harness must not invent a second block
+    // beside the one Codex's own item already owns.
+    expect(new Set(toolBlocks.map((b) => b.key))).toEqual(new Set(["tool:call_1"]));
+    const last = toolBlocks.at(-1)!;
+    expect(last.patch).toMatchObject({
+      kind: "tool_call",
+      name: "delegate_task",
+      family: "task",
+      status: "success",
+      toolUseId: "call_1",
+      output: "ran:hello",
+    });
+    finish(server);
+    await done;
+    await harness.dispose();
+  });
+
+  it("stamps outputRef on that block and keeps the megabytes out of it", async () => {
+    const stored: { blockKey: string; output: string }[] = [];
+    const server = createFakeAppServer({
+      handlers: {
+        initialize: () => ({}),
+        "thread/start": () => THREAD,
+        "skills/list": () => ({ data: [] }),
+        "turn/start": () => TURN,
+      },
+    });
+    const events: EngineEvent[] = [];
+    const harness = new CodexHarness({
+      transport: server.transport,
+      dynamicTools: [echoTool({ run: async () => ({ content: OVER }) })],
+      storeDynamicToolOutput: (info) => {
+        stored.push({ blockKey: info.blockKey, output: info.output });
+        return "toolOutput_7";
+      },
+    });
+    await harness.start(SESSION, { ...AGENT, permissionMode: "bypassPermissions" });
+    const done = (async () => {
+      for await (const e of harness.send({ turnId: "turn_row", text: "go" })) events.push(e);
+    })();
+    await server.waitForRequest("turn/start");
+    await settle();
+
+    server.notify("item/started", itemFrame("inProgress"));
+    await settle();
+    await server.ask("item/tool/call", call());
+    server.notify(
+      "item/completed",
+      itemFrame("completed", {
+        contentItems: [{ type: "inputText", text: "stub" }],
+        success: true,
+      }),
+    );
+    await settle();
+
+    // The store was told which block owns the value, so the desktop can satisfy
+    // the tool_outputs foreign key instead of orphaning the row.
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.blockKey).toBe("tool:call_1");
+    expect(stored[0]?.output).toBe(OVER);
+
+    const last = events
+      .filter(
+        (e): e is Extract<EngineEvent, { type: "block" }> =>
+          e.type === "block" && e.key === "tool:call_1",
+      )
+      .at(-1)!;
+    expect(last.patch).toMatchObject({ outputRef: "toolOutput_7", truncated: true });
+    // R25: the reference replaces the payload, it does not accompany it.
+    expect(last.patch).not.toHaveProperty("fullOutput");
+    expect(JSON.stringify(last.patch).length).toBeLessThan(10_000);
+    finish(server);
+    await done;
+    await harness.dispose();
+  });
+});

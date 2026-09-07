@@ -3,6 +3,7 @@
  * levers, and — the promise the whole requirement rests on — that every failure
  * lands on "spawn on the inherited model" rather than on a broken turn.
  */
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { AsyncQueue } from "../src/asyncQueue.js";
 import type {
@@ -450,5 +451,381 @@ describe("a delegated turn is bounded and interruptible (SPEC R12/R23/R25)", () 
     await run({ description: "d", prompt: "p" });
     expect(seen).toEqual([sub]);
     expect(released).toBe(1);
+  });
+});
+
+describe("delegate_task cancellation reaches the child (SPEC R12, R27)", () => {
+  /** A child that never finishes on its own, and only stops when told. */
+  class StubbornHarness extends ScriptedHarness {
+    interrupts = 0;
+    private out: AsyncQueue<EngineEvent> | null = null;
+    /** When false, `interrupt()` is accepted but changes nothing — a backend
+     *  that ignores the request, which is what `dispose()` has to cover. */
+    constructor(readonly obeysInterrupt: boolean) {
+      super("codex", () => {});
+    }
+    override send(): AsyncIterable<EngineEvent> {
+      this.out = new AsyncQueue<EngineEvent>();
+      return this.out;
+    }
+    override async interrupt(): Promise<boolean> {
+      this.interrupts += 1;
+      if (this.obeysInterrupt) {
+        this.out?.push({ type: "turn", status: "interrupted" });
+        this.out?.close();
+      }
+      return true;
+    }
+    override async dispose(): Promise<void> {
+      this.disposed += 1;
+      this.out?.close();
+    }
+  }
+
+  function runnerFor(sub: StubbornHarness, released: { count: number }) {
+    return createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onHarness: () => () => {
+        released.count += 1;
+      },
+      abortGraceMs: 20,
+    });
+  }
+
+  it("interrupts and disposes the child when the caller's signal aborts", async () => {
+    const sub = new StubbornHarness(true);
+    const released = { count: 0 };
+    const abort = new AbortController();
+    const pending = runnerFor(sub, released)({
+      description: "d",
+      prompt: "p",
+      signal: abort.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    expect(sub.interrupts).toBe(1);
+    expect(sub.disposed).toBe(1);
+    expect(released.count).toBe(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it("still disposes a child whose backend ignores the interrupt", async () => {
+    const sub = new StubbornHarness(false);
+    const released = { count: 0 };
+    const abort = new AbortController();
+    const pending = runnerFor(sub, released)({
+      description: "d",
+      prompt: "p",
+      signal: abort.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    expect(sub.interrupts).toBe(1);
+    // No detached billing: the child is torn down even though it never
+    // acknowledged the interrupt.
+    expect(sub.disposed).toBe(1);
+    expect(released.count).toBe(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it("does not touch a child when a different call's signal aborts", async () => {
+    const first = new StubbornHarness(true);
+    const second = new StubbornHarness(true);
+    const released = { count: 0 };
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const runFirst = runnerFor(first, released);
+    const runSecond = runnerFor(second, released);
+    const a = runFirst({ description: "a", prompt: "a", signal: firstAbort.signal });
+    const b = runSecond({ description: "b", prompt: "b", signal: secondAbort.signal });
+    await new Promise((r) => setTimeout(r, 10));
+    firstAbort.abort();
+    await a;
+    expect(first.interrupts).toBe(1);
+    expect(second.interrupts).toBe(0);
+    expect(second.disposed).toBe(0);
+    secondAbort.abort();
+    await b;
+    expect(second.interrupts).toBe(1);
+  });
+
+  it("delegateTaskTool hands the tool context's signal to the runner", async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const tool = delegateTaskTool(async (req) => {
+      seen.push(req.signal);
+      return { ok: true, text: "done" };
+    });
+    const abort = new AbortController();
+    await tool.run(
+      { description: "d", prompt: "p" },
+      {
+        cwd: "C:/proj",
+        signal: abort.signal,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        maxOutputChars: 1000,
+        ask: async () => ({}),
+      },
+    );
+    expect(seen).toEqual([abort.signal]);
+  });
+});
+
+describe("a cancelled delegation never reaches a live child", () => {
+  class SlowStartHarness extends ScriptedHarness {
+    interrupts = 0;
+    sends = 0;
+    startResolved = false;
+    private out: AsyncQueue<EngineEvent> | null = null;
+    constructor(private readonly startGate: Promise<void>) {
+      super("codex", () => {});
+    }
+    override async start(): Promise<void> {
+      await this.startGate;
+      this.startResolved = true;
+    }
+    override send(): AsyncIterable<EngineEvent> {
+      this.sends += 1;
+      this.out = new AsyncQueue<EngineEvent>();
+      return this.out;
+    }
+    override async interrupt(): Promise<boolean> {
+      this.interrupts += 1;
+      return true;
+    }
+    override async dispose(): Promise<void> {
+      this.disposed += 1;
+      this.out?.close();
+    }
+  }
+
+  it("builds no child at all when the signal is already aborted", async () => {
+    const factory = vi.fn(() => new ScriptedHarness("codex", () => {}));
+    const abort = new AbortController();
+    abort.abort();
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: factory,
+      abortGraceMs: 20,
+    });
+    const result = await run({ description: "d", prompt: "p", signal: abort.signal });
+    expect(result.ok).toBe(false);
+    // Nothing was constructed, so nothing has to be torn down.
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("does not send when the abort lands while start() is still running", async () => {
+    let openStart: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      openStart = resolve;
+    });
+    const sub = new SlowStartHarness(gate);
+    const released = { count: 0 };
+    const abort = new AbortController();
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onHarness: () => () => {
+        released.count += 1;
+      },
+      abortGraceMs: 20,
+    });
+    const pending = run({ description: "d", prompt: "p", signal: abort.signal });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    // start() only finishes after the caller gave up; the turn must not follow.
+    openStart!();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sub.startResolved).toBe(true);
+    expect(sub.sends).toBe(0);
+    expect(sub.disposed).toBeGreaterThan(0);
+    expect(released.count).toBe(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it("tears down and answers when start() never resolves at all", async () => {
+    const sub = new SlowStartHarness(new Promise<void>(() => {}));
+    const released = { count: 0 };
+    const abort = new AbortController();
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onHarness: () => () => {
+        released.count += 1;
+      },
+      abortGraceMs: 20,
+    });
+    const pending = run({ description: "d", prompt: "p", signal: abort.signal });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(sub.sends).toBe(0);
+    expect(sub.disposed).toBeGreaterThan(0);
+    // No dead child retained in the caller's registry.
+    expect(released.count).toBe(1);
+  });
+});
+
+describe("a delegated call is bounded even when the child ignores everything", () => {
+  /** Ignores interrupt, ignores dispose, and never yields or ends. */
+  class WedgedHarness extends ScriptedHarness {
+    interrupts = 0;
+    disposeCalls = 0;
+    returnCalls = 0;
+    lateEmits = 0;
+    private push: ((event: EngineEvent) => void) | null = null;
+    constructor(private readonly hangDispose = false) {
+      super("codex", () => {});
+    }
+    override send(): AsyncIterable<EngineEvent> {
+      const self = this;
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<EngineEvent> {
+          return {
+            next(): Promise<IteratorResult<EngineEvent>> {
+              return new Promise((resolve) => {
+                self.push = (event) => {
+                  self.lateEmits += 1;
+                  resolve({ value: event, done: false });
+                };
+              });
+            },
+            return(): Promise<IteratorResult<EngineEvent>> {
+              self.returnCalls += 1;
+              return new Promise(() => {}); // even the cleanup hangs
+            },
+          };
+        },
+      };
+    }
+    override async interrupt(): Promise<boolean> {
+      this.interrupts += 1;
+      return true;
+    }
+    override async dispose(): Promise<void> {
+      this.disposeCalls += 1;
+      if (this.hangDispose) await new Promise(() => {});
+    }
+    /** Whatever the abandoned child eventually produces. */
+    emitLate(event: EngineEvent): void {
+      this.push?.(event);
+    }
+  }
+
+  function runnerFor(sub: WedgedHarness, released: { count: number }, events: EngineEvent[]) {
+    return createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      onEvent: (event) => events.push(event),
+      onHarness: () => () => {
+        released.count += 1;
+      },
+      abortGraceMs: 20,
+    });
+  }
+
+  it("answers in bounded time when the send iterator never yields or ends", async () => {
+    const sub = new WedgedHarness();
+    const released = { count: 0 };
+    const events: EngineEvent[] = [];
+    const abort = new AbortController();
+    const started = Date.now();
+    const pending = runnerFor(sub, released, events)({
+      description: "d",
+      prompt: "p",
+      signal: abort.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(result.ok).toBe(false);
+    expect(released.count).toBe(1);
+  });
+
+  it("releases the registry even when dispose() itself hangs", async () => {
+    const sub = new WedgedHarness(true);
+    const released = { count: 0 };
+    const events: EngineEvent[] = [];
+    const abort = new AbortController();
+    const started = Date.now();
+    const pending = runnerFor(sub, released, events)({
+      description: "d",
+      prompt: "p",
+      signal: abort.signal,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    const result = await pending;
+    // A wedged teardown must not hold the caller — or the registry slot.
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(sub.disposeCalls).toBeGreaterThan(0);
+    expect(released.count).toBe(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it("emits nothing from a child that produces output after it was abandoned", async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const sub = new WedgedHarness();
+      const released = { count: 0 };
+      const events: EngineEvent[] = [];
+      const abort = new AbortController();
+      const pending = runnerFor(sub, released, events)({
+        description: "d",
+        prompt: "p",
+        signal: abort.signal,
+      });
+      await new Promise((r) => setTimeout(r, 10));
+      abort.abort();
+      await pending;
+      const before = events.length;
+      sub.emitLate({ type: "block", key: "msg:late", patch: { kind: "text", text: "too late" } });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(events.length).toBe(before);
+      expect(JSON.stringify(events)).not.toContain("too late");
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("leaves no abort listener behind on an ordinary completed call", async () => {
+    const sub = new ScriptedHarness("codex", (out) => {
+      out.push({ type: "block", key: "msg:0", patch: { kind: "text", text: "fine" } });
+      out.push({ type: "turn", status: "done" });
+      out.close();
+    });
+    const abort = new AbortController();
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      makeHarness: () => sub,
+      abortGraceMs: 20,
+    });
+    const result = await run({ description: "d", prompt: "p", signal: abort.signal });
+    expect(result.ok).toBe(true);
+    // A listener left on a long-lived signal is a leak: the parent turn's
+    // signal outlives many delegated calls.
+    expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
   });
 });

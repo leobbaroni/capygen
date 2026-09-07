@@ -182,8 +182,13 @@ checks preceded the final Phase 7–8 acceptance gate above. Packaged SDK smoke 
 Reviewed commits on main: share bundle contract `5f72db8`, atomic share storage `c7f23fd`,
 Codex dynamic bridge `202fe4d`, informational MCP menu presentation `c5fbb85`.
 The independently verified local Hosts page is `da9e27a` (Phase 10 subtask only).
-No new phase is accepted. Codec/IPC/UI, runtime policies/members/approvals, session MCP
-catalogue integration, and Codex desktop delegation wiring remain in progress.
+Share codec is reviewed at `13d8ff8` (44 focused tests). Codex desktop delegation and its
+routing UI are now reviewed (114 engine/desktop plus five renderer focused tests); native
+dynamic-call blocks retain full-output references, and declaration changes start a fresh
+thread with a bounded inert prose reference. Live model choice remains unproved.
+No new phase is accepted. Sharing IPC/UI, runtime policies/members/approvals and session MCP
+catalogue integration remain in progress. RoundTable's existing whole-history block read
+is a known efficiency follow-up; delegation continuity itself now reads only bounded prose.
 
 Runtime policy design is ADR-0007; execution ownership/migration allocation is in
 `docs/plans/phase9.md`. ADR-0008 is a proposal for later dictation/extensions, not an

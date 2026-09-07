@@ -45,15 +45,23 @@ export function roundTableAgents(store: CapygenStore, sessionId: string): RoundT
  *    (`routing/sdkMcp.ts`);
  *  - `api` — yes, it is capygen's own tool loop, so the tool is one more
  *    `ToolDefinition`;
- *  - `codex` — **no**. `codex app-server` takes MCP servers from the user's
- *    `config.toml`, not from a client, and capygen refuses to write a server
- *    into a user's config behind their back. A Codex agent whose routing rule
- *    crosses backends therefore fails open: it spawns its own sub-agent on its
- *    own model, which is exactly what R12 promises when a policy cannot be
- *    applied. Recorded in docs/adr/0004-subagent-routing.md as the follow-up.
+ *  - `codex` — **yes, since the dynamic-tools bridge**. ADR-0004 recorded a
+ *    "no" here, and its reasoning was about *MCP servers*: `codex app-server`
+ *    takes those from the user's `config.toml`, and capygen will not write into
+ *    a user's config behind their back. That reasoning still holds, and it is
+ *    not the only way to hand Codex a tool. The pinned 0.153.4 binary carries
+ *    `ThreadStartParams.dynamicTools` — client-hosted tools declared per thread
+ *    and called back over `item/tool/call` — which touches no file the user's
+ *    own CLI reads. `packages/engine/scripts/probe-codex-dynamic-tools.ts`
+ *    proves against that binary that a declared tool is routed back to the
+ *    client, and that the declaration survives a resume in a fresh app-server
+ *    process. The field is gated behind the `experimentalApi` capability, which
+ *    capygen already declares; a binary that stops accepting it fails
+ *    `thread/start`, and `CodexHarness.dynamicToolsActive()` then reports the
+ *    tools as absent rather than pretending otherwise.
  */
-export function canDelegateFrom(backend: Backend): boolean {
-  return backend === "claude" || backend === "api";
+export function canDelegateFrom(_backend: Backend): boolean {
+  return true;
 }
 
 /**

@@ -15,6 +15,8 @@
  *     starting a fresh conversation.
  */
 import {
+  DELEGATE_TASK_SCHEMA,
+  DELEGATE_TASK_TOOL,
   createDelegateMcpServer,
   createDelegateRunner,
   createHarnessForBackend,
@@ -46,6 +48,8 @@ import {
   type SlashCommand,
   type TurnStatus,
 } from "@capygen/shared";
+import { createHash } from "node:crypto";
+import { buildImportReference } from "@capygen/engine";
 import { loadApiHistory } from "./history.js";
 import { emitBlock, errorBlock, finishTurn } from "./persist.js";
 import { describeAgent as describeAgentInfo } from "../ipc/agentsDescribe.js";
@@ -78,6 +82,59 @@ export function backendSessionBackendKey(agentId: string): string {
 }
 
 /**
+ * The client-hosted tool set the stored backend session was **started** with.
+ *
+ * A Codex thread's `dynamicTools` are fixed at `thread/start`: the pinned
+ * schema has no such field on `ThreadResumeParams`, so a resumed thread keeps
+ * the set it was created with and no later edit can reach it (proven both ways
+ * in `packages/engine/scripts/probe-codex-dynamic-tools.ts`).
+ *
+ * Resuming across a changed set is therefore a silent lie in one of two
+ * directions: a tool the agent now has that the thread will never offer, or one
+ * it no longer has that the thread still advertises. Recording a signature of
+ * what was declared makes the difference detectable, so the runner can start a
+ * fresh thread and say why instead.
+ *
+ * The signature is names and schemas only. A routing *target* change —
+ * delegating to a different backend or model — does not alter the tool the
+ * model sees, so it must not throw away a live thread.
+ */
+/** Rows the continuity read will look at — enough prose to fill the 6 KB
+ *  reference several times over, and a hard stop well before "the session". */
+const CONTINUITY_MAX_ROWS = 40;
+/** Characters read from any one block, so a single huge row cannot cross the
+ *  process boundary to be thrown away a moment later. */
+const CONTINUITY_MAX_CHARS_PER_ROW = 2_000;
+
+export function backendSessionToolsKey(agentId: string): string {
+  return `engine.backendSession.dynamicTools.${agentId}`;
+}
+
+/** Stable across key order and across runs; empty when nothing is declared. */
+export function dynamicToolSignature(
+  tools: readonly { name: string; parameters: unknown }[] | undefined,
+): string {
+  if (!tools || tools.length === 0) return "";
+  const canonical = tools
+    .map((tool) => `${tool.name}:${stableJson(tool.parameters)}`)
+    .sort()
+    .join("|");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
+/** JSON with object keys sorted, so formatting cannot move the signature. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
  * [B1] The per-agent wiring the *routing policy* adds on top of a harness's own
  * deps (SPEC R12). Built in `harnessFor`, where the session and the agent row
  * are both in hand; a test's `makeHarness` may simply ignore the second
@@ -93,6 +150,26 @@ export interface HarnessExtras {
     | null;
   /** The same tool, as an `api`-backend tool definition. */
   extraTools?: readonly ReturnType<typeof delegateTaskTool>[];
+  /**
+   * The same tool again, for Codex: client-hosted tools declared once on
+   * `thread/start` and called back through `item/tool/call`.
+   *
+   * ADR-0004 recorded that a Codex lead could not be handed `delegate_task`,
+   * because app-server took MCP servers only from the user's `config.toml`.
+   * That is still true of MCP servers; it is not true of *tools*. The pinned
+   * 0.153.4 binary carries `ThreadStartParams.dynamicTools`, and
+   * `packages/engine/scripts/probe-codex-dynamic-tools.ts` proves against that
+   * binary that a declared tool is routed back to the client — with no edit to
+   * any file the user's own CLI reads.
+   */
+  dynamicTools?: readonly ReturnType<typeof delegateTaskTool>[];
+  /** Persists a dynamic tool's full result and returns its `tool_outputs` id. */
+  storeDynamicToolOutput?: (info: {
+    callId: string;
+    blockKey: string;
+    toolName: string;
+    output: string;
+  }) => string | null;
   /** Full main-process-only MCP values captured with this harness lifecycle. */
   mcpServerConfigs?: readonly McpServerConfig[];
 }
@@ -257,7 +334,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           ...(extras.routeSubagent ? { routeSubagent: extras.routeSubagent } : {}),
           ...(extras.mcpServers ? { mcpServers: extras.mcpServers } : {}),
         },
-        codex: { log },
+        codex: {
+          log,
+          ...(extras.dynamicTools ? { dynamicTools: extras.dynamicTools } : {}),
+          ...(extras.storeDynamicToolOutput
+            ? { storeDynamicToolOutput: extras.storeDynamicToolOutput }
+            : {}),
+        },
         api: {
           log,
           ...(deps.keys ? { keys: deps.keys } : {}),
@@ -332,6 +415,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * disposed (`createDelegateRunner`'s `onHarness` contract).
    */
   const delegated = new Map<string, Set<Harness>>();
+
+  /**
+   * `sessionId:agentId` → the signature of the client-hosted tool set the live
+   * harness was built with, recorded alongside its backend session id so a
+   * later launch can tell whether the stored thread still matches.
+   */
+  const declaredToolSignature = new Map<string, string>();
 
   /**
    * [B1] Everything the routing policy adds to one agent's harness (SPEC R12).
@@ -437,6 +527,33 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
 
     if (agent.backend === "claude") extras.mcpServers = () => createDelegateMcpServer({ run, log });
     if (agent.backend === "api") extras.extraTools = [delegateTaskTool(run)];
+    if (agent.backend === "codex") {
+      extras.dynamicTools = [delegateTaskTool(run)];
+      /**
+       * R25 for a delegated answer, with a foreign key that has to hold.
+       *
+       * `tool_outputs.block_id` references a real block, and the block for a
+       * dynamic call is the one Codex's own `dynamicToolCall` item owns — it
+       * opens that item *before* it asks, so the row exists by the time this
+       * runs. If it does not, this returns `null` and the harness tells the
+       * model the output is unavailable, rather than orphaning a row or
+       * stuffing megabytes into the block payload.
+       */
+      extras.storeDynamicToolOutput = ({ blockKey, output }) => {
+        const parentTurn = active.get(agentKey(session.id, agent.id));
+        const slot = parentTurn?.blocks.get(blockKey);
+        if (!slot) {
+          log.warn(`[engine] no block for ${blockKey}; the delegated output was not stored`);
+          return null;
+        }
+        try {
+          return store.toolOutputs.put({ blockId: slot.id, content: output }).id;
+        } catch (err) {
+          log.warn(`[engine] storing a delegated output failed`, err);
+          return null;
+        }
+      };
+    }
     log.info(
       `[engine] ${agent.mentionName} delegates sub-agents to ${target.backend}/` +
         `${target.model || "(backend default)"}`,
@@ -463,8 +580,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    */
   function effectiveHarnessAgent(
     agent: Agent,
-    extras: { promptAddition?: string } = {},
-  ): { agent: HarnessAgent } | { error: string } {
+    extras: { promptAddition?: string; dynamicTools?: readonly { name: string; parameters: unknown }[] } = {},
+  ): { agent: HarnessAgent; notice?: string } | { error: string } {
     const global = settings();
     // The effective config first: for `api` it names the provider, and which
     // model may run depends on that.
@@ -488,14 +605,16 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // unset — where `ApiHarness.resolveConfig` defaults it to Anthropic — is
     // how an OpenAI-only profile ended up sending `gpt-5` to Anthropic.
     if (checked?.provider) config.provider = checked.provider;
+    const resume = resumeIdFor(agent, extras);
     return {
+      ...(resume.notice ? { notice: resume.notice } : {}),
       agent: {
         agentId: agent.id,
         name: agent.name,
         backend: agent.backend,
         model: resolved.model,
         permissionMode: resolvePermissionMode(global, agent.config, agent.backend),
-        resumeSessionId: resumeIdFor(agent),
+        resumeSessionId: resume.id,
         config: { [agent.backend]: config } as HarnessAgent["config"],
         ...(extras.promptAddition ? { promptAddition: extras.promptAddition } : {}),
       },
@@ -508,9 +627,12 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * — `agents.update` clears both keys whenever the backend changes, so an
    * unlabelled id cannot have crossed backends.
    */
-  function resumeIdFor(agent: Agent): string | null {
+  function resumeIdFor(
+    agent: Agent,
+    extras: { dynamicTools?: readonly { name: string; parameters: unknown }[] },
+  ): { id: string | null; notice?: string } {
     const id = store.settings.getRaw<string | null>(backendSessionKey(agent.id), null);
-    if (!id) return null;
+    if (!id) return { id: null };
     const recorded = store.settings.getRaw<string | null>(
       backendSessionBackendKey(agent.id),
       null,
@@ -519,9 +641,137 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       log.info(
         `[engine] not resuming ${recorded} session ${id} on ${agent.backend} for ${agent.id}`,
       );
-      return null;
+      return { id: null };
     }
-    return id;
+    /**
+     * A stored thread whose declared tool set no longer matches this agent's is
+     * not a thread this agent can use: the set cannot be changed on resume. A
+     * fresh thread is the only way to apply it — and the user is told, because
+     * a backend conversation silently restarting is exactly the kind of thing
+     * that looks like lost context. The native history is never touched; it
+     * stays on disk under its own thread id.
+     */
+    // Only Codex fixes its tool set at thread start. Guarding on the backend
+    // rather than on "are there tools" keeps a future extras flag on another
+    // backend from throwing away a perfectly good session with this notice.
+    if (agent.backend === "codex") {
+      const wanted = dynamicToolSignature(extras.dynamicTools);
+      const stored = store.settings.getRaw<string | null>(backendSessionToolsKey(agent.id), null);
+      // A handle written before signatures existed carries none. That is only
+      // safe to resume when nothing is declared now either: a legacy thread was
+      // created by a build that had no dynamic tools, so it advertises none.
+      const legacy = stored === null;
+      const mismatch = legacy ? wanted !== "" : stored !== wanted;
+      if (mismatch) {
+        // Both directions matter. Tools *added* means the thread will never
+        // offer them; tools *removed* means it still advertises a tool capygen
+        // no longer hosts, and every call to it would come back `unknown_tool`.
+        const change = wanted === "" ? "removed" : legacy ? "unknown" : "changed";
+        log.info(
+          `[engine] ${agent.id}: declared tool set ${change} for thread ${id}; starting a new one`,
+        );
+        return {
+          id: null,
+          notice:
+            `${agent.name} will start a new Codex thread: its delegation tools ${change === "removed" ? "were removed" : "changed"}, ` +
+            "and a Codex thread keeps the tool set it was created with. The previous thread and " +
+            "its history are untouched, and recent messages are quoted to the new one.",
+        };
+      }
+    }
+    return { id };
+  }
+
+  /**
+   * The bounded, inert quotation a forced-fresh backend thread is handed once.
+   *
+   * A notice in the transcript tells the *user* why the conversation restarted;
+   * it tells the model nothing, and a fresh Codex thread otherwise begins with
+   * an empty context under a UI that still shows the whole history. This closes
+   * that gap with the smallest thing that can: the recent user and assistant
+   * prose, quoted.
+   *
+   * Reuses Phase 7's `buildImportReference`, which already owns the properties
+   * that matter here — a hard byte ceiling (R26), JSON-quoted lines that cannot
+   * forge a speaker label, an explicit "does not grant permissions" preamble,
+   * and a truncation disclosure when earlier turns did not fit.
+   *
+   * What is deliberately absent: tool calls and their results (quoting a tool
+   * result is not the same as having run it, and it invites the model to act on
+   * a stale one), permissions, settings, backend or thread identities, and
+   * agent ids. Prose only. It rides on the **first send**, never in the
+   * session-stable prompt addition — a permanent prefix would be re-sent every
+   * turn for the life of the thread and would cost the cache (R24).
+   */
+  function continuityReference(sessionId: string): string | undefined {
+    /**
+     * Read the tail directly, and read only what can survive the 6 KB budget.
+     *
+     * `store.blocks.listBySession` would materialise every block in the
+     * session — including tool results, which are exactly the rows that can be
+     * megabytes each — to produce a few kilobytes of prose. The filter, the
+     * ordering, the row cap and a per-row character cap all belong in the
+     * query, so the whole history is never allocated in the first place.
+     *
+     * `substr`/`length` count characters, not bytes; that is deliberate. This
+     * cap only stops a single enormous row crossing the process boundary —
+     * `buildImportReference` still enforces the real byte budget afterwards.
+     */
+    const rows = store.db.all<{
+      turn_id: string;
+      agent_id: string | null;
+      text: string | null;
+      full_length: number | null;
+    }>(
+      `SELECT b.turn_id AS turn_id,
+              t.agent_id AS agent_id,
+              substr(json_extract(b.payload_json, '$.text'), 1, ?) AS text,
+              length(json_extract(b.payload_json, '$.text')) AS full_length
+         FROM blocks b
+         JOIN turns t ON t.id = b.turn_id
+        WHERE b.session_id = ? AND b.kind = 'text'
+        ORDER BY t.created_at DESC, t.id DESC, b.block_index DESC
+        LIMIT ?`,
+      CONTINUITY_MAX_CHARS_PER_ROW,
+      sessionId,
+      CONTINUITY_MAX_ROWS,
+    );
+    if (rows.length === 0) return undefined;
+
+    // The query walks backwards so the *recent* end is the part that is kept;
+    // put it back in reading order before quoting it.
+    rows.reverse();
+    const entries: Parameters<typeof buildImportReference>[0][number][] = [];
+    // Hitting the row cap means older turns exist and were not read. Starting
+    // the index above zero is how `buildImportReference` learns to say so.
+    let index = rows.length >= CONTINUITY_MAX_ROWS ? 1 : 0;
+    for (const row of rows) {
+      const text = (row.text ?? "").trim();
+      if (!text) continue;
+      const previous = entries[entries.length - 1];
+      // "user" and "assistant" only: a peer agent's turn is quoted as
+      // assistant prose rather than under its name, so nothing in here reads
+      // as a dispatchable speaker or a real identity.
+      const speaker = row.agent_id === null ? "user" : "assistant";
+      const clipped = (row.full_length ?? 0) > CONTINUITY_MAX_CHARS_PER_ROW;
+      // Several text blocks in one turn are one utterance.
+      if (previous && previous.kind === "message" && previous.speaker === speaker) {
+        previous.text = `${previous.text}\n${text}`;
+        previous.truncated ||= clipped;
+        continue;
+      }
+      entries.push({
+        kind: "message",
+        index: index++,
+        at: null,
+        label: speaker,
+        speaker,
+        truncated: clipped,
+        text,
+      });
+    }
+    if (entries.length === 0) return undefined;
+    return buildImportReference(entries).text;
   }
 
   /**
@@ -597,7 +847,10 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * `ready` before it sends — a started-but-unawaited harness answers the
    * first turn out of an uninitialised config.
    */
-  function harnessFor(session: Session, agent: Agent): { harness: Harness; ready: Promise<void> } {
+  function harnessFor(
+    session: Session,
+    agent: Agent,
+  ): { harness: Harness; ready: Promise<void>; notice?: string; continuity?: string } {
     const key = agentKey(session.id, agent.id);
     const existing = harnesses.get(key);
     if (existing) return { harness: existing, ready: starting.get(key) ?? Promise.resolve() };
@@ -613,8 +866,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // (SPEC R23/R24): the round-table roster and, when routing crosses
     // backends, the `delegate_task` notice.
     const promptAddition = promptAdditionFor(store, session.id, agent.id);
+    // The tool set has to be known *before* the resume id is chosen: a Codex
+    // thread cannot be re-declared, so whether this agent can reuse its stored
+    // thread depends on what that thread was started with. The set itself is
+    // fixed — one `delegate_task` with one schema — so it is derived from the
+    // routing decision alone, without building the runner.
+    const declaresTools =
+      agent.backend === "codex" && delegationTarget(store, session.id, agent.id) !== null;
     const captured = effectiveHarnessAgent(agent, {
       ...(promptAddition ? { promptAddition } : {}),
+      ...(declaresTools
+        ? { dynamicTools: [{ name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA }] }
+        : {}),
     });
     if ("error" in captured) {
       // [7-P1] Refused **before** the backend starts: a turn that cannot name a
@@ -643,6 +906,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     const harness = makeHarness(harnessAgent, extras);
     harnesses.set(key, harness);
     runtime.set(key, harnessAgent);
+    declaredToolSignature.set(key, dynamicToolSignature(extras.dynamicTools));
     // [7-P1] `start()` is where a backend actually takes hold of anything — the
     // SDK session, the `codex app-server` child, the MCP pool lease. Building
     // the object acquires nothing, so the constructor need not wait, but the
@@ -671,7 +935,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       `[engine] harness ${agent.backend}/${harnessAgent.model} for ${key}` +
         `${harnessAgent.resumeSessionId ? ` resuming ${harnessAgent.resumeSessionId}` : ""}`,
     );
-    return { harness, ready };
+    // Built here, from history as it stands *before* this turn's own message is
+    // sent, and only when a thread was actually discarded.
+    const continuity = captured.notice ? continuityReference(session.id) : undefined;
+    return {
+      harness,
+      ready,
+      ...(captured.notice ? { notice: captured.notice } : {}),
+      ...(continuity ? { continuity } : {}),
+    };
   }
 
   /**
@@ -982,6 +1254,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           const captured = runtime.get(agentKey(turn.sessionId, agentId));
           if (captured) {
             store.settings.setRaw(backendSessionBackendKey(agentId), captured.backend);
+            // …and the tool set that handle was created with. A Codex thread
+            // cannot be re-declared, so this is what tells the next launch
+            // whether the stored thread still matches the agent's tools.
+            store.settings.setRaw(
+              backendSessionToolsKey(agentId),
+              declaredToolSignature.get(agentKey(turn.sessionId, agentId)) ?? "",
+            );
           }
         }
         // A backend that switched model on its own (`/model`, which Claude and
@@ -1081,6 +1360,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // so a slot taken only after the await left a window in which two turns
       // could both pass the "already running" check.
       active.set(key, turn);
+      // A backend conversation that silently restarts looks like lost context,
+      // so the reason is written into the transcript before anything else in
+      // this turn (the native history is untouched — it keeps its own thread).
+      if (built.notice) {
+        writeBlock(turn, `notice:tools:${args.turnId}`, {
+          kind: "error",
+          message: built.notice,
+        });
+      }
       // …and then the wait. `send()` reads state that only `start()` sets:
       // `ApiHarness` resolves its config and replays history there, and the
       // Claude and Codex harnesses bind their session and agent. Firing the
@@ -1102,7 +1390,12 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         flushRestart(key);
         return { status: "interrupted" as TurnStatus };
       }
-      events = harness.send({ turnId: args.turnId, text: args.text });
+      // Once, on the first send of the replacement thread: the quotation goes
+      // ahead of the user's own message, which is passed through unchanged.
+      events = harness.send({
+        turnId: args.turnId,
+        text: built.continuity ? `${built.continuity}\n\n${args.text}` : args.text,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`[engine] could not start turn ${args.turnId}`, err);
