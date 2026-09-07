@@ -143,6 +143,8 @@ describe("migrations", () => {
       "0003_round_table_agents",
       "0004_workspace_panes",
       "0005_integrations_backend_column",
+      "0006_transcript_imports",
+      "0007_automations_inbox",
       "0008_usage_cost_known",
     ]);
     expect(store.migration.backupFile).toBeNull();
@@ -193,6 +195,8 @@ describe("migrations", () => {
       "0003_round_table_agents",
       "0004_workspace_panes",
       "0005_integrations_backend_column",
+      "0006_transcript_imports",
+      "0007_automations_inbox",
       "0008_usage_cost_known",
     ]);
     expect(

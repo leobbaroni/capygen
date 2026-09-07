@@ -140,7 +140,10 @@ export class AutomationsRepo {
     return this.db.transaction(() => {
       const automation = this.get(automationId);
       if (!automation || this.getActiveRun(automationId)) return null;
-      if (trigger === "scheduled" && (!automation.enabled || automation.nextRunAt === null || automation.nextRunAt > scheduledAt!)) return null;
+      if (trigger === "scheduled") {
+        if (!automation.enabled || automation.nextRunAt !== scheduledAt || firedAt < scheduledAt!) return null;
+        if (this.db.get("SELECT id FROM automation_runs WHERE automation_id=? AND scheduled_at=? AND trigger='scheduled'", automationId, scheduledAt!)) return null;
+      }
       const runId = makeId("arun");
       this.db.run("INSERT INTO automation_runs (id,automation_id,trigger,status,scheduled_at,fired_at,finished_at,session_id,error_code) VALUES (?,?,?,'running',?,?,NULL,NULL,NULL)", runId, automationId, trigger, scheduledAt, firedAt);
       this.db.run("INSERT INTO automation_run_leases (automation_id,run_id,acquired_at) VALUES (?,?,?)", automationId, runId, firedAt);
@@ -160,6 +163,10 @@ export class AutomationsRepo {
   attachSession(runId: string, sessionId: string): AutomationRun {
     const run = this.getRun(runId);
     if (!run || run.status !== "running") throw new Error(`run is not active: ${runId}`);
+    if (run.sessionId !== null) {
+      if (run.sessionId !== sessionId) throw new Error("automation run is already attached to a different session");
+      return run;
+    }
     const session = this.db.get<{ project_id: string; origin: string }>("SELECT project_id,origin FROM sessions WHERE id=?", sessionId);
     const automation = this.get(run.automationId);
     if (!session || !automation || session.origin !== "live" || session.project_id !== automation.projectId) {

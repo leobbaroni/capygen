@@ -54,7 +54,8 @@ CREATE TABLE automation_runs (
   fired_at      INTEGER NOT NULL,
   finished_at   INTEGER,
   session_id    TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-  error_code    TEXT
+  error_code    TEXT,
+  UNIQUE (automation_id, scheduled_at, trigger)
 );
 CREATE INDEX automation_runs_by_automation
   ON automation_runs (automation_id, fired_at DESC, id DESC);

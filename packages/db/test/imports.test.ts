@@ -309,7 +309,11 @@ describe("transcript import persistence", () => {
     legacy.close();
 
     store = open();
-    expect(store.migration.applied).toEqual(["0006_transcript_imports"]);
+    expect(store.migration.applied).toEqual([
+      "0006_transcript_imports",
+      "0007_automations_inbox",
+      "0008_usage_cost_known",
+    ]);
     expect(store.migration.backupFile).toBeTruthy();
     expect(store.sessions.get("session_legacy")).toMatchObject({
       title: "Legacy",

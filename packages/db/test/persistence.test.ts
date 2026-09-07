@@ -64,6 +64,29 @@ describe("automation persistence", () => {
     expect(store.automations.get(item.id)).toMatchObject({ lastRunStatus: "succeeded", lastRunSessionId: seeded.session.id });
   });
 
+  it("rejects stale, early and duplicate scheduled claims", () => {
+    const seeded = seed(); const item = automation(seeded.project.id, seeded.agent.id);
+    expect(store.automations.claimScheduled({ automationId: item.id, scheduledAt: 100, firedAt: 99, nextRunAt: 160 })).toBeNull();
+    store.automations.update(item.id, { nextRunAt: 90 }, 2);
+    expect(store.automations.claimScheduled({ automationId: item.id, scheduledAt: 100, firedAt: 101, nextRunAt: 160 })).toBeNull();
+    store.automations.update(item.id, { nextRunAt: 100 }, 3);
+    const claim = store.automations.claimScheduled({ automationId: item.id, scheduledAt: 100, firedAt: 101, nextRunAt: 160 })!;
+    store.automations.finishRun({ runId: claim.run.id, status: "succeeded", finishedAt: 102 });
+    store.automations.update(item.id, { nextRunAt: 100 }, 4);
+    expect(store.automations.claimScheduled({ automationId: item.id, scheduledAt: 100, firedAt: 103, nextRunAt: 160 })).toBeNull();
+  });
+
+  it("does not move an attached run to a different session", () => {
+    const seeded = seed();
+    const other = store.sessions.create({ projectId: seeded.project.id, mode: "solo", agents: [{ name: "Other", backend: "codex", model: "gpt", role: "lead", config: null }] });
+    const item = automation(seeded.project.id, seeded.agent.id);
+    const claim = store.automations.claimManual({ automationId: item.id, firedAt: 10 })!;
+    expect(store.automations.attachSession(claim.run.id, seeded.session.id).sessionId).toBe(seeded.session.id);
+    expect(store.automations.attachSession(claim.run.id, seeded.session.id).sessionId).toBe(seeded.session.id);
+    expect(() => store.automations.attachSession(claim.run.id, other.session.id)).toThrow(/different session/);
+    expect(store.automations.getRun(claim.run.id)?.sessionId).toBe(seeded.session.id);
+  });
+
   it("refuses deletion during a run and allows pause without cancelling it", () => {
     const seeded = seed(); const item = automation(seeded.project.id, seeded.agent.id);
     const claim = store.automations.claimManual({ automationId: item.id, firedAt: 10 })!;
