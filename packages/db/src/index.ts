@@ -12,6 +12,7 @@ import {
   BlocksRepo,
   DevServersRepo,
   GlobalSettingsRepo,
+  ImportsRepo,
   McpServersRepo,
   PluginsRepo,
   ProjectsRepo,
@@ -35,6 +36,8 @@ export interface CapygenStore {
   db: Database;
   projects: ProjectsRepo;
   sessions: SessionsRepo;
+  /** Read-only transcript artifacts and fresh-session continuation provenance. */
+  imports: ImportsRepo;
   turns: TurnsRepo;
   blocks: BlocksRepo;
   toolOutputs: ToolOutputsRepo;
@@ -103,6 +106,7 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     db,
     projects: new ProjectsRepo(db),
     sessions: new SessionsRepo(db),
+    imports: new ImportsRepo(db),
     turns: new TurnsRepo(db),
     blocks: new BlocksRepo(db),
     toolOutputs: new ToolOutputsRepo(db),

@@ -19,6 +19,10 @@ import {
   SettingsSchema,
   SkillEntrySchema,
   TaskSchema,
+  TranscriptImportEntrySchema,
+  TranscriptImportMetadataSchema,
+  TranscriptImportRecordSchema,
+  TranscriptImportSnapshotSchema,
   ToolOutputSchema,
   ToolPolicyEntrySchema,
   TurnSchema,
@@ -62,6 +66,9 @@ import {
   type Task,
   type TaskPatch,
   type TaskStatus,
+  type TranscriptImportEntry,
+  type TranscriptImportRecord,
+  type TranscriptImportSnapshot,
   type ToolOutput,
   type ToolPolicyEntry,
   type ToolPolicyScope,
@@ -193,6 +200,8 @@ function rowToSession(row: Row): Session {
   return SessionSchema.parse({
     id: row.id,
     projectId: row.project_id,
+    origin: row.origin ?? "live",
+    continuationSourceSessionId: row.continuation_source_session_id ?? null,
     mode: row.mode,
     leadAgentId: row.lead_agent_id ?? null,
     title: row.title ?? "",
@@ -236,6 +245,13 @@ function rowToAgent(row: Row): Agent {
 
 export class SessionsRepo {
   constructor(private readonly db: Database) {}
+
+  private assertLiveMutable(sessionId: string): void {
+    const row = this.db.get<{ origin: string }>("SELECT origin FROM sessions WHERE id = ?", sessionId);
+    if (row?.origin === "import") {
+      throw new Error(`session ${sessionId} is a read-only import artifact`);
+    }
+  }
 
   /**
    * Create a session with its agents in one transaction. The first agent is the
@@ -347,6 +363,7 @@ export class SessionsRepo {
   ): Agent {
     const session = this.get(sessionId);
     if (!session) throw new Error(`unknown session: ${sessionId}`);
+    this.assertLiveMutable(sessionId);
     const ts = now();
     const displayName = input.displayName ?? input.mentionName ?? defaultAgentDisplayName(input.backend);
     const mentionName = this.uniqueMentionNameInSession(
@@ -382,6 +399,7 @@ export class SessionsRepo {
   updateAgent(agentId: string, patch: AgentPatch): Agent {
     const existing = this.agent(agentId);
     if (!existing) throw new Error(`unknown agent: ${agentId}`);
+    this.assertLiveMutable(existing.sessionId);
     if (patch.role === "lead") {
       throw new Error("agents.update cannot grant the lead role directly; use agents.setLead");
     }
@@ -418,6 +436,7 @@ export class SessionsRepo {
   removeAgent(agentId: string): boolean {
     const existing = this.agent(agentId);
     if (!existing) return false;
+    this.assertLiveMutable(existing.sessionId);
     this.db.run("DELETE FROM agents WHERE id = ?", agentId);
     this.db.run(
       "UPDATE sessions SET lead_agent_id = NULL, updated_at = ? WHERE id = ? AND lead_agent_id = ?",
@@ -436,6 +455,7 @@ export class SessionsRepo {
       if (!target || target.sessionId !== sessionId) {
         throw new Error(`agent ${agentId} is not in session ${sessionId}`);
       }
+      this.assertLiveMutable(sessionId);
       this.db.run(
         "UPDATE agents SET role = 'member' WHERE session_id = ? AND role = 'lead' AND id <> ?",
         sessionId,
@@ -458,6 +478,7 @@ export class SessionsRepo {
   /** Switch `mode` (ADR-0002: "can be switched later without losing
    *  history") — agents and the transcript are untouched. */
   setMode(sessionId: string, mode: SessionMode): Session {
+    this.assertLiveMutable(sessionId);
     this.db.run("UPDATE sessions SET mode = ?, updated_at = ? WHERE id = ?", mode, now(), sessionId);
     const session = this.get(sessionId);
     if (!session) throw new Error(`unknown session: ${sessionId}`);
@@ -468,6 +489,7 @@ export class SessionsRepo {
   updateSettings(sessionId: string, patch: SessionSettingsPatch): Session {
     const existing = this.get(sessionId);
     if (!existing) throw new Error(`unknown session: ${sessionId}`);
+    this.assertLiveMutable(sessionId);
     const merged: SessionSettings = SessionSettingsSchema.parse({ ...existing.settings, ...patch });
     this.db.run(
       "UPDATE sessions SET settings_json = ?, updated_at = ? WHERE id = ?",
@@ -539,6 +561,7 @@ export class SessionsRepo {
   }
 
   setStatus(id: string, status: SessionStatus): Session | null {
+    this.assertLiveMutable(id);
     this.db.run(
       "UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?",
       status,
@@ -565,6 +588,210 @@ export class SessionsRepo {
 
   touch(id: string): void {
     this.db.run("UPDATE sessions SET updated_at = ? WHERE id = ?", now(), id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// transcript imports
+// ---------------------------------------------------------------------------
+
+export interface TranscriptImportCommitResult {
+  session: Session;
+  duplicate: boolean;
+}
+
+export interface TranscriptImportPage {
+  offset?: number;
+  limit?: number;
+}
+
+function importPage(input: TranscriptImportPage): { offset: number; limit: number } {
+  const offset = input.offset ?? 0;
+  const limit = input.limit ?? 100;
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error("import entry offset must be a non-negative integer");
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("import entry limit must be an integer from 1 to 100");
+  }
+  return { offset, limit };
+}
+
+export class ImportsRepo {
+  constructor(private readonly db: Database) {}
+
+  commit(input: {
+    projectId: string;
+    snapshot: TranscriptImportSnapshot;
+  }): TranscriptImportCommitResult {
+    const snapshot = TranscriptImportSnapshotSchema.parse(input.snapshot);
+    const destination = this.db.get<{ id: string }>(
+      "SELECT id FROM projects WHERE id = ?",
+      input.projectId,
+    );
+    if (!destination) throw new Error(`unknown project: ${input.projectId}`);
+    const duplicate = this.findDuplicate(snapshot);
+    if (duplicate) return { session: duplicate, duplicate: true };
+
+    try {
+      return this.db.transaction(() => {
+        // Recheck inside the transaction so two confirmations on the same
+        // connection cannot create two artifacts between lookup and insert.
+        const raced = this.findDuplicate(snapshot);
+        if (raced) return { session: raced, duplicate: true };
+
+        const project = this.db.get<{ id: string }>("SELECT id FROM projects WHERE id = ?", input.projectId);
+        if (!project) throw new Error(`unknown project: ${input.projectId}`);
+
+        const sessionId = newId("session");
+        const importedAt = now();
+        const title = snapshot.title ?? `Imported ${snapshot.backend} transcript`;
+        this.db.run(
+          `INSERT INTO sessions
+             (id, project_id, origin, continuation_source_session_id, mode, lead_agent_id,
+              title, status, archived, created_at, updated_at)
+           VALUES (?, ?, 'import', NULL, 'solo', NULL, ?, 'idle', 0, ?, ?)`,
+          sessionId,
+          input.projectId,
+          title,
+          importedAt,
+          importedAt,
+        );
+
+        const { entries, ...metadata } = snapshot;
+        this.db.run(
+          `INSERT INTO transcript_imports
+             (session_id, backend, native_id, source_path, source_sha256, format,
+              metadata_json, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          sessionId,
+          snapshot.backend,
+          snapshot.nativeId,
+          snapshot.sourcePath,
+          snapshot.sourceSha256,
+          snapshot.format,
+          JSON.stringify(metadata),
+          importedAt,
+        );
+        for (const entry of entries) {
+          this.db.run(
+            `INSERT INTO transcript_import_entries (session_id, entry_index, entry_json)
+             VALUES (?, ?, ?)`,
+            sessionId,
+            entry.index,
+            JSON.stringify(entry),
+          );
+        }
+
+        const session = new SessionsRepo(this.db).get(sessionId);
+        if (!session) throw new Error("import session vanished immediately after insert");
+        return { session, duplicate: false };
+      });
+    } catch (error) {
+      // A different connection may have won the provenance UNIQUE race. Only
+      // translate the failure when that exact reviewed snapshot now exists.
+      const raced = this.findDuplicate(snapshot);
+      if (raced) return { session: raced, duplicate: true };
+      throw error;
+    }
+  }
+
+  get(sessionId: string): TranscriptImportRecord | null {
+    const row = this.db.get<Row>("SELECT * FROM transcript_imports WHERE session_id = ?", sessionId);
+    if (!row) return null;
+    const metadata = TranscriptImportMetadataSchema.parse(fromJson<unknown>(row.metadata_json, null));
+    return TranscriptImportRecordSchema.parse({
+      sessionId,
+      importedAt: Number(row.imported_at),
+      ...metadata,
+    });
+  }
+
+  entries(sessionId: string, page: TranscriptImportPage = {}): TranscriptImportEntry[] {
+    const { offset, limit } = importPage(page);
+    return this.db
+      .all<{ entry_json: string }>(
+        `SELECT entry_json FROM transcript_import_entries
+         WHERE session_id = ? ORDER BY entry_index LIMIT ? OFFSET ?`,
+        sessionId,
+        limit,
+        offset,
+      )
+      .map((row) => TranscriptImportEntrySchema.parse(fromJson<unknown>(row.entry_json, null)));
+  }
+
+  /** Last entries in chronological order, bounded for continuation previews. */
+  tail(sessionId: string, limit = 100): TranscriptImportEntry[] {
+    const page = importPage({ limit });
+    return this.db
+      .all<{ entry_json: string }>(
+        `SELECT entry_json FROM transcript_import_entries
+         WHERE session_id = ? ORDER BY entry_index DESC LIMIT ?`,
+        sessionId,
+        page.limit,
+      )
+      .reverse()
+      .map((row) => TranscriptImportEntrySchema.parse(fromJson<unknown>(row.entry_json, null)));
+  }
+
+  linkContinuation(sessionId: string, sourceSessionId: string): Session {
+    return this.db.transaction(() => {
+      const destination = this.db.get<{
+        origin: string;
+        continuation_source_session_id: string | null;
+        lead_agent_id: string | null;
+        status: string;
+        archived: number;
+      }>(
+        `SELECT origin, continuation_source_session_id, lead_agent_id, status, archived
+         FROM sessions WHERE id = ?`,
+        sessionId,
+      );
+      if (!destination) throw new Error(`unknown session: ${sessionId}`);
+      if (destination.origin !== "live") throw new Error("continuation destination must be a live session");
+      if (destination.continuation_source_session_id !== null) {
+        throw new Error("continuation destination is already linked");
+      }
+      if (destination.lead_agent_id === null) {
+        throw new Error("continuation destination must have a lead agent with a current backend");
+      }
+      if (destination.status !== "idle" || destination.archived !== 0) {
+        throw new Error("continuation destination must be an idle, unarchived fresh session");
+      }
+      const hasTurns = this.db.get<{ present: number }>(
+        "SELECT 1 AS present FROM turns WHERE session_id = ? LIMIT 1",
+        sessionId,
+      );
+      if (hasTurns) throw new Error("continuation destination must be a fresh session with no turns");
+      const source = this.db.get<{ session_id: string }>(
+        `SELECT i.session_id FROM transcript_imports i
+         JOIN sessions s ON s.id = i.session_id
+         WHERE i.session_id = ? AND s.origin = 'import'`,
+        sourceSessionId,
+      );
+      if (!source) throw new Error("continuation source must be an imported source session");
+
+      this.db.run(
+        "UPDATE sessions SET continuation_source_session_id = ?, updated_at = ? WHERE id = ?",
+        sourceSessionId,
+        now(),
+        sessionId,
+      );
+      const linked = new SessionsRepo(this.db).get(sessionId);
+      if (!linked) throw new Error(`unknown session: ${sessionId}`);
+      return linked;
+    });
+  }
+
+  private findDuplicate(snapshot: TranscriptImportSnapshot): Session | null {
+    const row = this.db.get<{ session_id: string }>(
+      `SELECT session_id FROM transcript_imports
+       WHERE backend = ? AND native_id = ? AND source_sha256 = ?`,
+      snapshot.backend,
+      snapshot.nativeId,
+      snapshot.sourceSha256,
+    );
+    return row ? new SessionsRepo(this.db).get(row.session_id) : null;
   }
 }
 

@@ -1782,3 +1782,19 @@ Tests       6 passed (6)
 ```
 Logs: e2e-out/import-*-contract-red.log and e2e-out/import-contract-green.log.
 This is a contract prerequisite; worker/DB/IPC/UI and phase acceptance remain in progress.
+
+### Import database persistence
+
+Sol implemented migration 0006, inert import sessions/entries, provenance deduplication,
+pagination and fresh continuation links. Astra reviewed the write path and requested unknown
+project validation before duplicate lookup; Sol reproduced and fixed it. Two connections and
+an explicit UNIQUE constraint test verify duplicate prevention. Imported artifacts have no
+agents or resume identity; roster/mode/settings/status mutations are refused.
+
+```text
+corepack pnpm exec vitest run --project db
+Test Files  2 passed (2)
+Tests       82 passed (82)
+```
+Root reran the DB suite after review. Log: e2e-out/import-db-accepted.log.
+Migration backup/restore, rollback, restart and paging are covered. IPC and UI remain active work.
