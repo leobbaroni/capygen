@@ -368,6 +368,9 @@ export type SessionSettingsPatch = z.infer<typeof SessionSettingsPatchSchema>;
 export const SessionSchema = z.object({
   id: z.string().min(1),
   projectId: z.string().min(1),
+  /** Missing only on legacy clients; persisted sessions always report their origin. */
+  origin: z.enum(["live", "import"]).optional(),
+  continuationSourceSessionId: z.string().min(1).nullable().optional(),
   mode: SessionModeSchema,
   /** Null only in the instant between inserting the session and its lead agent. */
   leadAgentId: z.string().min(1).nullable(),

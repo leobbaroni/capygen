@@ -1767,3 +1767,18 @@ Duration    59.48s
 ```
 Output: e2e-out/baseline-continuation.log. No phase newly accepted by this baseline.
 Active bounded work: P1-B MCP discovery/snapshot ownership and import worker client/adoption.
+
+### Import shared contracts
+
+Astra added strict inert transcript, metadata, preview and provenance schemas plus session
+origin/continuation fields. Red tests observed missing validation; green after implementation.
+Sol independently reviewed parser compatibility, identifying timestamp, unknown-type-limit and
+kind-count gaps; the corrected boundary passed re-review.
+
+```text
+corepack pnpm exec vitest run --project shared packages/shared/src/imports.test.ts
+Test Files  1 passed (1)
+Tests       6 passed (6)
+```
+Logs: e2e-out/import-*-contract-red.log and e2e-out/import-contract-green.log.
+This is a contract prerequisite; worker/DB/IPC/UI and phase acceptance remain in progress.
