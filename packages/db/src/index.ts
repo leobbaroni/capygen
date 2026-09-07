@@ -8,6 +8,7 @@
 import type { ModelCatalogue } from "@capygen/shared";
 import { openDatabase, type OpenDatabaseOptions } from "./migrate.js";
 import type { Database } from "./driver.js";
+import { AutomationsRepo, InboxRepo } from "./persistence.js";
 import {
   BlocksRepo,
   DevServersRepo,
@@ -30,6 +31,7 @@ import {
 export * from "./driver.js";
 export * from "./migrate.js";
 export * from "./repos.js";
+export * from "./persistence.js";
 
 /** Every repository over one connection. */
 export interface CapygenStore {
@@ -50,6 +52,10 @@ export interface CapygenStore {
   devServers: DevServersRepo;
   /** Agent-derived and manual tasks (migration 0004, SPEC R16/P10). */
   tasks: TasksRepo;
+  /** Persisted schedules, runs and non-expiring execution leases (Phase 8). */
+  automations: AutomationsRepo;
+  /** Restart-safe event projection with stable deduplication keys (Phase 8). */
+  inbox: InboxRepo;
   /** The sectioned Settings hub object (Phase 6, SPEC R19/R30) — one more
    *  row in `settings`, and, since 7-P1, the **canonical** home of every
    *  preference the flat `settings` repo above also shows. */
@@ -115,6 +121,8 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     workspaceLayouts: new WorkspaceLayoutsRepo(db),
     devServers: new DevServersRepo(db),
     tasks: new TasksRepo(db),
+    automations: new AutomationsRepo(db),
+    inbox: new InboxRepo(db),
     globalSettings,
     mcpServers: new McpServersRepo(db),
     plugins: new PluginsRepo(db),
