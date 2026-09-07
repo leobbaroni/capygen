@@ -578,3 +578,15 @@ Legacy positive prices remain known; legacy zero prices are unknown. Providers p
 inclusive `from`, exclusive `to`, and IANA `timeZone`, and returns totals, local days,
 backend/model groups, and session groups. `knownCostUsd` and `unknownCostEvents` must be displayed
 together; unknown cost is never a claim of free usage. Published model rates remain estimates.
+
+
+## Phase 9 share bundle contract (integration pending)
+
+`packages/shared/src/shares.ts` defines `capygen.share` version 1. It contains inert
+transcript entries, display-only source metadata, checked counts and ordered comments;
+no native resume identity or executable configuration is accepted. Strict objects reject
+unknown fields. Labels/comment bodies and the 32 MiB serialized JSON envelope use UTF-8
+byte limits. HTML transport has an independent 96 MiB ceiling, checked before Save by the
+future encoder. Reasoning is opt-in and `droppedThinking` records omission. Comment IDs
+are bundle-local; replies refer only to earlier comments and anchors must exist.
+The schema is available; export/import persistence and UI are not yet implemented.

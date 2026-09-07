@@ -1962,3 +1962,19 @@ Opus is investigating runtime policy/Codex delegation and sharing contracts in
 separate read-only tasks; Luna mapped Phase 9 renderer/IPC placeholders. No new
 phase acceptance is claimed. Existing dedicated-home live and packaged proofs
 remain open in Phases 11/12.
+
+
+## Phase 9 share contract reviewed — 2026-09-07
+
+Opus implemented strict inert bundle schemas; Astra reviewed and requested UTF-8 entry
+label/activity limits, inferred types and an explicit omitted-reasoning counter. No native
+import schema behavior changed. Invalid dates, counts, anchors, duplicate/cyclic comments,
+unknown executable fields and envelope limits have regression coverage. Root confirmation:
+```text
+corepack pnpm exec vitest run packages/shared
+Test Files 11 passed (11)
+Tests 109 passed (109)
+Duration 1.21s
+```
+Evidence: e2e-out/phase9-share-schema-test.log. This accepts a contract subtask only;
+Phase 9 remains open. Migration 0009 is now allocated exclusively to the share DB worker.
