@@ -30,8 +30,9 @@ Key user records in the second source:
 | 2026-09-06 19:08:34 | `9fc14b71-6275-43dc-875b-08e3c6c848ec` | Assistant's handoff at `067a7dc`, historical gate and known skips |
 
 Earlier remote-host/WSL wrapper requests are not added back to capygen: SPEC explicitly parks
-WSL and remote/cloud operation. The current user's request is review/preparation plus mascot
-work; old automated “continue all phases” messages do not expand this turn's scope.
+WSL and remote/cloud operation. At the original review date, the request covered
+review/preparation plus mascot work. On 2026-09-07 the user explicitly authorized completion
+of the remaining phases and added Custom Mode; SPEC R33–R34 and ADR-0006 record that expansion.
 
 ## Architecture and workflow assessment
 
@@ -62,8 +63,11 @@ Workflow corrections for the next phases:
 
 ## Verified findings
 
-R-A–R-D remain open implementation tasks; R-E was corrected in this review. No runtime fixes were silently bundled
-into this planning review. Line anchors refer to baseline `067a7dc`.
+At baseline, R-A–R-D were open and R-E was corrected by the planning review. Line anchors below
+refer to `067a7dc`. Follow-up status on 2026-09-07: R-B is fixed by `4596887`; R-D is fixed by
+`7bdf644` under the offline gate (PROJECT_LOG records results and live skips). R-A and R-C remain
+open in P1-A/P1-B. S0 encrypted references and test isolation are accepted prerequisites,
+not proof that runtime configuration has already been connected.
 
 ### High — R-A: API/widget MCP discovery bypasses isolated homes and the settings source
 
