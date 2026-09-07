@@ -315,6 +315,7 @@ describe("transcript import persistence", () => {
       "0007_automations_inbox",
       "0008_usage_cost_known",
       "0009_share_imports",
+      "0010_local_policies",
     ]);
     expect(store.migration.backupFile).toBeTruthy();
     expect(store.sessions.get("session_legacy")).toMatchObject({

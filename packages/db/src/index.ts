@@ -10,6 +10,12 @@ import { openDatabase, type OpenDatabaseOptions } from "./migrate.js";
 import type { Database } from "./driver.js";
 import { AutomationsRepo, InboxRepo } from "./persistence.js";
 import {
+  LocalMembersRepo,
+  LocalPolicyAuditRepo,
+  LocalPolicyRulesRepo,
+  SessionMembersRepo,
+} from "./localPolicies.js";
+import {
   BlocksRepo,
   DevServersRepo,
   GlobalSettingsRepo,
@@ -34,6 +40,7 @@ export * from "./driver.js";
 export * from "./migrate.js";
 export * from "./repos.js";
 export * from "./persistence.js";
+export * from "./localPolicies.js";
 
 /** Every repository over one connection. */
 export interface CapygenStore {
@@ -80,6 +87,14 @@ export interface CapygenStore {
   plugins: PluginsRepo;
   skills: SkillsRepo;
   toolPolicies: ToolPoliciesRepo;
+  /** Local execution policy state (migration 0010, ADR-0007) — capygen's own
+   *  additional restrictions, never a copy of a backend's native rules, and a
+   *  different store from the `toolPolicies` cache above. Grants are absent by
+   *  design: they are bound to a live lifecycle token and stay in memory. */
+  localMembers: LocalMembersRepo;
+  sessionMembers: SessionMembersRepo;
+  localPolicyRules: LocalPolicyRulesRepo;
+  localPolicyAudit: LocalPolicyAuditRepo;
   /** Migrations applied by this open, and the backup taken beforehand. */
   migration: { applied: string[]; backupFile: string | null };
   /** Turns/sessions this open had to close because the last run did not. */
@@ -108,6 +123,7 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
   const { db, result } = openDatabase(file, options);
   const reconciled = reconcileInFlight(db);
   const globalSettings = new GlobalSettingsRepo(db);
+  const localMembers = new LocalMembersRepo(db);
   let catalogue: ModelCatalogue | undefined;
   return {
     setModelCatalogue: (next) => {
@@ -134,6 +150,10 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     plugins: new PluginsRepo(db),
     skills: new SkillsRepo(db),
     toolPolicies: new ToolPoliciesRepo(db),
+    localMembers,
+    sessionMembers: new SessionMembersRepo(db, localMembers),
+    localPolicyRules: new LocalPolicyRulesRepo(db),
+    localPolicyAudit: new LocalPolicyAuditRepo(db),
     migration: result,
     close: () => db.close(),
   };

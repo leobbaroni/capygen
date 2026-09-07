@@ -189,6 +189,10 @@ thread with a bounded inert prose reference. Live model choice remains unproved.
 No new phase is accepted. Sharing IPC/UI, runtime policies/members/approvals and session MCP
 catalogue integration remain in progress. RoundTable's existing whole-history block read
 is a known efficiency follow-up; delegation continuity itself now reads only bounded prose.
+Migration 0010 and the local policy service are reviewed (86 focused tests): separate local
+profiles/rules/audit, per-agent boundaries, exact in-memory grants and cancellation-safe
+approval validation. Management IPC and actual harness/widget/automation enforcement remain
+pending. Do not confuse the accepted service with runtime policy coverage.
 
 Runtime policy design is ADR-0007; execution ownership/migration allocation is in
 `docs/plans/phase9.md`. ADR-0008 is a proposal for later dictation/extensions, not an

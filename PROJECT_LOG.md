@@ -2143,3 +2143,35 @@ currently reports only the sharing worker's newly declared, not-yet-wired IPC ha
 the full integrated gate remains pending. This is task acceptance, not Phase 9 acceptance.
 Review also identified an existing unbounded RoundTable history read, retained for the
 efficiency wave rather than silently dropped. Live model selection remains a separate proof.
+
+## Phase 9 local policy service reviewed — 2026-09-07
+
+Opus implemented migration 0010 (local profiles, session assignments, rules and bounded
+metadata audit) and a main-process policy service. Backend config caches remain separate.
+Astra's successive adversarial reviews corrected approval cancellation, stale authorization
+after every await, per-agent capability checks, opaque grant listings, edited-input validation
+and exact bounded JSON snapshots. In particular, own __proto__ fields survive, getters never
+execute, and hidden or aliased array properties are refused rather than silently omitted.
+The initial implementation's tests were written after code and mutation-checked; subsequent
+corrective regressions were run red before their fixes. This is not a claim of initial TDD.
+```text
+corepack pnpm exec vitest run packages/db/test/localPolicies.test.ts apps/desktop/test/localPolicies.test.ts apps/desktop/test/localPoliciesService.test.ts apps/desktop/test/localPoliciesAdversarial.test.ts packages/shared/src/localPolicies.test.ts
+Test Files 5 passed (5)
+Tests 86 passed (86)
+Duration 2.62s
+```
+Root log: e2e-out/phase9-policy-astra-final.log. The standalone snapshot probe was independently
+reproduced before the fix and then passed with the field retained and accessor untouched.
+Management IPC, harness hooks, automation/widget enforcement and UI remain pending; this
+service alone does not claim that running tools are policy-gated. Main must supply captured
+per-agent lifecycles and report session/lifecycle termination to invalidate pending grants.
+Root migration regression confirmation:
+```text
+corepack pnpm exec vitest run --project db
+Test Files 6 passed (6)
+Tests 126 passed (126)
+Duration 4.53s
+corepack pnpm --filter @capygen/db typecheck
+$ tsc --noEmit
+```
+Logs: e2e-out/phase9-policy-astra-db.log and phase9-policy-astra-db-types.log.
