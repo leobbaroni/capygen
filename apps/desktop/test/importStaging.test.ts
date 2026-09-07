@@ -26,6 +26,7 @@ import {
   ImportStagingService,
   nodeStagingFs,
   type ParseTranscript,
+  type StageTranscript,
   type StagingFs,
 } from "../src/imports/staging.js";
 
@@ -1603,5 +1604,49 @@ describe("cleanup when admission is full", () => {
     const retry = await h.service.preview({ ownerId: 1, ...PREVIEW });
     expect(h.service.get(retry.handle, 1)).toEqual(retry);
     await h.service.releaseWindow(1);
+  });
+});
+
+describe("worker-produced staged files", () => {
+  it("publishes worker metadata without reading or reserializing the snapshot during preview", async () => {
+    const dir = tempDir("worker-adoption");
+    const sourcePath = path.join(dir, "selected.jsonl");
+    const body = JSON.stringify(snapshot());
+    const readFile = vi.fn(nodeStagingFs.readFile);
+    const createExclusive = vi.fn(nodeStagingFs.createExclusive);
+    const stage: StageTranscript = async (_source, resultPath, options) => {
+      fs.writeFileSync(resultPath, body, { flag: "wx" });
+      options.onCreated();
+      return {
+        resultBytes: Buffer.byteLength(body),
+        summary: {
+          backend: "claude", format: "claude-jsonl-v1", nativeId: "ses_synthetic",
+          title: "synthetic fixture", cwd: "C:/picked", startedAt: "2026-09-07T00:00:00.000Z",
+          endedAt: "2026-09-07T00:01:00.000Z", sourceBytes: 1234,
+          sourceSha256: "a".repeat(64), counts: snapshot().counts,
+          unknownTypes: snapshot().unknownTypes, warnings: snapshot().warnings, complete: false,
+        },
+      };
+    };
+    const service = new ImportStagingService({
+      directory: dir,
+      stage,
+      projectExists: () => true,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      fs: { ...nodeStagingFs, readFile, createExclusive },
+      maxSnapshotBytes: 8_000,
+      maxStagedBytes: 8_000,
+    });
+    await service.initialize();
+
+    const preview = await service.preview({ ownerId: 1, sourcePath, destinationProjectId: "proj-1" });
+    expect(preview.nativeId).toBe("ses_synthetic");
+    expect(preview.sourcePath).toBe(sourcePath);
+    expect(readFile).not.toHaveBeenCalled();
+    expect(createExclusive).not.toHaveBeenCalled();
+    expect(service.reserved()).toBe(Buffer.byteLength(body));
+
+    await service.consume(preview.handle, 1, ({ transcript }) => expect(transcript.entries).toHaveLength(2));
+    expect(readFile).toHaveBeenCalledTimes(1);
   });
 });

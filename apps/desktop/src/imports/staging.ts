@@ -150,6 +150,22 @@ export type ParseTranscript = (
   options: { signal: AbortSignal },
 ) => Promise<ImportedTranscript>;
 
+/** Metadata returned by a worker after it has validated and adopted the
+ * normalized snapshot at `resultPath`. It deliberately omits entries. */
+export type StagedTranscriptSummary = Omit<ImportedTranscript, "entries" | "sourcePath">;
+
+/**
+ * File-producing alternative to the legacy in-process parser seam. The
+ * producer must create `resultPath` exclusively and call `onCreated` at the
+ * instant it takes ownership. Preview then publishes metadata without loading
+ * or serializing the transcript again.
+ */
+export type StageTranscript = (
+  sourcePath: string,
+  resultPath: string,
+  options: { signal: AbortSignal; onCreated: () => void },
+) => Promise<{ resultBytes: number; summary: StagedTranscriptSummary }>;
+
 export interface StagingDirEntry {
   name: string;
   isFile: boolean;
@@ -202,7 +218,10 @@ export const nodeStagingFs: StagingFs = {
 export interface ImportStagingDeps {
   /** The app-owned staging directory. Required, absolute, never derived. */
   directory: string;
-  parse: ParseTranscript;
+  /** Legacy/test seam. Production supplies `stage`. Exactly one is required. */
+  parse?: ParseTranscript;
+  /** Worker-backed seam which adopts a validated snapshot file directly. */
+  stage?: StageTranscript;
   projectExists: (projectId: string) => boolean | Promise<boolean>;
   log: EngineLogger;
   fs?: StagingFs;
@@ -250,7 +269,8 @@ interface Operation {
 
 export class ImportStagingService {
   private readonly directory: string;
-  private readonly parse: ParseTranscript;
+  private readonly parse: ParseTranscript | null;
+  private readonly stage: StageTranscript | null;
   private readonly projectExists: ImportStagingDeps["projectExists"];
   private readonly log: EngineLogger;
   private readonly fs: StagingFs;
@@ -288,7 +308,14 @@ export class ImportStagingService {
       );
     }
     this.directory = deps.directory;
-    this.parse = deps.parse;
+    if ((typeof deps.parse === "function") === (typeof deps.stage === "function")) {
+      throw new ImportStagingError(
+        "invalid-option",
+        "the import staging service needs exactly one parser or file producer",
+      );
+    }
+    this.parse = deps.parse ?? null;
+    this.stage = deps.stage ?? null;
     this.projectExists = deps.projectExists;
     this.log = deps.log;
     this.fs = deps.fs ?? nodeStagingFs;
@@ -530,36 +557,55 @@ export class ImportStagingService {
         );
       }
 
-      const transcript = await this.runParse(op, args.sourcePath);
-      if (!this.isLive(op)) throw this.cancelled();
+      let previewSource: ImportedTranscript | StagedTranscriptSummary;
+      if (this.stage) {
+        op.state = "writing";
+        const staged = await this.runStage(op, args.sourcePath);
+        if (!this.isLive(op)) throw this.cancelled();
+        if (!op.fileCreated) {
+          throw new ImportStagingError("staging-failed", "the import preview could not be stored");
+        }
+        if (!Number.isSafeInteger(staged.resultBytes) || staged.resultBytes <= 0 || staged.resultBytes > this.maxSnapshotBytes) {
+          throw new ImportStagingError(
+            "snapshot-too-large",
+            "this transcript is too large to stage for import",
+          );
+        }
+        this.shrink(op, staged.resultBytes);
+        previewSource = staged.summary;
+      } else {
+        const transcript = await this.runParse(op, args.sourcePath);
+        if (!this.isLive(op)) throw this.cancelled();
 
-      const body = Buffer.from(JSON.stringify(transcript), "utf8");
-      if (body.byteLength > this.maxSnapshotBytes) {
-        throw new ImportStagingError(
-          "snapshot-too-large",
-          "this transcript is too large to stage for import",
-        );
-      }
-      this.shrink(op, body.byteLength);
+        const body = Buffer.from(JSON.stringify(transcript), "utf8");
+        if (body.byteLength > this.maxSnapshotBytes) {
+          throw new ImportStagingError(
+            "snapshot-too-large",
+            "this transcript is too large to stage for import",
+          );
+        }
+        this.shrink(op, body.byteLength);
 
-      op.state = "writing";
-      try {
-        // `fileCreated` flips the instant the exclusive create succeeds, so a
-        // failure during the write still leaves an owned partial file to
-        // clean up, while an `EEXIST` leaves nothing of ours to touch.
-        await this.fs.createExclusive(op.file, body, () => {
-          op.fileCreated = true;
-        });
-      } catch (err) {
-        this.log.warn(`[import] snapshot could not be written (${osCode(err)})`);
-        throw new ImportStagingError("staging-failed", "the import preview could not be stored");
+        op.state = "writing";
+        try {
+          // `fileCreated` flips the instant the exclusive create succeeds, so a
+          // failure during the write still leaves an owned partial file to
+          // clean up, while an `EEXIST` leaves nothing of ours to touch.
+          await this.fs.createExclusive(op.file, body, () => {
+            op.fileCreated = true;
+          });
+        } catch (err) {
+          this.log.warn(`[import] snapshot could not be written (${osCode(err)})`);
+          throw new ImportStagingError("staging-failed", "the import preview could not be stored");
+        }
+        previewSource = transcript;
       }
 
       // Synchronous from here to publication: no await may separate the
       // liveness answer from its use.
       if (!this.isLive(op)) throw this.cancelled();
       const expiresAt = this.clock() + this.ttlMs;
-      const preview = toPreview(transcript, op.handle, args.destinationProjectId, expiresAt);
+      const preview = toPreview(previewSource, args.sourcePath, op.handle, args.destinationProjectId, expiresAt);
       op.preview = preview;
       op.expiresAt = expiresAt;
       op.state = "staged";
@@ -830,12 +876,41 @@ export class ImportStagingService {
 
   private async runParse(op: Operation, sourcePath: string): Promise<ImportedTranscript> {
     try {
-      return await this.parse(sourcePath, { signal: op.controller.signal });
+      return await this.parse!(sourcePath, { signal: op.controller.signal });
     } catch (err) {
       // Never the parser's own message: it may quote the file's contents or
       // the source path. Only an allowlisted machine code crosses out.
       const code = err instanceof ImportError && PARSE_CODES.has(err.code) ? err.code : undefined;
       this.log.warn(`[import] parse refused (code=${code ?? "unknown"})`);
+      throw new ImportStagingError(
+        "parse-failed",
+        "this file could not be read as a supported transcript",
+        code,
+      );
+    }
+  }
+
+  private async runStage(
+    op: Operation,
+    sourcePath: string,
+  ): Promise<{ resultBytes: number; summary: StagedTranscriptSummary }> {
+    try {
+      return await this.stage!(sourcePath, op.file, {
+        signal: op.controller.signal,
+        onCreated: () => { op.fileCreated = true; },
+      });
+    } catch (err) {
+      if (!this.isLive(op)) throw this.cancelled();
+      const rawCode = (err as { parseCode?: unknown; code?: unknown } | null)?.parseCode
+        ?? (err as { code?: unknown } | null)?.code;
+      const code = typeof rawCode === "string" && PARSE_CODES.has(rawCode) ? rawCode : undefined;
+      this.log.warn(`[import] worker refused (code=${code ?? "unknown"})`);
+      if (!code) {
+        throw new ImportStagingError(
+          "staging-failed",
+          "the import preview could not be stored",
+        );
+      }
       throw new ImportStagingError(
         "parse-failed",
         "this file could not be read as a supported transcript",
@@ -883,7 +958,8 @@ export class ImportStagingService {
 }
 
 function toPreview(
-  transcript: ImportedTranscript,
+  transcript: ImportedTranscript | StagedTranscriptSummary,
+  sourcePath: string,
   handle: string,
   destinationProjectId: string,
   expiresAt: number,
@@ -894,7 +970,7 @@ function toPreview(
     format: transcript.format,
     nativeId: transcript.nativeId,
     title: transcript.title,
-    sourcePath: transcript.sourcePath,
+    sourcePath,
     sourceBytes: transcript.sourceBytes,
     sourceSha256: transcript.sourceSha256,
     cwd: transcript.cwd,
