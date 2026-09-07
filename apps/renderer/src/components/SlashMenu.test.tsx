@@ -6,12 +6,13 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SlashCommand } from "@capygen/shared";
-import { SlashMenu } from "./SlashMenu";
+import { SlashMenu, type McpToolMenuEntry } from "./SlashMenu";
 
-function renderMenu(commands: SlashCommand[], highlightedIndex = 0) {
+function renderMenu(commands: SlashCommand[], highlightedIndex = 0, mcpTools: McpToolMenuEntry[] = []) {
   return render(
     <SlashMenu
       commands={commands}
+      mcpTools={mcpTools}
       highlightedIndex={highlightedIndex}
       onSelect={vi.fn()}
       onHover={vi.fn()}
@@ -76,5 +77,25 @@ describe("SlashMenu", () => {
     renderMenu([{ name: "/compact", description: "Summarise the conversation", source: "builtin" }]);
     const item = within(screen.getByTestId("slash-menu")).getByTestId("slash-menu-item");
     expect(item).toHaveTextContent("Summarise the conversation");
+  });
+
+  it("renders MCP tools as a distinct read-only discovery section", () => {
+    const onSelect = vi.fn();
+    render(<SlashMenu commands={[{ name: "/compact", description: "", source: "builtin" }]} mcpTools={[{ serverName: "docs", name: "search_very_long_document_name" }]} highlightedIndex={0} onSelect={onSelect} onHover={vi.fn()} />);
+    expect(screen.getByText("MCP tools")).toBeInTheDocument();
+    expect(screen.getByText("Called by the agent")).toBeInTheDocument();
+    const tool = screen.getByTestId("slash-menu-mcp-tool");
+    expect(tool).toHaveAttribute("aria-disabled", "true");
+    expect(tool).toHaveTextContent("search_very_long_document_name");
+    tool.click();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("slash-menu-item")).toHaveLength(1);
+  });
+
+  it("shows MCP tools when no command matches", () => {
+    renderMenu([], 0, [{ serverName: "files", name: "list_files" }]);
+    expect(screen.getByTestId("slash-menu-mcp-section")).toBeInTheDocument();
+    expect(screen.queryByText("No matching commands")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("slash-menu-item")).not.toBeInTheDocument();
   });
 });

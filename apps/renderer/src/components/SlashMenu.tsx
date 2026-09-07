@@ -27,13 +27,20 @@ const SECTION_ORDER: SlashCommand["source"][] = ["builtin", "skill", "plugin", "
 
 export interface SlashMenuProps {
   commands: SlashCommand[];
+  /** Session-effective MCP tools are discovery-only rows, never commands. */
+  mcpTools?: McpToolMenuEntry[];
   highlightedIndex: number;
   onSelect: (command: SlashCommand) => void;
   onHover: (index: number) => void;
 }
 
-export function SlashMenu({ commands, highlightedIndex, onSelect, onHover }: SlashMenuProps) {
-  if (commands.length === 0) {
+export interface McpToolMenuEntry {
+  serverName: string;
+  name: string;
+}
+
+export function SlashMenu({ commands, mcpTools = [], highlightedIndex, onSelect, onHover }: SlashMenuProps) {
+  if (commands.length === 0 && mcpTools.length === 0) {
     return (
       <div
         data-testid="slash-menu"
@@ -44,7 +51,7 @@ export function SlashMenu({ commands, highlightedIndex, onSelect, onHover }: Sla
     );
   }
 
-  // The flat index every row carries is its position in `commands` — the
+  // The flat index every command row carries is its position in `commands` — the
   // same array Composer's Up/Down arithmetic uses — so grouping the *display*
   // by section never has to touch (or risk desyncing from) the keyboard index.
   const flatIndex = new Map(commands.map((c, i) => [c, i]));
@@ -59,7 +66,7 @@ export function SlashMenu({ commands, highlightedIndex, onSelect, onHover }: Sla
       role="listbox"
       className="absolute bottom-full left-0 mb-1.5 max-h-72 w-full max-w-sm overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-menu"
     >
-      {sections.map(({ source, items }) => (
+      {commands.length === 0 ? null : sections.map(({ source, items }) => (
         <li key={source} data-testid="slash-menu-section">
           {sections.length > 1 ? (
             <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">
@@ -108,6 +115,27 @@ export function SlashMenu({ commands, highlightedIndex, onSelect, onHover }: Sla
           </ul>
         </li>
       ))}
+      {mcpTools.length > 0 ? (
+        <li data-testid="slash-menu-mcp-section">
+          <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">MCP tools</div>
+          <div className="px-2 pb-1 text-xs text-muted-foreground">Called by the agent</div>
+          <ul>
+            {mcpTools.map((tool) => (
+              <li key={`${tool.serverName}:${tool.name}`}>
+                <div
+                  role="option"
+                  aria-disabled="true"
+                  data-testid="slash-menu-mcp-tool"
+                  className="flex w-full min-w-0 flex-col rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground"
+                >
+                  <span className="break-words font-mono">{tool.name}</span>
+                  <span className="break-words text-xs">{tool.serverName}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </li>
+      ) : null}
     </ul>
   );
 }

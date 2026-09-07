@@ -2023,3 +2023,18 @@ Evidence: e2e-out/phase9-share-kind-red.log (1 failed / 17 passed),
 phase9-share-db-test.log and phase9-share-db-typecheck.log. This combined run includes four
 new policy-contract tests, which are uncommitted pending Opus review; 113 DB tests passed.
 Phase 9 is not accepted. Full gate remains pending integrated runtime/UI work.
+
+
+## Phase 9 MCP menu presentation — 2026-09-07
+
+Luna added optional informational MCP tool rows, separate from executable SlashCommand
+entries. Astra reviewed: tools cannot invoke onSelect or consume command keyboard indices;
+server/tool labels wrap and a tools-only menu renders. Runtime/composer data wiring remains
+pending, so this component change does not yet meet MCP catalogue acceptance.
+```text
+corepack pnpm exec vitest run apps/renderer/src/components/SlashMenu.test.tsx
+Test Files 1 passed (1)
+Tests 8 passed (8)
+Duration 2.50s
+```
+Evidence: e2e-out/phase9-slashmenu-focused.log. Native renderer typecheck also passed.
