@@ -27,6 +27,13 @@ await build({
   entryPoints: {
     main: path.join(appDir, "src", "main.ts"),
     preload: path.join(appDir, "src", "preload.ts"),
+    // [7-P1] The import-parser child (docs/plans/phase7-imports.md). Its own
+    // entry because it runs as a separate process — an Electron utility child
+    // in the app, a plain `fork` in its tests — and it must never pull Electron
+    // in. Bundled the same way as `main`, with the Claude Agent SDK external
+    // for the same reason: the worker loads it lazily, only for a Claude
+    // transcript, and it has to keep its own directory layout to do that.
+    importWorker: path.join(appDir, "src", "imports", "workerEntry.ts"),
   },
   outdir: outDir,
   outExtension: { ".js": ".cjs" },

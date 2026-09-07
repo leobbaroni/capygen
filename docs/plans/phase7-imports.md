@@ -84,3 +84,20 @@ or backend resume id; main refuses sends to imports. Prove dedup including concu
 snapshot isolation, rollback with zero partial rows, handle ownership/expiry/cleanup and fresh
 continuation request context across all three harnesses. Electron e2e exercises picker preview,
 cancel/import/open and continuation. Independent review and the full phase gate remain required.
+
+## Production worker decision (Astra + Fable review, 2026-09-07)
+
+Parse each selection in a fresh Electron utility process with a bundled `importWorker.cjs`
+entry. Give it an explicit allowlisted environment and disposable homes, including Claude's
+`CLAUDE_SECURESTORAGE_CONFIG_DIR`, plus an inert cwd. The worker never imports Electron and
+also supports plain Node IPC for isolated fixture verification. Import the SDK only inside
+the Claude reconstruction callback, after verifying those directories. This prevents accidental
+personal-home access; it is process/config isolation, not a filesystem sandbox.
+
+The worker exclusively writes the normalized result to a main-supplied app-owned path and
+returns bounded metadata (64 KiB maximum), avoiding a 256 MiB transcript over a message port.
+Main validates the result before adoption/commit. The client must kill cancelled/timed-out
+children, await exit before cleanup, bound pipe draining, and cap active workers at two;
+staging's 256 MiB aggregate reservation may admit fewer. Partial writes and failed deletion
+remain owned/accounted until removed. Packaged worker/SDK resolution is a Phase 12 smoke check.
+Tests use owned sentinels only; even mtime probes of personal backend homes are excluded.
