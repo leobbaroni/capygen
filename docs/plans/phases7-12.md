@@ -1,5 +1,7 @@
 # Phase 7–12 execution briefs
 
+Current run boundary (user update, 2026-09-07): Phases 7–8 accepted; stop before Phase 9. Promote the verified version to main and use main for future authorized work and pushes. The later briefs remain the roadmap.
+
 Prepared by GPT Astra (medium), 2026-09-06, against `067a7dc`.
 Status: Astra-prepared, independently reviewed by Opus 5, debated with Fable 5.1 medium in two rounds.
 The original numbered phases and their Done-when clauses in PLAN.md remain the contract.

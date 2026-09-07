@@ -1,25 +1,37 @@
-# capygen — handoff (2026-09-06, end of Phase 6)
+# capygen — handoff (2026-09-07, end of Phase 8)
 
-Lead from here: **GPT-6-Astra (Codex), low** — see `AGENTS.md`. Current hard/medium implementation
-and substantive review is **GPT-5.6-Sol, medium**; easy work is **GPT-5.6-Luna, medium**.
-Phases 1–6 were built by Claude Fable 5.1 orchestrating Opus 5 / Sonnet 5
-subagents with cross-model review waves.
+Lead: GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
+medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied
+before acceptance. Phases 1–6 remain historical acceptance, preserved below.
 
-## Current continuation — 2026-09-07
+## Current checkpoint
 
-Astra is continuing on `review/phase7-preparation`; phases 7–12 and Custom Mode 9C remain open.
-Custom Mode is specified in SPEC R33–R34 and ADR-0006. Mascots use static pixel PNGs only.
-Accepted corrections: complete MCP connection identity, Claude/API effort propagation,
-explicit integration project scope, safeStorage MCP references, and isolated pinned test paths.
-The remaining runtime-default/resolver work is `docs/plans/phase7-runtime-config.md`.
+Phases 7 and 8 are accepted. The user's latest instruction stops this run here: do not
+start Phase 9 without a new request. The accepted version is being promoted to `main`;
+future authorized work and verified pushes use `origin/main` (never force-push).
 
-Latest offline gate: typecheck/build passed; 104 unit files, 1,388 passed and four skipped;
-Playwright 43 passed and 12 skipped. The e2e suite now uses disposable backend homes by default
-and synthetic plugin fixtures, with no personal configuration content reads. Six UI-created
-live paths are explicitly gated until P1 proves effective effort before dispatch; other live
-proofs need dedicated test identities. Only Sonnet 5 low and GPT Luna low may be used for live
-prompts. See `docs/RUN.md` and PROJECT_LOG for commands, limitations and literal result tails.
-Historical phase claims below are preserved as history, not re-proved by these skips.
+Phase 7 includes native worktree creation/registration/removal, session cwd, selected-file
+Diff commits, Claude/Codex inert transcript import, restart/deduplication, and a fresh-session
+continuation with a bounded reference. Scoped MCP configuration reaches real tools/widgets
+through explicit project/backend snapshots, with safeStorage references for API-owned secrets.
+
+Phase 8 adds cross-session Tasks, durable Inbox/read badges and notification deduplication,
+Usage totals with known/unknown prices, and persisted automations. A run selects the agent's
+current validated configuration and creates a fresh session through normal dispatch. Runs do
+not overlap. Keep capygen or its tray process running; missed occurrences are skipped after a
+restart. Pause stops future occurrences; cancel an active run before deleting its automation.
+
+Final gate: all package/test typechecks passed; 144 unit files, 1883 tests passed and four
+skipped; renderer/desktop build passed; Playwright 46 passed and 12 skipped in 1.4 minutes.
+Native activity acceptance uses an actual minute timer and isolated profiles, with no model
+calls. Dedicated authenticated live checks remain skipped and are not counted as passes.
+Literal tails are in PROJECT_LOG.md; screenshots are under e2e-out/activity and e2e-out/imports.
+
+Known limits: Claude 2.1.263 has no persistent user/local server disable flag or server cwd;
+those edits fail before mutation. Project .mcp.json approval toggles and HTTP headers work.
+Packaging/SDK smoke belongs to Phase 12; live benchmark proof belongs to Phase 11. Custom Mode
+9C remains specified, not implemented. No future-phase requirement has been silently dropped.
+Preserve the unrelated untracked state.lock. AGENTS.md records the new main-branch policy.
 
 ## State
 
@@ -31,7 +43,9 @@ Historical phase claims below are preserved as history, not re-proved by these s
 | 4 Round-table, hop cap, sub-agent routing + delegation, agents pane | ✅ | `roundtable.spec.ts`, ADR-0004 |
 | 5 Dockable workspace panes + dev servers | ✅ | `workspace.spec.ts`, ADR-0005 |
 | 6 Settings hub, two-way config sync, prerequisites | ✅ | `settings.spec.ts` |
-| 7–12 | open | `PLAN.md` |
+| 7 Projects/worktrees/imports | accepted | `worktrees.spec.ts`, `imports.spec.ts`, scoped MCP fixture |
+| 8 Tasks/Inbox/Usage/Automations | accepted | `activity.spec.ts`, scheduler/Inbox/usage suites |
+| 9, 9C, 10–12 | open; stopped by user | `PLAN.md` |
 
 Historical gate on parent revision `2222cd6` (2026-09-06; handoff committed as `067a7dc`): typecheck 5/5 packages;
 vitest 99 files, 1296 passed, 4 skipped; build ok; Playwright 24 passed, 10 skipped. The skips
@@ -111,16 +125,30 @@ Initial Claude dispatches failed; after reauthentication Opus reviewed the findi
 debated the plan in two rounds. Four runtime findings remain open corrective tasks.
 Phases 7–12 are not implemented or newly accepted by this review.
 
-## Verified continuation checkpoint — 2026-09-07
+## Earlier continuation checkpoint — 2026-09-07
 
 On `review/phase7-preparation`, P1-A canonical settings, captured runtime config,
 provider/model selection and restart corrections pass the full native gate:
 119 unit files, 1734 passed / 4 skipped; build and typecheck clean; Playwright
 43 passed / 12 skipped. The latest output tails are in `PROJECT_LOG.md`.
-The parser, bounded continuation formatter and window-owned staging are committed
-prerequisites. The tested parser worker is built separately, but import client,
-DB, IPC and UI wiring are still pending. P1-B scoped MCP discovery and widget
-identity, worktrees and the remaining phases are also pending.
+The parser, bounded continuation formatter, utility-process worker, staging client, DB import
+store, import IPC and read-only UI are implemented in the current checkout. The native picker
+creates an opaque preview handle; commit consumes that handle into an immutable paginated
+historical session, and continuation creates a fresh session with a bounded quoted reference.
+Worker jobs use owned homes and an inert project directory, and renderer IPC never receives the
+transcript during preview.
+
+Scoped MCP runtime resolution is also wired: explicit project scope, backend precedence and
+disabled-name shadowing are shared by settings and harness dispatch; API-owned secrets resolve
+through main-process safeStorage references. Worktrees were subsequently accepted by the final gate above. Packaged SDK-resolution
+verification remains pending. Live benchmark evidence belongs to Phase 11 and awaits dedicated authenticated test homes.
+
+Claude MCP compatibility follows the installed runtime rather than the generic editor shape.
+Claude 2.1.263 and its pinned Agent SDK do not support a per-server `cwd` or a persistent disabled
+flag for user/local servers, so those mutations are rejected before Claude's remove/add update can
+touch the existing row. HTTP/SSE headers use Claude's native `--header` option. Project `.mcp.json`
+servers remain switchable through Claude's `enabledMcpjsonServers` / `disabledMcpjsonServers`
+approval lists in `.claude/settings.local.json`.
 
 Custom Mode is specified in ADR-0006 and the Phase 9C plan; it is not implemented.
 Mascots remain static sharp PNGs. Live app prompts must use Luna low or Sonnet 5
@@ -128,4 +156,20 @@ low, with dedicated test homes; the skipped live proofs are not completion.
 Opus/Fable hit the Claude session limit at approximately 02:35 Lisbon, with reset
 reported at 04:50. Final worker delta review by Fable remains unavailable; Astra
 reviewed the worker changes and Luna independently reviewed the small root fixes.
-No push was made. Preserve the unrelated untracked `state.lock`.
+No push had been made at that earlier checkpoint. The final Phase 8 promotion follows the later user instruction. Preserve the unrelated untracked `state.lock`.
+
+## Earlier import/MCP implementation checkpoint — 2026-09-07
+
+Evidence from the current tree:
+
+```text
+e2e-out/import-build.log                 renderer + desktop build; importWorker.cjs emitted
+e2e-out/import-integrated-typecheck.log  shared/db/engine/desktop/renderer typecheck passed
+e2e-out/import-shell-tests.log            3 files, 33 tests passed (renderer import/UI shell)
+e2e-out/import-provider-green.log        ImportedTranscript provider guard: 3 tests passed
+e2e-out/mcp-root-review.log               5 focused files, 113 tests passed
+```
+
+The native import e2e has one verified pass including restart/deduplication, unchanged source hash
+and the 380px screenshot. These
+checks preceded the final Phase 7–8 acceptance gate above. Packaged SDK smoke remains Phase 12 work, and Phase 11 live benchmark evidence awaits dedicated authenticated homes.

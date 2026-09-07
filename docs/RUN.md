@@ -246,6 +246,33 @@ backend homes:
 - **(h)** the Plugins page uses a synthetic isolated plugin registry; its isolated screenshot is
   `settings-plugins-isolated.png`.
 
+### Transcript import (current Phase 7 work)
+
+Open Settings ▸ Import, choose a destination project, and choose one Claude JSONL or Codex
+rollout transcript through the native file picker. The main process previews bounded metadata and
+warnings behind an opaque handle; the renderer never supplies transcript contents. Importing
+commits an immutable, read-only historical session with paginated entries. Historical tool calls,
+approvals, configuration and permissions render as inert text and cannot run. Repeating the same
+source snapshot opens the existing session; a changed source produces a separate snapshot.
+
+Use “Continue” from an imported session only to create a fresh session. The imported history is
+quoted as a bounded reference with its imported speaker label; no native backend resume id is
+passed to Claude, Codex or an API model. The worker runs in an Electron utility process with
+owned backend homes and an inert project directory, and staging files are app-owned under the
+profile. This boundary is process separation, not an OS filesystem sandbox.
+
+Focused verification currently available:
+
+```sh
+corepack pnpm exec vitest run --project renderer src/components/ImportedTranscript.test.tsx src/pages/settings/ImportSection.test.tsx
+corepack pnpm exec vitest run --project engine test/mcpServerResolver.test.ts
+```
+
+The current implementation checkpoint and output tails are in `PROJECT_LOG.md`. The native import
+e2e currently has one verified pass including restart/deduplication and source-hash stability.
+Worktree integration is accepted by the final Phase 7–8 gate. Packaged worker SDK-resolution verification remains Phase 12 work; live benchmark evidence remains a Phase 11 requirement. Live checks require dedicated authenticated
+homes; never point them at personal Claude or Codex configuration.
+
 ---
 
 ## 5. Spikes and live smoke checks
@@ -422,3 +449,21 @@ committed under `assets/mascot`, while renderer/public remains staged output.
 `corepack pnpm exec playwright test tests/e2e/mascot.spec.ts` checks static PNG loading,
 sharp rendering, the larger landing mascot, and zero animations. It runs offline. The desktop's minimum window width remains the supported
 layout; a 380px renderer screenshot is a stress check, not a mobile-support claim.
+
+## Activity pages (Phase 8)
+
+The sidebar opens Tasks, Inbox, Usage and Automations. Tasks lists agent todos across sessions;
+Inbox opens the exact request card or completed turn. Mark read updates the sidebar badge.
+Usage supports preset/custom ranges in the machine's local time zone; unknown prices are
+counted separately from known reported/estimated cost.
+
+Create a session with the desired agent first, then choose Automations → New automation,
+its project and agent, a prompt, and a recurrence. Each occurrence creates a fresh session
+using that agent's latest configuration. Keep capygen running, including in the tray, for
+scheduled execution. Exiting skips missed occurrences on the next launch. Pause stops future
+runs; Run now also works while paused. Cancel a running occurrence before deleting its
+automation. This feature installs no Windows service or startup task.
+
+Offline acceptance: `corepack pnpm exec playwright test tests/e2e/activity.spec.ts` uses a real
+every-minute timer and isolated profiles, with no model tokens. The full acceptance gate is
+typecheck, unit tests, build, then all Playwright tests.

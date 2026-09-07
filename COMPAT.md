@@ -233,7 +233,8 @@ runs stops being the command capygen composed.
 
 | Command | Verified | Used by | If it changes |
 |---|---|---|---|
-| `claude mcp add -s <user\|local\|project> [--transport http\|sse] [-e K=V]… <name> [-- <command> <args…>]` / `… <url>` | live, all three scopes | `addMcpServer` for the two `.claude.json` scopes | `--` first, then argv, is the CLI's own documented spelling for a stdio server that has flags of its own |
+| `claude mcp add -s <user\|local\|project> [--transport http\|sse] [-e K=V]… [-H "Key: value"]… <name> [-- <command> <args…>]` / `… <url>` | live, all three scopes; `-H`/`--header` verified in 2.1.263 help | `addMcpServer` for the two `.claude.json` scopes | `--` first, then argv, is the CLI's own documented spelling for a stdio server that has flags of its own; headers apply only to HTTP/SSE |
+| Claude MCP per-server `cwd` / disabled state | isolated `claude mcp add-json` live probe on 2.1.263 silently removed both fields; pinned Agent SDK `McpServerConfig` types declare neither. Project `.mcp.json` enablement instead uses `enabledMcpjsonServers` / `disabledMcpjsonServers` | the store rejects `cwd` for every Claude scope and rejects `enabled:false` for user/local **before** remove/add; project enable/disable updates `.claude/settings.local.json` approval lists | never add a synthetic `cwd` or `disabled` field: Claude ignores it. Use absolute stdio paths/a wrapper for cwd; remove a user/local server when it must stop |
 | `claude mcp remove <name> -s <scope>` | live | `removeMcpServer`, and the first half of an update — the CLI has no `mcp update` | remove-then-add is also what stops a rename leaving two rows behind |
 | `claude mcp list` | live | `liveMcpStatus()` — per-server status **and** the claude.ai cloud connectors that exist in no file at all | **no `--json` on 2.1.261** (`claude mcp list --help` offers only `-h`), so this parses text: `<name>: <target> - <glyph> <status>`, split on the first `": "` and the last `" - "` because a connector's name contains spaces (`claude.ai Higgsfield`). It can only *enrich*: an unrecognised line leaves the status undefined and the file-derived list stands |
 | `claude plugin list --json` | live | reconciling installed plugins against the file | array of `{id,version,scope,enabled,installPath,installedAt,lastUpdated}` |
@@ -350,7 +351,7 @@ failures if missed:
 3. Nothing else here needs unpacking: `chokidar`, `simple-git`, `dockview` and `xterm` are pure
    JS and ride inside the asar, and the SQLite driver is `node:sqlite` (ADR-0003), not an addon.
 
-## Review caveat — 2026-09-06
+## Historical review caveat — 2026-09-06 (superseded by Phase 7 acceptance)
 
 The historical API MCP inheritance, project-recency and settings-projection rows above describe
 intended or partial behavior. Shipping gaps are verified in `docs/reviews/phase1-6.md` R-A–R-D:
@@ -445,10 +446,12 @@ sets `windowsHide: true` on its child spawns. Native isolated Git tests cover th
 repeat them when the dependency changes. The `git.commit` IPC schema also requires a nonempty
 `paths` selection, refusing omission before dispatch and preserving literal path strings.
 
-## Transcript import parser contracts (Phase 7 prerequisite)
+## Transcript import contracts and runtime (Phase 7 integration checkpoint)
 
-The isolated parser module `packages/engine/src/imports` is implemented; native picker,
-staging, persistence and fresh-session continuation are separate pending integration work.
+The bounded parser, Electron utility-process worker, main-process staging, import IPC, SQLite
+persistence, read-only transcript view and fresh-session continuation path are implemented in the
+current checkout. Imported history is inert: tools, approvals, configuration and native
+resume identities are never activated. Phase 7 is accepted by the final integrated gate. Packaged SDK-resolution verification remains Phase 12 work; live benchmark evidence remains Phase 11 work and requires dedicated authenticated homes.
 
 | Contract | Verified authority | Consumer / regression |
 |---|---|---|
@@ -480,7 +483,98 @@ The desktop build emits `importWorker.cjs`. Protocol v1 accepts one bounded
 owned backend homes and an inert project directory. It lazily loads the pinned
 Claude SDK only for Claude reconstruction. The normalized transcript is written
 exclusively in bounded chunks; partial writes are retried. IPC returns bounded
-metadata or a sanitized error, not the transcript. This is process separation,
-not an OS filesystem sandbox. The Electron utility-process client and packaged
-SDK-resolution smoke test remain pending; current worker checks use owned plain
-Node children and do not access personal backend homes.
+metadata or a sanitized error, not the transcript. This is process separation, not an OS
+filesystem sandbox. The Electron utility-process client is wired at startup through
+`createElectronImportWorkerClient`; it validates and streams the result, then adopts it with an
+exclusive hard link. The packaged SDK-resolution smoke test remains pending. Worker checks use
+owned homes and do not access personal backend homes.
+
+## Scoped MCP runtime resolution (2026-09-07)
+
+`IntegrationsService.resolveMcpServers` resolves the exact snapshot supplied to a harness
+lifecycle from an explicit backend plus optional project scope. Precedence is agent override,
+then the backend's own servers; API additionally receives API-owned servers followed by inherited
+Claude and Codex servers. Names are claimed before disabled entries are filtered, so a disabled
+higher-priority entry shadows an inherited server. Returned configs are cloned, including args,
+env and headers. `packages/engine/test/mcpServerResolver.test.ts` covers these rules; `mcp-root-review.log` records
+113 passing focused engine/desktop checks.
+
+`ApiConfigStore` owns API MCP connections under `api_mcp_servers`; inherited entries are read-only
+projections. Environment values and headers use opaque safeStorage references and resolve only in
+the main-process runtime path. Project scope is explicit, and omitted scope means global-only.
+
+### Import IPC and utility-process wire contracts
+
+The seven strict invoke channels are: `imports.pick({projectId})` → nullable bounded preview;
+`imports.cancel({handle})` → `{ok}`; `imports.commit({handle})` → `{session, duplicate}`;
+`imports.get({sessionId})` → nullable import record; `imports.entries({sessionId, offset=0,
+limit=50})` → at most 100 entries; `imports.reference({sessionId})` → `{text, truncated}` with
+a 6,000-byte text cap; and `imports.continue({sessionId, projectId, agent})` → new session and
+agents. Handles are 32 lowercase hexadecimal characters and all object inputs are strict.
+
+Worker protocol v1 sends one request containing `jobId`, `jobRoot`, absolute `sourcePath`,
+`resultPath`, `inertDir` and optional tightening-only limits. The Electron adapter uses
+`utilityProcess.fork`; the child accepts one `postMessage`, emits one bounded response, and the
+client waits for `exit` after `kill()` before releasing the job. Stdout/stderr and each JSON
+message are capped at 64 KiB; at most two workers run concurrently; snapshots are capped at 256
+MiB. The normalized transcript is written to the result file and adopted by an exclusive hard
+link, so the IPC response never carries entries.
+
+## Git worktree command contracts (Phase 7, implementation checkpoint)
+
+`WorktreeService` delegates only these argument-array commands to Git, with no shell
+interpolation: `rev-parse --is-inside-work-tree`; `rev-parse --path-format=absolute
+--git-common-dir`; `worktree list --porcelain -z` (NUL-delimited, first record is the main
+worktree); `check-ref-format --branch <exact-name>` (no expansion); `show-ref --verify --quiet
+refs/heads/<name>`; `rev-parse --verify --end-of-options <rev>^{commit}`; `worktree add [-b
+<name>] -- <path> <branch-or-sha>`; `status --porcelain=v1 -z --untracked-files=all
+--ignored=matching`; and `worktree remove [--force] -- <path>`. `--force` is only accepted after
+the native confirmation for confirmed destructive removal.
+
+The four strict IPC contracts are `worktrees.list({sourceProjectId})` → `Worktree[]`,
+`worktrees.create({sourceProjectId, branch})` → nullable create result,
+`worktrees.register({sourceProjectId, path})` → create result, and
+`worktrees.remove({sourceProjectId, path})` → remove result. Project ids are required; paths are
+non-empty and capped at 32,768 characters. Evidence: the real-Git service suite reports 13
+passing tests, workspace IPC reports 14, and shared worktree schemas/IPC report 5. Final acceptance
+and the full gate are recorded in `PLAN.md` and `PROJECT_LOG.md`.
+
+## Activity and scheduling contracts (Phase 8)
+
+Migration `0007_automations_inbox` replaces placeholder tables while retaining complete legacy
+rows in `legacy_automations` and `legacy_inbox_items`. Legacy automations are paused until an
+existing live agent in the same project is selected. `automation_run_leases` prevents overlapping
+runs without expiry; `(automation_id, scheduled_at, trigger)` uniquely identifies scheduled runs.
+Claim, next-deadline advancement, terminal status and lease release are transactional. Restart
+marks abandoned leases interrupted and records at most one skipped occurrence per overdue
+automation. Missed prompts are not replayed. The scheduler runs only while the app or tray process
+is running; it does not wake Windows or start capygen.
+
+Supported RRULE fields are `FREQ=MINUTELY|HOURLY|DAILY|WEEKLY|MONTHLY`, `INTERVAL=1..365`,
+`BYMINUTE` for hourly and larger periods, `BYHOUR` for daily and larger periods, plain `BYDAY`
+for weekly rules, and positive `BYMONTHDAY=1..31` for monthly rules. Unsupported, duplicated
+or frequency-inapplicable fields are rejected. The anchor is an epoch timestamp whose local
+calendar minute determines the recurrence. Time zones use the shipping runtime's IANA data;
+supported local years are 1970–2100. Missing DST wall times and invalid month days are skipped;
+repeated wall times choose only the earlier instant. A bounded search reports no occurrence
+instead of looping forever. No third-party recurrence dependency is installed.
+
+Invoke channels are `automations.list/create/update/delete/runNow/cancelRun/listRuns`,
+`inbox.list/markRead/markAllRead`, and `usage.report`; events are `automations.changed`,
+`automationRun.changed`, and `inbox.changed`. The main process calculates deadlines. Edits cannot
+change an automation's project. Pause affects future occurrences; manual runs work while paused.
+Deleting a running automation is refused until cancellation finishes. Every run creates a fresh
+solo session from the selected agent's current, validated configuration and uses normal dispatch.
+
+Inbox request identities are `<kind>:<sessionId>:<requestId>` for permission, question and
+elicitation; terminal identities are `<kind>:<turnId>` for agent completion/error. Read status
+is independent of request resolution. Requests link to the persisted block; terminal entries
+link to the turn. Entries never enter model context. Desktop notification deduplication is
+persisted in the app database and notifications remain silent while an app window has focus.
+
+Migration `0008_usage_cost_known` distinguishes unpriced usage from a reported zero cost.
+Legacy positive prices remain known; legacy zero prices are unknown. Providers propagate
+`costKnown`, and every new accounting row stores it explicitly. `usage.report` accepts an
+inclusive `from`, exclusive `to`, and IANA `timeZone`, and returns totals, local days,
+backend/model groups, and session groups. `knownCostUsd` and `unknownCostEvents` must be displayed
+together; unknown cost is never a claim of free usage. Published model rates remain estimates.

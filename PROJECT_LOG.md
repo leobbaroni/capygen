@@ -1798,3 +1798,140 @@ Tests       82 passed (82)
 ```
 Root reran the DB suite after review. Log: e2e-out/import-db-accepted.log.
 Migration backup/restore, rollback, restart and paging are covered. IPC and UI remain active work.
+
+### 2026-09-07 — Transcript import and scoped MCP integration checkpoint
+
+The current checkout wires the bounded parser through an Electron utility-process client and
+the main staging state machine. The native picker returns an opaque preview handle; commit adopts
+the worker-produced snapshot into migration 0006's inert import tables, with duplicate source
+hash detection, paginated entries and immutable historical sessions. The renderer's imported view
+has no run controls and displays historical activities as text. Continuation creates a fresh solo
+session, links provenance, and inserts the bounded 6,000-byte quoted reference with the imported
+speaker label. Worker jobs use owned backend homes and an inert project directory; no personal
+backend home is read.
+
+Scoped MCP runtime resolution is wired through `IntegrationsService.resolveMcpServers` and the
+shared `McpServerResolver`: agent entries shadow backend entries, API receives API-owned then
+inherited Claude/Codex entries, disabled names remain shadowing claims, and returned connection
+objects are cloned. `ApiConfigStore` keeps API-owned MCP values under `api_mcp_servers`; env and
+header values use main-process safeStorage references and are resolved only for dispatch.
+
+Focused evidence:
+
+```text
+e2e-out/import-build.log                desktop + renderer build passed; importWorker.cjs emitted
+e2e-out/import-integrated-typecheck.log all workspace package typechecks passed
+e2e-out/import-shell-tests.log          3 files / 33 tests passed
+e2e-out/import-provider-green.log       ImportedTranscript provider guard: 3 tests passed
+e2e-out/mcp-root-review.log             5 focused files / 113 tests passed
+```
+
+The native import e2e has one verified pass including restart/deduplication, unchanged source hash
+and the 380px screenshot. This is
+an implementation checkpoint, not Phase 7 acceptance. Worktree operations remain pending, as does
+packaged SDK-resolution verification. Live benchmark evidence is a Phase 11 requirement and awaits
+dedicated authenticated test homes. The combined gate must be rerun after worktree integration is
+complete.
+
+### 2026-09-07 — Phase 7 integration gate before final MCP fixture check
+
+Reviewed worktree service and native flow are committed as `1bb73a9` and `1235fb7`.
+Native imports and shutdown settlement are committed as `9360f4a`. The root integration
+passes the gate below; the final IPC-to-real-MCP fixture regression is still being added.
+No phase is accepted by this checkpoint alone.
+
+```text
+e2e-out/phase7-gate-typecheck.log
+packages/shared typecheck: Done
+packages/db typecheck: Done
+packages/engine typecheck: Done
+apps/renderer typecheck: Done
+apps/desktop typecheck: Done
+
+e2e-out/phase7-gate-test.log
+Test Files  132 passed (132)
+Tests  1817 passed | 4 skipped (1821)
+Duration  46.09s
+
+e2e-out/phase7-gate-build.log
+dist/importWorker.cjs 64.4kb
+[build] desktop bundle written
+
+e2e-out/phase7-gate-playwright.log
+ok 57 creates a worktree, runs there, and commits only the selected file (9.5s)
+12 skipped
+45 passed (1.1m)
+```
+
+The earlier full-unit attempt hit the 5-second timeout in a real-Git worktree case under
+parallel load. Giving that native suite its explicit 30-second allowance let the awaited Git
+operations finish before fixture cleanup; the full rerun above passed. The skipped live
+backend checks remain open and are not counted as passes.
+
+## Phase 7–8 final acceptance — 2026-09-07
+
+User steering: finish the current Phase 8 and stop before Phase 9; then promote this version
+to main and use main for future authorized work/pushes. AGENTS.md and CLAUDE.md now record that
+policy. No force-push, install, authenticated model call or personal-config test was performed.
+
+Phase 7: composer worktrees run in the selected directory and commit only selected Diff files;
+Claude/Codex transcript imports remain inert, preserve source bytes and survive restart/dedupe.
+Imports, scoped MCP resolution, safeStorage references and main/renderer integration are complete.
+The final MCP fixture waits for widget HTML readiness independently of turn completion, matching
+the runtime's asynchronous resource resolution. Claude user/local cwd/disable mutations are
+unsupported by the pinned native CLI/SDK and are rejected before modifying the existing server;
+project .mcp.json approvals and HTTP/SSE headers use native contracts.
+
+Phase 8: persisted recurrence/leases/restart reconciliation; current-agent fresh-session dispatch;
+durable Inbox and read badges; process-focus toast suppression and persisted deduplication;
+cross-session Tasks; known/unknown Usage aggregates; four routed sidebar pages. Recurrence has
+22 focused tests including DST gaps/folds and month ends; scheduler has eight tests including
+restart, overlap/cancel and transient round-table idle. Database fixes enforce exact scheduled
+claims, unique scheduled slots and immutable run/session attachment. Usage focused suites passed
+121 cases. Root IPC test proves edited agent configuration is read at fire time and user turns
+do not create false completion items. UI regression tests cover delayed choices, preserved edit
+schedule/project identity, live run history and stale usage report clearing. Different-model
+final review reported no remaining high/medium findings.
+
+Native activity.spec.ts uses the actual every-minute scheduler, then pauses and restarts the
+isolated profile to verify tasks, run history, usage, Inbox, dedupe and badge clearing. Usage
+fixtures explicitly include both known zero and unknown cost. Screenshots of all four pages
+were inspected at 1280x860. No live model expenditure was used for acceptance.
+
+Full gate literal tails follow (e2e-out/phase8-final-*.log):
+```text
+e2e-out/phase8-final-typecheck.log
+packages/db typecheck$ tsc --noEmit
+packages/engine typecheck$ tsc --noEmit
+packages/db typecheck: Done
+packages/engine typecheck: Done
+apps/renderer typecheck: Done
+apps/desktop typecheck$ tsc --noEmit
+apps/desktop typecheck: Done
+e2e-out/phase8-final-test.log
+ ✓ |renderer| src/store/pendingInteraction.test.ts (5 tests) 4ms
+
+ Test Files  144 passed (144)
+      Tests  1883 passed | 4 skipped (1887)
+   Start at  05:47:50
+   Duration  42.72s (transform 13.68s, setup 49.86s, collect 101.02s, tests 184.66s, environment 181.31s, prepare 44.73s)
+
+e2e-out/phase8-final-build.log
+  dist\importWorker.cjs   64.4kb
+  dist\main.cjs.map       10.0mb
+  dist\preload.cjs.map     1.5mb
+  ...and 1 more output file...
+
+Done in 393ms
+[build] desktop bundle written to C:\Users\TugaPlayz\Desktop\GITHUB\capygen\apps\desktop\dist
+e2e-out/phase8-final-playwright.log
+  ok 55 tests\e2e\workspace.spec.ts:353:5 › (e) dragging the Terminal tab under the Browser group survives a restart (6.9s)
+  ok 56 tests\e2e\workspace.spec.ts:458:5 › (f) the fixture dev server is detected, started, and loaded in the Browser pane (1.3s)
+  ok 57 tests\e2e\workspace.spec.ts:517:5 › (g) the native overlay tracks its placeholder through maximise and a window resize (124ms)
+  ok 58 tests\e2e\worktrees.spec.ts:138:5 › creates a worktree, runs there, and commits only the selected file (9.4s)
+
+  12 skipped
+  46 passed (1.4m)
+```
+Phases 9, 9C and 10–12 remain open. Live benchmark and packaged/updater proofs remain their future phase work. The unrelated state.lock is preserved.
+Integration code commit: 5635edd. Final all-package/test typecheck was reconfirmed after the imported-session picker exclusion (e2e-out/phase8-final-typecheck-confirm.log: all Done). The native gate also passed the worktree and import acceptance paths on the integrated build.

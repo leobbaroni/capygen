@@ -7,7 +7,10 @@ decisions, frameworks and architecture with Astra. Astra owns orchestration, des
 then `SPEC.md` (contract), `PLAN.md` (build order, assumptions, crew), `CONTEXT.md` (terms),
 `docs/POLICIES.md` (app policies), `docs/HANDOFF.md` (state and how to run a phase).
 
-- **Push policy:** commit locally as you go; push only when the user asks; never force-push.
+- **Branch and push policy (user update, 2026-09-07):** after Phase 8 acceptance,
+  work on `main` and push verified updates to `origin/main`; never force-push.
+  Stop this run after Phase 8. Only one agent may stage/commit at a time; never
+  amend another agent's commit.
 - **Never install anything silently** on the user's machine from the app: every install/upgrade
   step confirms the exact command in a dialog and runs in a visible console.
 - **Never modify the real user configuration** (`~/.claude/**`, `~/.codex/**`) from tests or

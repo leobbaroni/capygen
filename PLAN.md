@@ -275,19 +275,32 @@ silently substitute models. Review status and failed Claude attempts are recorde
       * `import`/`updates`/`members`/`policies`/`sharing` render placeholders naming the phase
         that fills them (7, 12, 9) — R19 asks for the ids, and inventing behaviour those phases
         own would be worse than saying so.
-- [ ] Phase 7: Projects, worktrees, git, imports (M2)
+- [x] Phase 7: Projects, worktrees, git, imports (M2)
       Prerequisite: corrective batch R-A–R-E in `docs/plans/phases7-12.md`; close runtime
       settings/MCP and project-scope gaps before widening project/worktree operations.
       Done when: create a worktree from the composer chip, session runs in it, diff pane shows
       changes, commit from the UI; import a Claude Code and a Codex transcript into sessions.
       Steps: projects store; worktree ops (simple-git); git status/commit UI; import parsers.
       Covers: P8, P9.
-- [ ] Phase 8: Tasks, Inbox, Usage, Automations (M3–M4)
+      Accepted 2026-09-07: native worktree composer → session cwd → Diff → selected-file
+      commit and both native transcript imports/restart are proved by worktrees.spec.ts and
+      imports.spec.ts. Scoped MCP fixture coverage verifies real tools/widgets; unsupported
+      Claude user/local cwd/disable writes are refused before mutation (COMPAT.md).
+      Final shared gate with Phase 8: 1883 unit tests passed, 4 skipped; 46 Playwright passed,
+      12 skipped; typecheck and build passed. Packaged SDK smoke remains Phase 12 work.
+- [x] Phase 8: Tasks, Inbox, Usage, Automations (M3–M4)
       Done when: Tasks page lists agent todos across sessions; Inbox shows needs-input/finished
       items with toasts + badge; Usage page aggregates fixture events; an automation scheduled
       "every minute" runs a prompt and appears in Inbox.
       Steps: port pages from reference; scheduler (node-cron-style, persisted); notifications.
       Covers: P10–P13, R23.
+      Accepted 2026-09-07: activity.spec.ts runs the real every-minute timer through normal
+      dispatch with an offline engine, verifies cross-session todos, fixture usage, Inbox and
+      badge, then restarts to prove persistence/no duplicate completion. Inbox requests and
+      native toast rules have focused tests. Recurrence covers DST/month ends, durable claims
+      prevent overlap, and unknown costs remain explicit. Full gate: typecheck/build passed;
+      144 unit files, 1883 passed/4 skipped; 46 Playwright passed/12 skipped.
+      User stop point: finish Phase 8, promote this version to main, then stop before Phase 9.
 - [ ] Phase 9: MCP catalogue, sharing, members, policies, approvals (M5–M6)
       Done when: session MCP servers page adds a stdio server and its tools appear in the slash
       menu; Sharing exports a session bundle (HTML/JSON) and re-imports; Members/Policies/Approve
@@ -380,7 +393,7 @@ Count: 6; none failed the necessity test.
 
 ## Execution amendment — 2026-09-07
 
-Continue remaining phases through final verification, including Phase 9C Custom Mode.
+Updated stop point: finish Phase 8 only, promote the verified version to main and push it, then stop. Future authorized work and pushes use main. Phases 9–12 and 9C remain planned, not implemented in this run.
 Test prompts use only GPT Luna low / Sonnet 5 low; record resolved backend model IDs and
 effort in test evidence, refuse silent substitutions. Fixture tests remain model-free.
 Astra remains lead/orchestrator/design/decisions; Sol handles hard/medium implementation; Luna

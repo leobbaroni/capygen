@@ -12,8 +12,11 @@ the implementer always reviews. Read in this order:
 
 ## Non-negotiable rules
 
-1. **Push policy:** commit locally as you go (one commit per task, `git add` by path, never
-   `-A`); push only when the user asks; never force-push.
+1. **Branch and push policy (user update, 2026-09-07):** after Phase 8 acceptance,
+   `main` is the working branch. Commit completed work by task (`git add` by path,
+   never `-A`) and push verified updates to `origin/main`; never force-push. The
+   current run stops after Phase 8; later phases require a new request to resume.
+   Only one agent may stage/commit at a time; never amend another agent's commit.
 2. **Never install anything silently** on the user's machine from the app. Every install/upgrade/
    sign-in step shows a confirm dialog quoting the exact command and runs in a visible console
    (`apps/desktop/src/prereqs/runGate.ts` is the gate; keep it unit-tested).
