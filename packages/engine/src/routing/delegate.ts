@@ -36,7 +36,14 @@
  * a delegated sub-agent as for any other turn and the answer reaches the
  * delegated harness. Nothing is auto-approved (R27).
  */
-import { newId, type Backend, type TurnStatus, type UsageTotals } from "@capygen/shared";
+import {
+  newId,
+  type Backend,
+  type PermissionMode,
+  type TurnStatus,
+  type UsageTotals,
+} from "@capygen/shared";
+import type { ModelCatalogue } from "../config/layering.js";
 import { EMPTY_USAGE, addUsage, type BlockPatch, type EngineEvent, type Harness, type HarnessAgent, type HarnessSession } from "../harness.js";
 import { clampText, type JsonSchemaObject, type ToolDefinition } from "../tools/types.js";
 
@@ -100,8 +107,41 @@ export interface DelegateRunnerDeps {
   parent: HarnessAgent;
   /** Where sub-agents run; `null` ⇒ nothing to delegate, answer fail-open. */
   target: () => { backend: Backend; model: string } | null;
-  /** Build (not start) a harness for the routed backend. */
-  makeHarness: (target: { backend: Backend; model: string }) => Harness;
+  /** Build (not start) a harness for the routed backend. Handed the **same**
+   *  resolved agent that `start()` will receive — see `resolveChild`. */
+  makeHarness: (target: { backend: Backend; model: string }, agent: HarnessAgent) => Harness;
+  /**
+   * [7-P1] The target backend's effective configuration and permission mode:
+   * that backend's canonical global default with the parent's explicit
+   * `config.<targetBackend>` section on top.
+   *
+   * The parent's section for the target is a deliberate override — a Claude
+   * lead that sets `codex.reasoningEffort` means it — and must survive. The
+   * parent's **permission mode** is not among the things carried across: it is
+   * the mode granted to the parent on the parent's backend, and copying a
+   * `bypassPermissions` onto an `api` child hands a different backend an
+   * authority nobody granted it there. The resolver answers the target's own.
+   *
+   * Absent (tests, older callers) means: no global layer, and the parent's own
+   * section for that backend, with no permission mode carried at all.
+   */
+  resolveTarget?: (backend: Backend) => {
+    config: Record<string, unknown>;
+    permissionMode?: PermissionMode;
+    /**
+     * That backend's **canonical** default model, when it has one. Consulted
+     * only after the tool's own request and the routing rule, so an explicit
+     * choice still wins; it exists because a route that names a backend and no
+     * model used to skip the global default entirely and go straight to the
+     * catalogue — so a configured `backends.codex.model` was ignored for
+     * exactly the sub-agents it was meant to configure.
+     */
+    model?: string | null;
+    /** Refuses a resolved model that certainly belongs to another backend. */
+    validate?: (model: string) => { ok: boolean; reason?: string };
+  };
+  /** That backend's own catalogue default, when the route names no model. */
+  catalogue?: ModelCatalogue;
   /**
    * Every event the delegated turn produced, block keys already prefixed.
    * `turn` events are **not** forwarded: the sub-agent finishing does not end
@@ -139,17 +179,6 @@ export const DEFAULT_DELEGATE_TIMEOUT_MS = 10 * 60 * 1000;
  */
 export const DEFAULT_DELEGATE_RESULT_CHARS = 64 * 1024;
 
-/**
- * A backend that can pick its own model when capygen has not named one.
- * Codex's `thread/start` omits `model` and takes the user's `config.toml`
- * default; Claude and the `api` loop both need an explicit id (spike §6.4:
- * never leave the model to a default we cannot see), so a route that names
- * only `backend: "claude"` is not actionable and fails open.
- */
-function canRunWithoutModel(backend: Backend): boolean {
-  return backend === "codex";
-}
-
 export function createDelegateRunner(
   deps: DelegateRunnerDeps,
 ): (req: DelegateRequest) => Promise<DelegateResult> {
@@ -166,16 +195,32 @@ export function createDelegateRunner(
           "to. Do the work yourself, or use your own sub-agent tool.",
       };
     }
-    const model = req.model ?? routed.model;
-    if (!model && !canRunWithoutModel(routed.backend)) {
-      log.warn(
-        `[delegate] routing names ${routed.backend} but no model; failing open`,
-      );
+    /**
+     * [7-P1] The child's model, resolved the same way any other agent's is:
+     * the tool's own request, then the route, then **that backend's own**
+     * catalogue default. Never the app-wide alias, and never empty — a Codex
+     * `thread/start` with no model silently takes a `config.toml` default
+     * capygen cannot see, which is not a model anyone chose.
+     *
+     * A child that cannot be given a model is a **structured failed tool
+     * result**, not a dispatch. The neighbouring "no routing rule at all" case
+     * above keeps its R12 fail-open answer unchanged; this guard is only about
+     * a route that exists and names nothing runnable.
+     */
+    const target = deps.resolveTarget?.(routed.backend);
+    const model =
+      (req.model ?? "").trim() ||
+      (routed.model ?? "").trim() ||
+      (target?.model ?? "").trim() ||
+      (deps.catalogue?.(routed.backend) ?? "").trim();
+    if (!model) {
+      log.warn(`[delegate] routing names ${routed.backend} but no model can be resolved`);
       return {
         ok: false,
         text:
-          `capygen's routing rule names the ${routed.backend} backend but no model, so the ` +
-          "sub-agent cannot be started. Do the work yourself.",
+          `capygen's routing rule names the ${routed.backend} backend, but no model is ` +
+          "configured for it and it offers no default to fall back on, so no sub-agent was " +
+          "started. Pick a model for that backend in Settings, or do the work yourself.",
       };
     }
 
@@ -198,9 +243,50 @@ export function createDelegateRunner(
       }
     };
 
+    /**
+     * [7-P1] **One** child agent, built once and used twice.
+     *
+     * This used to be two independently constructed objects: `SessionRunner`
+     * built one for `makeHarness` and this file built another for `start()` —
+     * both from the parent, and the second one silently superseded the first
+     * for everything the harness actually runs on. A test that asserted the
+     * factory input therefore proved nothing about the child.
+     */
+    // A resolved model that certainly belongs to another backend is a failed
+    // tool result too, not a spawn: the child would fail with the backend's own
+    // error, inside a turn the user is watching, with nothing to act on.
+    const verdict = target?.validate?.(model);
+    if (verdict && !verdict.ok) {
+      log.warn(`[delegate] refusing ${routed.backend}/${model}: ${verdict.reason ?? "invalid"}`);
+      return {
+        ok: false,
+        text:
+          `capygen did not start a ${routed.backend} sub-agent: ${verdict.reason ?? ""} ` +
+          "Fix the routing rule or that backend's default model in Settings, or do the work " +
+          "yourself.",
+      };
+    }
+
+    const childConfig = target
+      ? target.config
+      : ((deps.parent.config as Record<string, Record<string, unknown>> | null | undefined)?.[
+          routed.backend
+        ] ?? {});
+    const childAgent: HarnessAgent = {
+      agentId: `${deps.parent.agentId}#sub${index}`,
+      name: req.description || "sub-agent",
+      backend: routed.backend,
+      model,
+      // Never `deps.parent.permissionMode`: that is the parent's grant on the
+      // parent's backend. The target's own resolved mode, or nothing.
+      ...(target?.permissionMode ? { permissionMode: target.permissionMode } : {}),
+      resumeSessionId: null,
+      config: { [routed.backend]: childConfig } as HarnessAgent["config"],
+    };
+
     let harness: Harness;
     try {
-      harness = deps.makeHarness({ backend: routed.backend, model });
+      harness = deps.makeHarness({ backend: routed.backend, model }, childAgent);
     } catch (err) {
       const message = describe(err);
       log.warn(`[delegate] could not build a ${routed.backend} harness: ${message}`);
@@ -233,15 +319,7 @@ export function createDelegateRunner(
 
     emit(subagentBlock("running"), harness);
 
-    const agent: HarnessAgent = {
-      agentId: `${deps.parent.agentId}#sub${index}`,
-      name: req.description || "sub-agent",
-      backend: routed.backend,
-      model,
-      ...(deps.parent.permissionMode ? { permissionMode: deps.parent.permissionMode } : {}),
-      resumeSessionId: null,
-      config: deps.parent.config,
-    };
+    const agent = childAgent;
 
     const texts = new Map<string, string>();
     let usage: UsageTotals = { ...EMPTY_USAGE };

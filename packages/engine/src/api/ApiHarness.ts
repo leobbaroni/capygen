@@ -896,9 +896,19 @@ export class ApiHarness implements Harness {
 export function resolveConfig(agent: HarnessAgent, deps: ApiHarnessDeps): ResolvedConfig {
   const config = isRecord(agent.config) && isRecord(agent.config.api) ? agent.config.api : {};
   const provider = readProvider(config.provider);
-  const model = typeof config.model === "string" && config.model.length > 0
-    ? config.model
-    : agent.model;
+  // [7-P1] `agent.model` is the authoritative resolved model. The runner walks
+  // the whole chain — explicit choice, canonical backend default, catalogue —
+  // and puts the answer here, and a route or a delegation puts its own there
+  // too. `config.api.model` is the *lower* layer that chain already consulted,
+  // so preferring it let a stale section override the model the caller resolved
+  // and the UI reported. It is only the fallback for a config assembled outside
+  // the runner (a direct harness construction, a spike).
+  const model =
+    agent.model && agent.model.length > 0
+      ? agent.model
+      : typeof config.model === "string"
+        ? config.model
+        : "";
   const thinking = readThinking(config.thinking);
   const effort = typeof config.reasoningEffort === "string" ? config.reasoningEffort : undefined;
   return {

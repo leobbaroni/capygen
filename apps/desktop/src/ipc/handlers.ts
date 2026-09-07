@@ -9,6 +9,7 @@
  * back so a handler bug is caught at the boundary.
  */
 import type { CapygenStore } from "@capygen/db";
+import { effectiveBackendConfig, type ModelCatalogue } from "@capygen/engine";
 import {
   builtinSlashCommandsFor,
   type ApiProvider,
@@ -21,6 +22,7 @@ import {
 } from "@capygen/shared";
 import { createSessionRunner } from "../engine/SessionRunner.js";
 import { API_ENV_KEYS } from "./harnessList.js";
+import { catalogueFrom, checkModelSelection, type ModelSelectionDeps } from "./modelSelection.js";
 import { createPrereqsIpc, type PrereqsIpcDeps } from "./prereqs.js";
 import { createWorkspaceIpc, type WorkspaceIpcDeps } from "./workspace.js";
 // [B1/Phase 6] The settings hub, the config-sync engine and diagnostics.
@@ -105,6 +107,14 @@ export interface IpcContextDeps {
    * `claude`/`codex` CLIs, which is inherently async.
    */
   listHarnesses?: () => InvokeResult<"harness.list"> | Promise<InvokeResult<"harness.list">>;
+  /**
+   * [7-P1] The last **already resolved** `harness.list` answer, or `[]`. Read
+   * synchronously wherever a model has to be resolved or validated
+   * (`sessions.create`, `agents.*`, `SessionRunner`), so none of those spawns a
+   * probe. `main.ts` fills it in from the same cached lister; a build with no
+   * lister simply has no catalogue.
+   */
+  catalogue?: () => InvokeResult<"harness.list">;
   /**
    * [B3] The MCP Apps widget host (`apps/desktop/src/ipc/widgets.ts`, SPEC
    * R31). Absent in tests and in any profile with no MCP client, in which case
@@ -199,10 +209,53 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   // (R28-R29). Both are Electron-free: the OS-facing switches (theme, run at
   // login) and the two Electron objects diagnostics needs (clipboard, file
   // size) arrive as injected functions from `main.ts`.
+  /**
+   * [7-P1] Each backend's own catalogue default, from the same probe the
+   * picker uses, without ever forcing one: `deps.catalogue` reads the harness
+   * lister's **last resolved** answer. `sessions.create` must not spawn a
+   * `codex app-server` to validate a model, and a profile that has not probed
+   * yet simply has no catalogue opinion — which resolves to "pick a model"
+   * rather than to a guess.
+   */
+  const catalogue: ModelCatalogue = (backend) =>
+    catalogueFrom(() => deps.catalogue?.() ?? [], {
+      // Read the canonical row directly: SettingsService.all() derives its
+      // alias through this callback and would recurse. Provider changes must
+      // affect the alias even while the last harness catalogue is cached.
+      settings: store.globalSettings.all(),
+    })(backend);
+
+  /** [7-P1] "Can this agent actually run?", before anything is written. */
+  const modelSelection: ModelSelectionDeps = {
+    settings: () => settingsService.all(),
+    harnesses: () => deps.catalogue?.() ?? [],
+  };
+  function requireRunnable(selection: {
+    backend: import("@capygen/shared").Backend;
+    model?: string | null;
+    name?: string;
+    /** The agent's own config, if any; the effective section is derived here so
+     *  every caller validates against the provider the agent will run on. */
+    config?: import("@capygen/shared").AgentConfig | null;
+  }): void {
+    const { config: agentConfig, ...rest } = selection;
+    const check = checkModelSelection(modelSelection, {
+      ...rest,
+      config: effectiveBackendConfig(settingsService.all(), agentConfig, selection.backend),
+    });
+    if (!check.ok) throw new Error(check.reason ?? "no model could be resolved");
+  }
+
+  // The flat compatibility view derives `defaultModel` too, and shipping code
+  // reads it straight off the repo — so it is given the same catalogue the
+  // service uses, or the two would disagree by one step.
+  store.setModelCatalogue(catalogue);
+
   const settingsService = new SettingsService({
     store,
     broadcast,
     log,
+    catalogue,
     ...(deps.settingsPlatform ? { platform: deps.settingsPlatform } : {}),
   });
   const integrations = new IntegrationsService({
@@ -255,6 +308,22 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     keys: { getKey: (provider) => secrets.get(provider) },
   };
 
+  /**
+   * [7-P1] The runner resolves and validates a model the same way the IPC
+   * boundary does. Passed as functions rather than values so a settings change
+   * reaches the **next** harness build without restarting anything.
+   */
+  const runnerConfig = {
+    settings: () => settingsService.all(),
+    catalogue,
+    validateModel: (selection: {
+      backend: import("@capygen/shared").Backend;
+      model?: string | null;
+      name?: string;
+      config?: Record<string, unknown> | null;
+    }) => checkModelSelection(modelSelection, selection),
+  };
+
   /** Persist a block and push it to every renderer (upsert by id). */
   function emitBlock(block: Block): Block {
     return persistBlock(engineDeps, block);
@@ -271,7 +340,11 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     broadcast("agents.updated", { sessionId, agents: store.sessions.agents(sessionId) });
   }
 
-  const engine = (deps.makeEngine ?? createSessionRunner)(engineDeps);
+  // Handed to whichever engine is wired, including a test's own — a runner
+  // built by `makeEngine` that spreads its deps gets the same resolution and
+  // validation the shipping one does, rather than silently falling back to the
+  // bare chain.
+  const engine = (deps.makeEngine ?? createSessionRunner)({ ...engineDeps, ...runnerConfig });
 
   const handlers: IpcHandlers = {
     "projects.pick": async (): Promise<Project | null> => {
@@ -287,18 +360,34 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     "sessions.create": (args) => {
       const project = store.projects.get(args.projectId);
       if (!project) throw new Error(`unknown project: ${args.projectId}`);
+      // [7-P1] The implicit agent follows Settings ▸ General's **selected**
+      // backend, and takes that backend's own model. It used to be hardcoded to
+      // `claude` with the app-wide `defaultModel`, so a profile whose default
+      // backend was Codex created a Claude agent — and handed it whatever id
+      // the general alias held.
+      const global = settingsService.all();
       const agents =
         args.agents.length > 0
           ? args.agents
           : [
               {
                 name: "capy",
-                backend: "claude" as const,
-                model: store.settings.all().defaultModel,
+                backend: global.general.defaultBackend,
+                model: global.general.defaultModel,
                 role: "lead" as const,
                 config: null,
               },
             ];
+      // Before the mutation: a session whose lead cannot resolve a model is a
+      // session that fails on its first turn, with nothing to show for it.
+      for (const draft of agents) {
+        requireRunnable({
+          backend: draft.backend,
+          model: draft.model,
+          name: draft.name,
+          config: draft.config ?? null,
+        });
+      }
       const created = store.sessions.create({
         projectId: args.projectId,
         mode: args.mode,
@@ -356,6 +445,12 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     "agents.list": (args) => store.sessions.agents(args.sessionId),
 
     "agents.add": (args) => {
+      requireRunnable({
+        backend: args.backend,
+        model: args.model,
+        ...(args.displayName ? { name: args.displayName } : {}),
+        config: args.config ?? null,
+      });
       const agent = store.sessions.addAgent(args.sessionId, {
         backend: args.backend,
         model: args.model,
@@ -370,11 +465,37 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return agent;
     },
 
+    /**
+     * [7-P1] A model/config edit is validated before it lands, and then
+     * **evicts that agent's harness** so the next turn is built from the new
+     * opinion (the harness captures its effective config once, at
+     * construction). An agent that is mid-turn is marked restart-pending
+     * instead and evicted when that turn ends — including when it ends in an
+     * error or a cancel — because changing a running turn's options underneath
+     * it is exactly what the contract forbids.
+     */
     "agents.update": (args) => {
+      const before = store.sessions.agent(args.agentId);
+      if (before && (args.patch.model !== undefined || args.patch.config !== undefined)) {
+        requireRunnable({
+          backend: before.backend,
+          model: args.patch.model ?? before.model,
+          name: before.displayName,
+          // The config this update lands on, not the one it replaces.
+          config: args.patch.config !== undefined ? args.patch.config : before.config,
+        });
+      }
       const agent = store.sessions.updateAgent(args.agentId, args.patch);
+      if (args.patch.model !== undefined || args.patch.config !== undefined) {
+        engine.agentConfigChanged?.(agent.id);
+      }
       emitAgents(agent.sessionId);
       return agent;
     },
+
+    /** [7-P1] Minimal non-secret runtime facts; null for an unknown agent or
+     *  an engine that does not track them (the echo double). */
+    "agents.runtime": (args) => engine.agentRuntime?.(args.agentId) ?? null,
 
     "agents.remove": (args) => {
       const agent = store.sessions.agent(args.agentId);
@@ -608,6 +729,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
             { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
           ],
           defaultModel: store.settings.all().defaultModel,
+          providers: [],
         },
         {
           backend: "codex" as const,
@@ -616,6 +738,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
           reason: "no harness lister was wired, so the codex CLI was never probed",
           models: [],
           defaultModel: "",
+          providers: [],
         },
         {
           backend: "api" as const,
@@ -624,6 +747,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
           reason: "no harness lister was wired, so no stored API key was checked",
           models: [],
           defaultModel: "",
+          providers: [],
         },
       ],
 
@@ -681,10 +805,19 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return deps.widgets.event(args);
     },
 
-    "settings.get": () => store.settings.all(),
+    /**
+     * [7-P1] Both settings surfaces go through `SettingsService`. `settings.get`
+     * is a **derived view** of the canonical object plus the three flat-only
+     * preferences; `settings.set` translates the overlapping half onto the
+     * canonical row and applies the same platform effects and
+     * `settings.changed` broadcast the hub does. Writing the flat row directly
+     * here is what let a second authority exist: it bypassed both, and the next
+     * `settings.patch` silently reverted it.
+     */
+    "settings.get": () => settingsService.flat(),
 
     "settings.set": (args) => {
-      const next = store.settings.patch(args);
+      const next = settingsService.setFlat(args);
       log.info("[ipc] settings updated", Object.keys(args).join(","));
       return next;
     },

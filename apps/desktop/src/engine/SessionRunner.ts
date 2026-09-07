@@ -20,6 +20,10 @@ import {
   createHarnessForBackend,
   createSubagentRouter,
   delegateTaskTool,
+  effectiveBackendConfig,
+  resolveModel,
+  resolvePermissionMode,
+  type ModelCatalogue,
   type BlockPatch,
   type EngineEvent,
   type Harness,
@@ -32,8 +36,10 @@ import {
   newId,
   type Agent,
   type AgentDescribe,
+  type AgentRuntimeInfo,
   type Backend,
   type Block,
+  type GlobalSettings,
   type PermissionMode,
   type Session,
   type SlashCommand,
@@ -50,6 +56,24 @@ import type { Engine, EngineDeps, EnginePermissionAnswer, EngineSendArgs } from 
 /** Key under which an agent's backend session id is remembered for `resume`. */
 export function backendSessionKey(agentId: string): string {
   return `engine.backendSession.${agentId}`;
+}
+
+/**
+ * [7-P1] Which backend the stored resume id belongs to.
+ *
+ * A resume id is a *backend's* handle — a Claude SDK session, a Codex thread —
+ * and means nothing to another one, so it is stored with the backend that
+ * issued it and checked before use.
+ *
+ * No shipping path changes an agent's backend today (`AgentPatchSchema` has no
+ * `backend` field), so this is a guard rather than a fix for an observed bug:
+ * it makes the invariant explicit before the worktree/import work starts moving
+ * agents around, and it means a handle written by an older build — which
+ * carries no tag — is still trusted, because no backend change can have
+ * happened to it.
+ */
+export function backendSessionBackendKey(agentId: string): string {
+  return `engine.backendSession.backend.${agentId}`;
 }
 
 /**
@@ -77,6 +101,31 @@ export interface SessionRunnerDeps extends EngineDeps {
    * what decides which backend actually runs (SPEC R7/R8/R9).
    */
   makeHarness?: (agent: HarnessAgent, extras: HarnessExtras) => Harness;
+  /**
+   * [7-P1] The canonical settings, read fresh whenever a harness is **built**.
+   * A global change therefore reaches the next new or restarted harness and
+   * never an active turn. Defaults to the store's own row so the existing
+   * tests need no wiring.
+   */
+  settings?: () => GlobalSettings;
+  /** Each backend's own catalogue default; never probes (see `handlers.ts`). */
+  catalogue?: ModelCatalogue;
+  /**
+   * [7-P1] The same check `sessions.create`/`agents.*` run before they write.
+   *
+   * IPC validation alone only covers rows created *since* it existed: a session
+   * stored before this build, or one whose backend catalogue has changed under
+   * it, reaches dispatch with a model nobody has checked. The actual dispatch
+   * runs the identical validator, so the two can never disagree about whether
+   * an agent can run.
+   */
+  validateModel?: (selection: {
+    backend: Backend;
+    model?: string | null;
+    name?: string;
+    /** The effective section for that backend — `api` reads `provider`. */
+    config?: Record<string, unknown> | null;
+  }) => { ok: boolean; model: string; provider?: string; reason?: string };
 }
 
 /** Where a harness block key landed the first time it was written. */
@@ -115,6 +164,34 @@ interface ActiveTurn {
   widgetResolved: Set<string>;
   /** toolCallId → the harness block key of its tool_call row. */
   toolCallKeys: Map<string, string>;
+  /**
+   * [7-P1] Set while the harness is still starting, so the slot is reserved
+   * before the first await: a second send is refused, and a Stop that lands
+   * during startup is remembered rather than lost.
+   */
+  starting: boolean;
+  /** Stop reached this turn before its stream existed; nothing is sent. */
+  cancelled: boolean;
+}
+
+/**
+ * [7-P1] The one effort field each backend actually reads, surfaced as the
+ * single non-secret scalar `AgentRuntimeInfo.effort`. Claude calls it `effort`,
+ * Codex and the API loop call it `reasoningEffort`; nothing else from the
+ * effective config leaves the main process.
+ */
+function readEffort(agent: HarnessAgent): string | null {
+  const section = (agent.config as Record<string, Record<string, unknown>> | null | undefined)?.[
+    agent.backend
+  ];
+  // [7-P1] The backend's **own** field, not whichever of the two happens to be
+  // set: Claude's option is `effort` (`ClaudeOptions.effort`), Codex's and the
+  // API loop's is `reasoningEffort`. Reading `effort ?? reasoningEffort` made
+  // the answer depend on which key a config bag happened to carry, so a Codex
+  // agent could report a stale Claude value that nothing sends.
+  const field = agent.backend === "claude" ? "effort" : "reasoningEffort";
+  const value = section?.[field];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /** The key both `harnesses` and `active` are stored under. */
@@ -189,8 +266,36 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         },
       }));
 
+  const settings = deps.settings ?? ((): GlobalSettings => store.globalSettings.all());
+
   /** `sessionId:agentId` → harness. */
   const harnesses = new Map<string, Harness>();
+  /**
+   * [7-P1] `sessionId:agentId` → the configuration that harness was built with.
+   * Read only by `agentRuntime` (three scalars and a flag) and used to answer
+   * "what is actually running" without re-deriving it — the capture is the
+   * lifecycle's, not the current settings'.
+   */
+  const runtime = new Map<string, HarnessAgent>();
+  /** Agents whose harness must be replaced as soon as their turn ends. */
+  const restartPending = new Set<string>();
+  /**
+   * `sessionId:agentId` → an evicted harness's teardown, while it is still
+   * running. `harnessFor` awaits it before building the replacement so the two
+   * never hold the same agent's resources at once.
+   */
+  const disposing = new Map<string, Promise<void>>();
+  /**
+   * `sessionId:agentId` → the in-flight `start()` (after any pending teardown).
+   * A second turn on the same agent joins this rather than starting again.
+   */
+  const starting = new Map<string, Promise<void>>();
+  /**
+   * Set by `dispose()`. Anything parked on a start checks it before it acts:
+   * a backend that finishes starting after shutdown must not send, and must
+   * not write into a store the caller is about to close.
+   */
+  let shuttingDown = false;
   /**
    * `sessionId:agentId` → the turn that agent is running. Keyed the same way
    * as `harnesses`, not by session: a second `send` on another agent of the
@@ -263,22 +368,43 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       parent: harnessAgent,
       // Re-read per call, not captured: see the comment above.
       target: () => delegationTarget(store, session.id, agent.id),
-      makeHarness: (routed: { backend: Backend; model: string }) =>
+      // [7-P1] The factory is handed the **same** child agent `start()` gets,
+      // so the two cannot describe different runs. It used to build a second
+      // one from the parent here, carrying the parent's whole config and its
+      // permission mode into another backend.
+      makeHarness: (_routed: { backend: Backend; model: string }, child: HarnessAgent) =>
         makeHarness(
-          {
-            agentId: `${agent.id}#delegate`,
-            name: `${agent.displayName} sub-agent`,
-            backend: routed.backend,
-            model: routed.model,
-            ...(harnessAgent.permissionMode
-              ? { permissionMode: harnessAgent.permissionMode }
-              : {}),
-            resumeSessionId: null,
-            config: agent.config,
-          },
+          child,
           // No delegation inside a delegated turn: one hop, not a tree.
           {},
         ),
+      // The target backend's own defaults, with the parent's explicit section
+      // for that backend on top; the parent's permission mode is never copied.
+      resolveTarget: (backend: Backend) => {
+        const resolved = resolveTargetConfig(agent, backend);
+        // The target backend's own canonical default, offered *after* the tool
+        // request and the routing rule — resolved and validated against the
+        // **target's** effective config, so an `api` child that selects its own
+        // provider is not handed the global provider's default.
+        const canonical = deps.validateModel?.({ backend, config: resolved.config });
+        // Same materialisation for a delegated child: the provider its model
+        // was resolved against travels with it.
+        if (canonical?.ok && canonical.provider) resolved.config.provider = canonical.provider;
+        return {
+          config: resolved.config,
+          permissionMode: resolved.permissionMode,
+          model: canonical?.ok ? canonical.model : null,
+          validate: (model: string) => {
+            const check = deps.validateModel?.({ backend, model, config: resolved.config });
+            // A valid request/route may override an incompatible canonical
+            // model. Capture its provider even when the canonical check above
+            // failed; this config is the child-specific object used at start.
+            if (check?.ok && check.provider) resolved.config.provider = check.provider;
+            return check ? { ok: check.ok, ...(check.reason ? { reason: check.reason } : {}) } : { ok: true };
+          },
+        };
+      },
+      ...(deps.catalogue ? { catalogue: deps.catalogue } : {}),
       // The sub-agent's blocks, cards and usage land in the *parent's* turn,
       // which is the turn the user is looking at. They carry `delegatedFrom`
       // (set by `createDelegateRunner`) so the transcript can attribute them
@@ -314,18 +440,167 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     return extras;
   }
 
-  function harnessFor(session: Session, agent: Agent): Harness {
+  /**
+   * [7-P1] The configuration a harness is built with, captured **once** per
+   * harness lifecycle: the canonical global default for the agent's own
+   * backend, with that agent's own explicit override laid on top, field by
+   * field. Unset fields fall through to the harness's own defaults exactly as
+   * they always did.
+   *
+   * `harnessFor` used to hand over the raw `agent.config` and the flat
+   * app-wide `permissionMode`, so `effectiveBackendConfig` — the function that
+   * exists to express this rule — reached no shipping code at all: a global
+   * `backends.claude.effort` was simply never sent, and a global
+   * `bypassPermissions` meant for Claude loosened an `api` agent too.
+   *
+   * The result carries **only the agent's own backend section**. A delegated
+   * child resolves the target backend's section separately (see
+   * `resolveTargetConfig`), because that is a different backend's opinion.
+   */
+  function effectiveHarnessAgent(
+    agent: Agent,
+    extras: { promptAddition?: string } = {},
+  ): { agent: HarnessAgent } | { error: string } {
+    const global = settings();
+    // The effective config first: for `api` it names the provider, and which
+    // model may run depends on that.
+    const config = effectiveBackendConfig(global, agent.config, agent.backend);
+    // The injected validator when there is one (it also catches a stored model
+    // that belongs to another backend, or to another provider); otherwise the
+    // resolution chain alone.
+    const checked = deps.validateModel?.({
+      backend: agent.backend,
+      model: agent.model,
+      name: agent.displayName,
+      config,
+    });
+    if (checked && !checked.ok) return { error: checked.reason ?? "no model could be resolved" };
+    const resolved = checked
+      ? ({ ok: true, model: checked.model } as const)
+      : resolveModel(global, agent, deps.catalogue);
+    if (!resolved.ok) return { error: resolved.reason };
+    // The provider the model was resolved against is written into the config
+    // the harness reads. Resolving from one provider and leaving the field
+    // unset — where `ApiHarness.resolveConfig` defaults it to Anthropic — is
+    // how an OpenAI-only profile ended up sending `gpt-5` to Anthropic.
+    if (checked?.provider) config.provider = checked.provider;
+    return {
+      agent: {
+        agentId: agent.id,
+        name: agent.name,
+        backend: agent.backend,
+        model: resolved.model,
+        permissionMode: resolvePermissionMode(global, agent.config, agent.backend),
+        resumeSessionId: resumeIdFor(agent),
+        config: { [agent.backend]: config } as HarnessAgent["config"],
+        ...(extras.promptAddition ? { promptAddition: extras.promptAddition } : {}),
+      },
+    };
+  }
+
+  /**
+   * The stored backend session id, but only when it belongs to the backend this
+   * agent runs on now. A row written before the backend was recorded is trusted
+   * — `agents.update` clears both keys whenever the backend changes, so an
+   * unlabelled id cannot have crossed backends.
+   */
+  function resumeIdFor(agent: Agent): string | null {
+    const id = store.settings.getRaw<string | null>(backendSessionKey(agent.id), null);
+    if (!id) return null;
+    const recorded = store.settings.getRaw<string | null>(
+      backendSessionBackendKey(agent.id),
+      null,
+    );
+    if (recorded && recorded !== agent.backend) {
+      log.info(
+        `[engine] not resuming ${recorded} session ${id} on ${agent.backend} for ${agent.id}`,
+      );
+      return null;
+    }
+    return id;
+  }
+
+  /**
+   * The effective config for **another** backend, for a delegated child: that
+   * backend's canonical global default with the parent's explicit
+   * `config.<targetBackend>` section on top. The parent's section for the target
+   * is a real, deliberate override (a Claude lead that sets
+   * `codex.reasoningEffort` means it) and must survive; the parent's
+   * *permission mode* is not carried across, which `resolvePermissionMode`
+   * enforces by resolving the target's own.
+   */
+  function resolveTargetConfig(
+    agent: Agent,
+    backend: Backend,
+  ): { config: Record<string, unknown>; permissionMode: PermissionMode } {
+    const global = settings();
+    return {
+      config: effectiveBackendConfig(global, agent.config, backend),
+      permissionMode: resolvePermissionMode(global, agent.config, backend),
+    };
+  }
+
+  /**
+   * Drop one agent's harness so the next turn rebuilds it from the current
+   * settings. The backend resume id is deliberately **left in place**: the
+   * conversation continues, only the options it runs under change.
+   */
+  function evict(key: string): void {
+    const harness = harnesses.get(key);
+    harnesses.delete(key);
+    runtime.delete(key);
+    restartPending.delete(key);
+    if (!harness) return;
+    // [7-P1] The disposal is **remembered**, not merely started. Building the
+    // replacement is what the very next turn does, and a backend whose teardown
+    // is still in flight is still holding that agent's resources — an MCP pool
+    // lease, a child process, a streaming SDK session on the same resume id.
+    // `harnessFor` waits on this before it constructs anything for the key, so
+    // the old and new harnesses never overlap.
+    const done = harness
+      .dispose()
+      .catch((err: unknown) => {
+        log.warn(`[engine] disposing ${key} after a config change failed`, err);
+      })
+      .finally(() => {
+        if (disposing.get(key) === done) disposing.delete(key);
+      });
+    disposing.set(key, done);
+    log.info(`[engine] released ${key}; the next turn is built from the new configuration`);
+  }
+
+  /** Apply a restart that was waiting for this agent's turn to end. */
+  function flushRestart(key: string): void {
+    if (!restartPending.has(key)) return;
+    evict(key);
+    const agentId = key.slice(key.indexOf(":") + 1);
+    broadcast("agent.runtime", { agentId, restartPending: false });
+  }
+
+  /** What an agent *would* run with, for an agent that has no harness yet. */
+  function effectiveFallback(agent: Agent): HarnessAgent | null {
+    const built = effectiveHarnessAgent(agent);
+    return "error" in built ? null : built.agent;
+  }
+
+  /**
+   * The harness for one agent, plus the promise that resolves once it is
+   * genuinely ready to take a turn.
+   *
+   * Constructing acquires nothing; `start()` is where a backend binds its
+   * session and agent, and where `ApiHarness` resolves its config and awaits
+   * `loadHistory`. `send()` reads all of that, so the caller must await
+   * `ready` before it sends — a started-but-unawaited harness answers the
+   * first turn out of an uninitialised config.
+   */
+  function harnessFor(session: Session, agent: Agent): { harness: Harness; ready: Promise<void> } {
     const key = agentKey(session.id, agent.id);
     const existing = harnesses.get(key);
-    if (existing) return existing;
+    if (existing) return { harness: existing, ready: starting.get(key) ?? Promise.resolve() };
 
     const project = store.projects.get(session.projectId);
     if (!project) throw new Error(`session ${session.id} has no project row`);
 
-    const resumeSessionId = store.settings.getRaw<string | null>(
-      backendSessionKey(agent.id),
-      null,
-    );
     const harnessSession: HarnessSession = {
       sessionId: session.id,
       projectPath: project.path,
@@ -334,45 +609,54 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // (SPEC R23/R24): the round-table roster and, when routing crosses
     // backends, the `delegate_task` notice.
     const promptAddition = promptAdditionFor(store, session.id, agent.id);
-    const harnessAgent: HarnessAgent = {
-      agentId: agent.id,
-      name: agent.name,
-      backend: agent.backend,
-      model: agent.model,
-      // [C] The agent's own config wins over the global default (SPEC R19's
-      // "per-agent overrides"). `HarnessAgent.permissionMode` is the highest
-      // priority a harness knows (`ClaudeHarness`: `agent.permissionMode ??
-      // config.permissionMode ?? "default"`), so passing the global setting
-      // unconditionally made `config.<backend>.permissionMode` dead — an agent
-      // configured `bypassPermissions` still stopped on a permission card.
-      //
-      // Read from the field that matches *this* agent's backend, not always
-      // `.claude`: an `api` agent set to `default` while the global setting
-      // was `bypassPermissions` had its own, stricter choice silently
-      // discarded and ran write/execute tools with no card at all (R27).
-      // Codex is unaffected either way — `CodexHarness` reads
-      // `config.codex.approvalPolicy` and ignores `permissionMode` — but the
-      // same expression is what a delegated sub-agent inherits, so it is read
-      // per backend here rather than special-cased downstream.
-      permissionMode: permissionModeFor(agent, store.settings.all().permissionMode),
-      resumeSessionId,
-      config: agent.config,
+    const captured = effectiveHarnessAgent(agent, {
       ...(promptAddition ? { promptAddition } : {}),
-    };
+    });
+    if ("error" in captured) {
+      // [7-P1] Refused **before** the backend starts: a turn that cannot name a
+      // model is not a turn a backend should be asked to interpret.
+      throw new Error(captured.error);
+    }
+    const harnessAgent = captured.agent;
     if (agent.backend === "api") {
       const turns = store.turns.list(session.id);
       historyWatermarks.set(key, turns[turns.length - 1]?.id ?? null);
     }
+    // The **same** captured object reaches the factory and `start()`: two
+    // independently rebuilt agents is how a child ends up running on something
+    // other than what its factory was told (see `routing/delegate.ts`).
     const harness = makeHarness(harnessAgent, harnessExtras(session, agent, harnessAgent));
     harnesses.set(key, harness);
-    void harness.start(harnessSession, harnessAgent).catch((err: unknown) => {
-      log.error(`[engine] harness.start failed for ${key}`, err);
-    });
+    runtime.set(key, harnessAgent);
+    // [7-P1] `start()` is where a backend actually takes hold of anything — the
+    // SDK session, the `codex app-server` child, the MCP pool lease. Building
+    // the object acquires nothing, so the constructor need not wait, but the
+    // start does: an evicted harness whose teardown is still in flight is still
+    // holding this agent's resources, and its resume id.
+    const pending = disposing.get(key);
+    if (pending) log.info(`[engine] ${key} waits for the previous harness to finish closing`);
+    const ready = Promise.resolve(pending)
+      .then(() => {
+        // The previous harness's teardown may have taken a while; by now this
+        // turn can have been stopped, or the app shut down. Starting a backend
+        // for either is pure waste, and for the second it is a resource nobody
+        // is left to release.
+        if (shuttingDown || active.get(key)?.cancelled) return;
+        return harness.start(harnessSession, harnessAgent);
+      })
+      .finally(() => {
+        if (starting.get(key) === ready) starting.delete(key);
+      });
+    starting.set(key, ready);
+    // The rejection is the caller's to report (it becomes the turn's error
+    // block); this only keeps an unobserved rejection from escaping when the
+    // harness is built for something other than a turn.
+    void ready.catch(() => undefined);
     log.info(
-      `[engine] harness ${agent.backend}/${agent.model} for ${key}` +
-        `${resumeSessionId ? ` resuming ${resumeSessionId}` : ""}`,
+      `[engine] harness ${agent.backend}/${harnessAgent.model} for ${key}` +
+        `${harnessAgent.resumeSessionId ? ` resuming ${harnessAgent.resumeSessionId}` : ""}`,
     );
-    return harness;
+    return { harness, ready };
   }
 
   /**
@@ -675,6 +959,14 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         const agentId = store.turns.get(turn.turnId)?.agentId;
         if (agentId && event.backendSessionId) {
           store.settings.setRaw(backendSessionKey(agentId), event.backendSessionId);
+          // [7-P1] Tagged with the backend of the harness that **produced** it,
+          // taken from the captured configuration rather than re-read from the
+          // agent row: the row is mutable and the capture is not, so this
+          // cannot record a handle against a backend that never issued it.
+          const captured = runtime.get(agentKey(turn.sessionId, agentId));
+          if (captured) {
+            store.settings.setRaw(backendSessionBackendKey(agentId), captured.backend);
+          }
         }
         // A backend that switched model on its own (`/model`, which Claude and
         // Codex both handle themselves and report back here) used to be
@@ -725,7 +1017,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * that mentioned it is done. `send` is the fire-and-forget wrapper the
    * `Engine` contract keeps for callers that do not care.
    */
-  function runTurn(args: EngineSendArgs): Promise<{ status: TurnStatus }> {
+  async function runTurn(args: EngineSendArgs): Promise<{ status: TurnStatus }> {
     const session = store.sessions.get(args.sessionId);
     if (!session) throw new Error(`unknown session: ${args.sessionId}`);
     const agentId = args.agentId ?? session.leadAgentId;
@@ -754,7 +1046,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     let events: AsyncIterable<EngineEvent>;
     let turn: ActiveTurn;
     try {
-      harness = harnessFor(session, agent);
+      const built = harnessFor(session, agent);
+      harness = built.harness;
       turn = {
         sessionId: session.id,
         turnId: args.turnId,
@@ -764,16 +1057,63 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         widgetOpening: new Set(),
         widgetResolved: new Set(),
         toolCallKeys: new Map(),
+        starting: true,
+        cancelled: false,
       };
+      // [7-P1] Reserved **before** the first await. Everything that looks the
+      // agent up — a second `chat.send`, a config edit, Stop — reads this map,
+      // so a slot taken only after the await left a window in which two turns
+      // could both pass the "already running" check.
       active.set(key, turn);
+      // …and then the wait. `send()` reads state that only `start()` sets:
+      // `ApiHarness` resolves its config and replays history there, and the
+      // Claude and Codex harnesses bind their session and agent. Firing the
+      // start on a later microtask and sending immediately meant the first
+      // turn of every session raced it.
+      await built.ready;
+      turn.starting = false;
+      // Shutdown while this was starting: no send, and no row written — the
+      // caller closes the database as soon as `dispose()` resolves.
+      if (shuttingDown) {
+        active.delete(key);
+        return { status: "interrupted" as TurnStatus };
+      }
+      // Stop can land while a backend is starting. The stream never existed,
+      // so there is nothing to interrupt — the turn simply does not send.
+      if (turn.cancelled) {
+        active.delete(key);
+        finishTurn(deps, session.id, args.turnId, "interrupted");
+        flushRestart(key);
+        return { status: "interrupted" as TurnStatus };
+      }
       events = harness.send({ turnId: args.turnId, text: args.text });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`[engine] could not start turn ${args.turnId}`, err);
       active.delete(key);
+      // A backend that failed to start is not left in the registry pretending
+      // to be usable — and it is disposed rather than orphaned: a partial start
+      // may already hold a child process, a pool lease or an open stream, and
+      // the replacement must not overlap it.
+      const failed = harnesses.get(key);
+      harnesses.delete(key);
+      runtime.delete(key);
+      if (failed) {
+        const teardown = failed
+          .dispose()
+          .catch((disposeErr: unknown) => {
+            log.warn(`[engine] disposing ${key} after a failed start`, disposeErr);
+          })
+          .finally(() => {
+            if (disposing.get(key) === teardown) disposing.delete(key);
+          });
+        disposing.set(key, teardown);
+      }
+      if (shuttingDown) return { status: "error" as TurnStatus };
       errorBlock(deps, session.id, args.turnId, message);
       finishTurn(deps, session.id, args.turnId, "error", message);
-      return Promise.resolve({ status: "error" as TurnStatus });
+      flushRestart(key);
+      return { status: "error" as TurnStatus };
     }
 
     const running = consume(turn, events)
@@ -789,6 +1129,9 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       })
       .finally(() => {
         if (active.get(key) === turn) active.delete(key);
+        // [7-P1] However this turn ended — done, error or cancel — a config
+        // change that arrived while it was running is applied now.
+        flushRestart(key);
         // A stream that ended without a final status would leave the row
         // `streaming` and the composer locked; close it loudly instead.
         if (store.turns.get(turn.turnId)?.status === "streaming") {
@@ -803,7 +1146,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       });
     consuming.add(running);
     void running.finally(() => consuming.delete(running));
-    return running.then(() => ({ status: statusOf(args.turnId) }));
+    await running;
+    return { status: statusOf(args.turnId) };
   }
 
   function send(args: EngineSendArgs): void {
@@ -830,6 +1174,51 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     continueChain: (sessionId) => roundTable.continueChain(sessionId),
 
     hasPendingChain: (sessionId) => roundTable.hasPending(sessionId),
+
+    /**
+     * [7-P1] An agent's model or config changed (`agents.update`). An idle
+     * agent's harness goes now; one that is mid-turn is marked and replaced
+     * when that turn ends, because a running turn's options must not change
+     * underneath it. Either way the *backend resume id* survives, so the next
+     * turn continues the same conversation with the new configuration.
+     */
+    agentConfigChanged(agentId: string) {
+      let evicted = false;
+      let pending = false;
+      for (const key of [...harnesses.keys(), ...active.keys()]) {
+        if (key.slice(key.indexOf(":") + 1) !== agentId) continue;
+        if (active.has(key)) {
+          restartPending.add(key);
+          pending = true;
+        } else {
+          evict(key);
+          evicted = true;
+        }
+      }
+      broadcast("agent.runtime", { agentId, restartPending: pending });
+      return { evicted, pending };
+    },
+
+    /** [7-P1] Three scalars and a flag; never the config object. */
+    agentRuntime(agentId: string): AgentRuntimeInfo | null {
+      const agent = store.sessions.agent(agentId);
+      if (!agent) return null;
+      const key = agentKey(agent.sessionId, agentId);
+      const captured = runtime.get(key);
+      const source = captured ?? effectiveFallback(agent);
+      return {
+        agentId,
+        // The backend of what is **running**, which is the capture's, not the
+        // row's: while a restart is pending those two are allowed to differ,
+        // and the honest answer is the one the harness was built with.
+        backend: source?.backend ?? agent.backend,
+        model: source?.model ?? "",
+        effort: source ? readEffort(source) : null,
+        permissionMode: source?.permissionMode ?? "default",
+        restartPending: restartPending.has(key),
+        running: captured !== undefined,
+      };
+    },
 
     /**
      * [C] SPEC R13. `agentsDescribe.ts` composes; this supplies the one input
@@ -872,16 +1261,27 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // than one can be mid-turn and the user asked the *session* to stop.
       const prefix = `${sessionId}:`;
       const turns = [...active].filter(([key]) => key.startsWith(prefix)).map(([, t]) => t);
+      // [7-P1] A turn whose backend is still starting has no stream to stop.
+      // Marking it is what makes the Stop stick: `runTurn` checks this the
+      // moment the start settles and never sends.
+      let stoppedStarting = false;
+      for (const t of turns) {
+        if (!t.starting) continue;
+        t.cancelled = true;
+        stoppedStarting = true;
+      }
       // …and every delegated sub-agent it has in flight (SPEC R12). Without
       // this a cross-backend sub-agent kept running for up to ten minutes
       // after the user believed the session had stopped.
       const children = [...(delegated.get(sessionId) ?? [])];
       if (turns.length === 0 && children.length === 0) return false;
       const results = await Promise.all([
-        ...turns.map((t) => t.harness.interrupt()),
+        // A harness that has not been sent to yet typically answers `false`;
+        // the cancellation above is the real stop, so it counts as one.
+        ...turns.filter((t) => !t.starting).map((t) => t.harness.interrupt()),
         ...children.map((h) => h.interrupt().catch(() => false)),
       ]);
-      return results.some(Boolean);
+      return stoppedStarting || results.some(Boolean);
     },
 
     answerPermission(requestId: string, answer: EnginePermissionAnswer): boolean {
@@ -937,6 +1337,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
      * await this before closing the database.
      */
     async dispose() {
+      // Set before anything is torn down: a start that resolves from here on
+      // sends nothing and writes nothing, so no turn can land in a store the
+      // caller is about to close.
+      shuttingDown = true;
+      for (const turn of active.values()) turn.cancelled = true;
+      // Pending starts are part of "everything is down": a backend still
+      // starting still acquires resources, and its `.finally` has to run before
+      // the disposals below can see it.
+      await withDeadline(
+        Promise.allSettled([...starting.values()]),
+        DISPOSE_DEADLINE_MS,
+      );
       await withDeadline(
         Promise.allSettled([...harnesses.values()].map((h) => h.dispose())),
         DISPOSE_DEADLINE_MS,
@@ -949,7 +1361,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // above have already drained; this is the bounded wait for its own loop
       // to notice and stop rather than for anything it is still writing.
       await withDeadline(roundTable.settled(), DISPOSE_DEADLINE_MS);
+      // Evictions started but not finished are part of "everything is down".
+      await withDeadline(Promise.allSettled([...disposing.values()]), DISPOSE_DEADLINE_MS);
       harnesses.clear();
+      runtime.clear();
+      restartPending.clear();
+      starting.clear();
+      disposing.clear();
       active.clear();
       awaiting.clear();
       consuming.clear();

@@ -214,3 +214,30 @@ describe("the roster is editable, not append-only (SPEC R12/R13)", () => {
     expect(within(sub).getByTitle("gpt-5.5-mini")).toBeInTheDocument();
   });
 });
+
+/**
+ * [7-P1] A model/config edit made mid-turn applies to the agent's next turn.
+ * The pane says so rather than leaving the user to wonder whether the change
+ * was accepted at all.
+ */
+describe("pending restart badge", () => {
+  it("marks only the agent whose configuration is waiting", () => {
+    useAppStore.setState({
+      sessions: [session],
+      agents,
+      pendingAgentRestarts: [agents[0]!.id],
+    });
+    render(<AgentsPane sessionId={session.id} onClose={() => {}} />);
+    const rows = screen.getAllByTestId("agents-tree-row");
+    expect(within(rows[0]!).getByTestId("agent-restart-pending")).toBeInTheDocument();
+    for (const row of rows.slice(1)) {
+      expect(within(row).queryByTestId("agent-restart-pending")).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows nothing when no restart is pending", () => {
+    useAppStore.setState({ sessions: [session], agents, pendingAgentRestarts: [] });
+    render(<AgentsPane sessionId={session.id} onClose={() => {}} />);
+    expect(screen.queryByTestId("agent-restart-pending")).not.toBeInTheDocument();
+  });
+});

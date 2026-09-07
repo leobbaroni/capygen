@@ -55,6 +55,13 @@ later reset cannot rehydrate the old value. `reset(backends)` clears overrides, 
 stored; malformed/future canonical rows never recover permission/model values from stale flat
 rows. Internal raw bookkeeping remains available.
 
+If one patch names both the compatibility alias and the selected backend's explicit `model`,
+the explicit backend field wins. Migration validates raw legacy fields independently so one
+corrupt field cannot discard valid siblings or create an unreadable canonical row. A corrupt
+or future canonical row refuses preference writes through both surfaces, including flat-only
+compatibility edits; existing valid flat-only values remain readable. Reserved version and
+normalization fields are internal, not writable through a preference patch.
+
 Existing backend catalogue defaults remain the fallback: Claude's own curated first entry,
 Codex's default/first listed entry and the API provider's own first entry. This is not a new
 model-availability claim or a pricing update. Preserve explicit custom model choices and refuse

@@ -190,8 +190,15 @@ export type CodexAgentConfig = z.infer<typeof CodexAgentConfigSchema>;
 
 export const ApiAgentConfigSchema = z
   .object({
-    provider: ApiProviderSchema,
-    model: z.string().min(1),
+    /**
+     * [7-P1] Both optional, like every other backend's section: an unset field
+     * means "no opinion" and falls through to the canonical global default.
+     * They were required, so an agent that only wanted to name a *provider* had
+     * to restate a model as well — duplicating `Agent.model`, which is the
+     * authoritative one, in the very field that used to override it.
+     */
+    provider: ApiProviderSchema.optional(),
+    model: z.string().min(1).optional(),
     baseUrl: z.string().optional(),
     maxTokens: z.number().int().positive().optional(),
     /** Provider-specific extended-thinking config; shape varies by provider. */
@@ -854,6 +861,36 @@ export type Settings = z.infer<typeof SettingsSchema>;
 export const DEFAULT_SETTINGS: Settings = SettingsSchema.parse({});
 
 /**
+ * [7-P1] The flat row's two halves.
+ *
+ * `SETTINGS_COMPAT_FIELDS` overlap `GlobalSettings` and are **no longer
+ * stored** here: `settings.get` derives them from the canonical object and
+ * `settings.set` translates them onto it, so the two authorities cannot
+ * disagree (the old projection could, and a `settings.set` that bypassed the
+ * hub was silently reverted by the next `settings.patch`).
+ *
+ * `SETTINGS_FLAT_ONLY_FIELDS` have no canonical home and stay exactly where
+ * they are — including while the canonical row is unreadable.
+ */
+export const SETTINGS_COMPAT_FIELDS = [
+  "theme",
+  "permissionMode",
+  "defaultBackend",
+  "defaultModel",
+  "compactionThreshold",
+  "closeToTray",
+] as const satisfies readonly (keyof Settings)[];
+
+export const SETTINGS_FLAT_ONLY_FIELDS = [
+  "hopCap",
+  "showThinking",
+  "uiFontSize",
+] as const satisfies readonly (keyof Settings)[];
+
+export type SettingsCompatField = (typeof SETTINGS_COMPAT_FIELDS)[number];
+export type SettingsFlatOnlyField = (typeof SETTINGS_FLAT_ONLY_FIELDS)[number];
+
+/**
  * `settings.set`'s input. **Not** `SettingsSchema.partial()` (a bug fixed
  * alongside the Phase 4 additions in this file): every field above carries a
  * `.default(...)`, and this codebase runs zod with `z.config({jitless:
@@ -925,6 +962,13 @@ export const HarnessInfoSchema = z.object({
   reason: z.string().optional(),
   models: z.array(HarnessModelOptionSchema),
   defaultModel: z.string(),
+  /**
+   * [7-P1] `api` only: which providers have a usable credential right now, from
+   * the same cached probe as the rest of this row. `models` above is every
+   * keyed provider's list flattened for the picker, so it cannot say which
+   * provider owns an id — and an agent may select a provider of its own.
+   */
+  providers: z.array(ApiProviderSchema).optional(),
 });
 export type HarnessInfo = z.infer<typeof HarnessInfoSchema>;
 
@@ -977,6 +1021,31 @@ export const AgentDescribeSchema = z.object({
   others: z.array(AgentDescribeOtherSchema).default([]),
 });
 export type AgentDescribe = z.infer<typeof AgentDescribeSchema>;
+
+/**
+ * [7-P1] The minimal, **non-secret** runtime facts about one agent's live
+ * harness — what a settings change actually did, in a form an e2e test can
+ * assert and a person can see.
+ *
+ * Deliberately three scalars and a flag. The effective configuration object,
+ * the resolved environment, MCP transport values and every key stay in the main
+ * process: this exists so "the global effort default reached the request" can
+ * be checked without exposing the request.
+ */
+export const AgentRuntimeInfoSchema = z.object({
+  agentId: z.string().min(1),
+  backend: BackendSchema,
+  /** The model the harness was actually built with, not the row's raw field. */
+  model: z.string(),
+  /** Claude `effort` / Codex `reasoningEffort` / API `reasoningEffort`, when set. */
+  effort: z.string().nullable().default(null),
+  permissionMode: PermissionModeSchema,
+  /** True while a config change is waiting for the current turn to end. */
+  restartPending: z.boolean().default(false),
+  /** False when the agent has no live harness (nothing has run yet). */
+  running: z.boolean().default(false),
+});
+export type AgentRuntimeInfo = z.infer<typeof AgentRuntimeInfoSchema>;
 
 // ---------------------------------------------------------------------------
 // Workspace panes (Phase 5, SPEC R16-R18) — dockable panes, per-project
@@ -1302,6 +1371,17 @@ export type Bounds = z.infer<typeof BoundsSchema>;
 export const GlobalGeneralSchema = z
   .object({
     defaultBackend: BackendSchema.default("claude"),
+    /**
+     * [7-P1] **A derived view, not storage.** The canonical value is
+     * `backends[general.defaultBackend].model`; this field is filled in on
+     * every read (`SettingsService`) and stripped before every write
+     * (`GlobalSettingsRepo`), so a stored row can never carry a stale alias
+     * that a later `reset` would resurrect. A patch naming it is translated
+     * into the selected backend's canonical model.
+     *
+     * It is emphatically **not** a cross-backend fallback: a Codex agent with
+     * no model resolves Codex's own catalogue default, never this.
+     */
     defaultModel: z.string().default("claude-opus-4-5"),
     submitWithCtrlEnter: z.boolean().default(false),
     alwaysSteer: z.boolean().default(false),
@@ -1461,6 +1541,12 @@ export const GlobalClaudeDefaultsSchema = z
     /** Free-form preset name for the `/effort` built-in, same vocabulary as
      *  `ClaudeAgentConfig.effort`. */
     effort: z.string().optional(),
+    /** [7-P1] This backend's default model. **Canonical** — `general.defaultModel`
+     *  is a derived alias of whichever backend is `general.defaultBackend`, and
+     *  is never an input to another backend's resolution. Unset means "no
+     *  global opinion", which falls through to this backend's own catalogue
+     *  default (never to another backend's model). */
+    model: z.string().min(1).optional(),
   })
   .passthrough();
 export type GlobalClaudeDefaults = z.infer<typeof GlobalClaudeDefaultsSchema>;
@@ -1470,6 +1556,8 @@ export const GlobalCodexDefaultsSchema = z
     approvalPolicy: CodexApprovalPolicySchema.optional(),
     sandbox: CodexSandboxModeSchema.optional(),
     reasoningEffort: z.string().optional(),
+    /** [7-P1] Canonical, exactly as `GlobalClaudeDefaults.model`. */
+    model: z.string().min(1).optional(),
   })
   .passthrough();
 export type GlobalCodexDefaults = z.infer<typeof GlobalCodexDefaultsSchema>;
@@ -1540,6 +1628,19 @@ export const GlobalSettingsSchema = z
     backends: GlobalBackendDefaultsSchema.default(() => GlobalBackendDefaultsSchema.parse({})),
     closeToTray: z.boolean().default(true),
     startWithWindows: z.boolean().default(false),
+    /**
+     * [7-P1] How far the one-time legacy→canonical normalisation has been
+     * taken on this profile. `0` is "not yet normalised"; `SETTINGS_NORMALISED`
+     * is what this build writes once it has moved a legacy `general.defaultModel`
+     * (and the legacy flat `permissionMode`) onto the canonical backend rows.
+     *
+     * The marker exists so the move happens **once**: without it, a later
+     * `reset("backends")` would clear the canonical model, the legacy alias
+     * would look unconverted again, and the next read would resurrect it —
+     * which is exactly the stale-alias rehydration this design forbids. Not
+     * patchable, like `telemetry`.
+     */
+    normalizedVersion: z.number().int().nonnegative().default(0),
     /** Always false — capygen sends no telemetry (local-only app, SPEC
      *  scope). A fixed literal, not a plain boolean, so nothing can flip it
      *  by accident; `GlobalSettingsPatchSchema` does not even accept this
@@ -1550,6 +1651,145 @@ export const GlobalSettingsSchema = z
 export type GlobalSettings = z.infer<typeof GlobalSettingsSchema>;
 
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = GlobalSettingsSchema.parse({});
+
+/** The normalisation this build performs; see `GlobalSettings.normalizedVersion`. */
+export const SETTINGS_NORMALISED = 1;
+
+/**
+ * [7-P1] Each backend's **own** built-in default model — the one capygen can
+ * name with no probe, no key and no callback at all.
+ *
+ * Only Claude has one: its catalogue is the curated list this build ships
+ * (`ipc/harnessList.ts`'s `CLAUDE_MODELS`, whose first entry this must equal —
+ * `harnessList.test.ts` asserts it), so "the first Claude model" is an answer
+ * capygen already stands behind. Codex's catalogue comes from a live
+ * `app-server` probe and the API's from whichever provider has a key, so
+ * neither can be named offline: those two resolve through the injected
+ * catalogue or not at all.
+ *
+ * This exists so a profile that has never probed still has a working Claude
+ * default, rather than every Claude agent having to carry an explicit model.
+ */
+export const BUILTIN_BACKEND_DEFAULT_MODEL: Partial<Record<Backend, string>> = {
+  claude: "claude-opus-4-5",
+};
+
+/**
+ * Each backend's own catalogue default, when something can supply one: the
+ * curated Claude list, Codex's probed `isDefault`, the first model of the first
+ * API provider with a key. Never another backend's model.
+ */
+export type ModelCatalogue = (backend: Backend) => string | null | undefined;
+
+export interface ModelResolutionError {
+  ok: false;
+  backend: Backend;
+  reason: string;
+}
+
+export type ModelResolution = { ok: true; model: string } | ModelResolutionError;
+
+/**
+ * [7-P1] The **one** model-resolution chain, for one backend:
+ *
+ *   the agent's own explicit choice
+ *     → the canonical global default for **that same backend**
+ *     → that backend's own catalogue default (probe/key-derived, injected)
+ *     → that backend's own built-in default
+ *     → refuse.
+ *
+ * There is deliberately no `general.defaultModel` step. That field is a derived
+ * alias of whichever backend is `general.defaultBackend` (see its doc comment),
+ * and using it as a universal fallback is what sent a Claude model id to Codex —
+ * a spawn that fails, from a picker that promised something else. COMPAT.md is
+ * equally explicit that an empty model must never be sent either, so "nothing to
+ * run" is an error before dispatch rather than a request the backend gets to
+ * interpret.
+ *
+ * Lives here rather than in `@capygen/engine` because `@capygen/db` derives the
+ * same alias for its compatibility view and must not disagree by a step.
+ */
+export function resolveBackendModel(
+  settings: GlobalSettings,
+  backend: Backend,
+  explicit?: string | null,
+  catalogue?: ModelCatalogue,
+): ModelResolution {
+  const own = explicit?.trim();
+  if (own) return { ok: true, model: own };
+  const configured = backendModelOf(settings, backend);
+  if (configured) return { ok: true, model: configured };
+  const fromCatalogue = catalogue?.(backend)?.trim();
+  if (fromCatalogue) return { ok: true, model: fromCatalogue };
+  const builtin = BUILTIN_BACKEND_DEFAULT_MODEL[backend]?.trim();
+  if (builtin) return { ok: true, model: builtin };
+  return {
+    ok: false,
+    backend,
+    reason:
+      `no model is selected for the ${backend} backend, and it offers no default capygen can ` +
+      "fall back to — pick one for this agent, or set a default in Settings ▸ General. " +
+      "capygen never substitutes another backend's model.",
+  };
+}
+
+/** One backend's canonical `model`, trimmed, or `null` for "no opinion". */
+export function backendModelOf(settings: GlobalSettings, backend: Backend): string | null {
+  const section = (settings.backends as Record<string, { model?: unknown } | undefined>)[backend];
+  const model = section?.model;
+  return typeof model === "string" && model.trim() ? model.trim() : null;
+}
+
+/**
+ * The derived `general.defaultModel` view: the model of whichever backend is
+ * `general.defaultBackend`, through the same chain. Empty when that backend can
+ * name none — which the picker shows as "choose a model", the honest answer,
+ * rather than as some other backend's id.
+ */
+export function deriveDefaultModel(
+  settings: GlobalSettings,
+  catalogue?: ModelCatalogue,
+): string {
+  const backend = settings.general.defaultBackend;
+  const resolved = resolveBackendModel(settings, backend, "", catalogue);
+  return resolved.ok ? resolved.model : "";
+}
+
+/**
+ * [7-P1] Translate a patch that names the derived `general.defaultModel` into
+ * one that names the canonical field it is an alias *of*, and drop the alias.
+ *
+ * Applied by `GlobalSettingsRepo.patch` and by the flat compatibility view, so
+ * the translation cannot be skipped by reaching the repo directly: without it a
+ * patch naming only the alias was stripped on write and silently did nothing.
+ * The target is the backend the same patch selects, when it selects one — a
+ * write that moves the default backend *and* its model means the new one.
+ */
+export function translateDefaultModelAlias(
+  existing: GlobalSettings,
+  patch: GlobalSettingsPatch,
+): GlobalSettingsPatch {
+  const alias = patch.general?.defaultModel;
+  if (alias === undefined) return patch;
+  const { defaultModel: _alias, ...general } = patch.general ?? {};
+  const backend = patch.general?.defaultBackend ?? existing.general.defaultBackend;
+  const next: GlobalSettingsPatch = { ...patch };
+  if (Object.keys(general).length > 0) next.general = general;
+  else delete next.general;
+  // [7-P1] One patch can name the same canonical field twice — once through the
+  // alias and once directly. The **explicit** `backends[selected].model` wins:
+  // it names the field the storage actually has, while the alias is a view of
+  // it, and a caller that spelled out the canonical field meant that one.
+  const explicit = patch.backends?.[backend]?.model;
+  next.backends = {
+    ...patch.backends,
+    [backend]: {
+      ...patch.backends?.[backend],
+      model: explicit !== undefined ? explicit : alias,
+    },
+  };
+  return next;
+}
 
 /**
  * `settings.patch`'s input. Hand-written and section-shaped rather than a
@@ -1590,13 +1830,65 @@ export type GlobalSettingsPatch = z.infer<typeof GlobalSettingsPatchSchema>;
  * `GlobalShortcutsPatchSchema`'s doc comment for why it replaces instead of
  * merging key-by-key.
  */
-export function mergeGlobalSettingsPatch(
+/**
+ * [7-P1] Fields no patch may set, however it is spelled.
+ *
+ * `GlobalSettingsPatchSchema` leaves all three out, but it is `.passthrough()`
+ * — so an unknown key travels intact and `{ ...existing, ...patch }` would let
+ * a caller (or a renderer sending a stale whole-object) overwrite them. Each is
+ * owned by something other than the settings pages: `version` by the schema
+ * shape, `normalizedVersion` by the one-time legacy conversion (resetting it
+ * would make a converted profile look unconverted and migrate a stale value
+ * back), and `telemetry` is fixed off.
+ */
+export const GLOBAL_SETTINGS_RESERVED_FIELDS = [
+  "version",
+  "normalizedVersion",
+  "telemetry",
+] as const;
+
+/**
+ * Strip the reserved keys from a patch — but **refuse** one that tries to
+ * change a reserved value, rather than silently ignoring it.
+ *
+ * The two halves are the same rule from both ends: a caller echoing back the
+ * values it read (a settings page sending the whole object) is not trying to
+ * change anything and must not be made to fail, while a caller actually asking
+ * to turn telemetry on, or to un-mark a converted profile, is asking for
+ * something this build will not do and deserves to be told (SPEC §Edge Cases:
+ * report, never swallow).
+ */
+function withoutReserved(
   existing: GlobalSettings,
   patch: GlobalSettingsPatch,
+): GlobalSettingsPatch {
+  const out: Record<string, unknown> = { ...patch };
+  const current = existing as unknown as Record<string, unknown>;
+  for (const field of GLOBAL_SETTINGS_RESERVED_FIELDS) {
+    if (!(field in out)) continue;
+    const asked = out[field];
+    delete out[field];
+    if (asked !== undefined && asked !== current[field]) {
+      throw new Error(
+        `settings.${field} is not something a settings page sets` +
+          (field === "telemetry" ? " — capygen sends no telemetry." : "."),
+      );
+    }
+  }
+  return out as GlobalSettingsPatch;
+}
+
+export function mergeGlobalSettingsPatch(
+  existing: GlobalSettings,
+  rawPatch: GlobalSettingsPatch,
 ): GlobalSettings {
+  const patch = withoutReserved(existing, rawPatch);
   return GlobalSettingsSchema.parse({
     ...existing,
     ...patch,
+    version: existing.version,
+    normalizedVersion: existing.normalizedVersion,
+    telemetry: false,
     general: { ...existing.general, ...patch.general },
     appearance: { ...existing.appearance, ...patch.appearance },
     git: { ...existing.git, ...patch.git },
@@ -1620,8 +1912,18 @@ export function resetGlobalSettingsSection(
   existing: GlobalSettings,
   section: GlobalSettingsSection,
 ): GlobalSettings {
-  if (section === "all") return DEFAULT_GLOBAL_SETTINGS;
-  return GlobalSettingsSchema.parse({ ...existing, [section]: DEFAULT_GLOBAL_SETTINGS[section] });
+  // [7-P1] `normalizedVersion` survives every reset, `"all"` included. It
+  // records that this profile's legacy flat preferences have already been
+  // converted; clearing it would make an already-converted profile look
+  // unconverted, and the next start-up would migrate a stale flat model or
+  // permission mode back on top of the defaults the user just asked for.
+  const keep = { normalizedVersion: existing.normalizedVersion };
+  if (section === "all") return GlobalSettingsSchema.parse({ ...DEFAULT_GLOBAL_SETTINGS, ...keep });
+  return GlobalSettingsSchema.parse({
+    ...existing,
+    ...keep,
+    [section]: DEFAULT_GLOBAL_SETTINGS[section],
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -260,3 +260,158 @@ describe("caching", () => {
     expect(probeCodexBackend).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * [7-P1] The `api` default is the first model of the **effective** provider.
+ * A flattened list began with whichever provider `API_PROVIDERS` names first,
+ * so an agent configured for `openai` was offered an Anthropic id as its
+ * default — a model that provider cannot run.
+ */
+describe("the api default follows the selected provider", () => {
+  const bothKeys = {
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "a", OPENAI_API_KEY: "o" },
+  };
+
+  it("uses the configured provider's own first model", async () => {
+    const api = await row("api", { ...bothKeys, apiProvider: () => "openai" });
+    expect(api.defaultModel).toBe("gpt-5");
+  });
+
+  it("falls back to the first provider with a key when none is configured", async () => {
+    const api = await row("api", { ...bothKeys, apiProvider: () => null });
+    expect(api.defaultModel).toBe("claude-opus-4-5");
+  });
+
+  it("ignores a configured provider that has no key", async () => {
+    const api = await row("api", {
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "t", OPENAI_API_KEY: "o" },
+      apiProvider: () => "anthropic",
+    });
+    expect(api.defaultModel).toBe("gpt-5");
+  });
+});
+
+/**
+ * [7-P1] The synchronous read the model-resolution paths use.
+ *
+ * `sessions.create`, `agents.*` and `SessionRunner` all have to answer "which
+ * model does this backend default to?" without spawning anything, so they read
+ * `snapshot()` rather than awaiting the lister. `main.ts` wires the **same**
+ * lister to both, which is what makes the two answers the same probe.
+ */
+describe("snapshot()", () => {
+  /** A lister whose probes only settle when the test says so. */
+  function deferredLister(): {
+    list: ReturnType<typeof createHarnessLister>;
+    settle: (result: CodexProbeResult | Error, index?: number) => void;
+    codexProbes: number;
+  } {
+    const pending: ((value: CodexProbeResult | Error) => void)[] = [];
+    const state = { codexProbes: 0 };
+    const list = createHarnessLister({
+      defaultModel: () => "claude-sonnet-4-5",
+      probe: OK,
+      probeCodexBackend: () => {
+        state.codexProbes += 1;
+        return new Promise<CodexProbeResult>((resolve, reject) => {
+          pending.push((value) => (value instanceof Error ? reject(value) : resolve(value)));
+        });
+      },
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "tok" },
+      home: "C:\\nowhere",
+      cacheTtlMs: 0,
+    });
+    return {
+      list,
+      /** Settle one in-flight build by index, so completion order can differ
+     *  from start order. */
+    settle: (result, index = 0) => {
+      const resolve = pending[index];
+      pending[index] = undefined as never;
+      resolve?.(result);
+    },
+      get codexProbes() {
+        return state.codexProbes;
+      },
+    };
+  }
+
+  it("is empty before the first resolution, and reading it never probes", async () => {
+    const l = deferredLister();
+    expect(l.list.snapshot()).toEqual([]);
+    // Read it a few more times: still nothing spawned.
+    expect(l.list.snapshot()).toEqual([]);
+    expect(l.list.snapshot()).toEqual([]);
+    expect(l.codexProbes).toBe(0);
+
+    const listing = l.list();
+    expect(l.codexProbes).toBe(1);
+    // In flight: the snapshot is still the honest "nothing yet".
+    expect(l.list.snapshot()).toEqual([]);
+
+    l.settle(SIGNED_IN);
+    await listing;
+    expect(l.list.snapshot().map((h) => h.backend)).toEqual(["claude", "codex", "api"]);
+    expect(l.list.snapshot().find((h) => h.backend === "codex")?.defaultModel).toBe("gpt-5.5");
+    // …and reading the resolved snapshot still spawns nothing.
+    expect(l.codexProbes).toBe(1);
+  });
+
+  it("keeps the previous answer when a later build fails outright", async () => {
+    // A *codex* probe that fails is not a failure — it is a legitimate "codex
+    // unavailable" answer, and it updates the snapshot like any other. What
+    // must not blank the catalogue is a build that rejects: here the CLI probe
+    // throws on the second call.
+    let calls = 0;
+    const list = createHarnessLister({
+      defaultModel: () => "claude-sonnet-4-5",
+      probe: async (command, args) => {
+        calls += 1;
+        if (calls > 1) throw new Error("spawn failed");
+        return OK(command, args);
+      },
+      probeCodexBackend: async () => SIGNED_IN,
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "tok" },
+      home: "C:\\nowhere",
+      cacheTtlMs: 0,
+    });
+
+    await list();
+    const good = list.snapshot();
+    expect(good.find((h) => h.backend === "codex")?.available).toBe(true);
+
+    await list().catch(() => undefined);
+    expect(list.snapshot()).toEqual(good);
+  });
+
+  it("does not let a slow earlier probe overwrite a newer answer", async () => {
+    const l = deferredLister();
+    // Two builds in flight; the first will settle last.
+    const slow = l.list();
+    const fast = l.list();
+    expect(l.codexProbes).toBe(2);
+
+    // The **second** build lands first, with a newer catalogue.
+    l.settle(
+      { signedIn: true, models: [{ id: "gpt-6", displayName: "GPT-6", isDefault: true }] },
+      1,
+    );
+    await fast;
+    expect(l.list.snapshot().find((h) => h.backend === "codex")?.defaultModel).toBe("gpt-6");
+
+    // …and the first build finishes afterwards, carrying the older answer.
+    l.settle(SIGNED_IN, 0);
+    await slow;
+    // The later build still wins: ordering is by build, not by completion.
+    expect(l.list.snapshot().find((h) => h.backend === "codex")?.defaultModel).toBe("gpt-6");
+  });
+
+  it("stays callable for everything that just awaits it", async () => {
+    const rows = await lister()();
+    expect(rows.map((r) => (r as { backend: string }).backend)).toEqual([
+      "claude",
+      "codex",
+      "api",
+    ]);
+  });
+});

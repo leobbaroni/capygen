@@ -916,11 +916,10 @@ describe("Phase 6: global settings, integrations caches (migration 0005)", () =>
   });
 
   it("globalSettings.patch() merges one section without clobbering its siblings, and survives a reopen", () => {
-    store.globalSettings.patch({ general: { defaultModel: "claude-sonnet-4-5" } });
-    const afterFirst = store.globalSettings.all();
-    expect(afterFirst.general).toEqual({
+    store.globalSettings.patch({ general: { submitWithCtrlEnter: true } });
+    expect(store.globalSettings.all().general).toEqual({
       ...DEFAULT_GLOBAL_SETTINGS.general,
-      defaultModel: "claude-sonnet-4-5",
+      submitWithCtrlEnter: true,
     });
 
     // A second, unrelated patch must not reset the first patch's field —
@@ -928,13 +927,108 @@ describe("Phase 6: global settings, integrations caches (migration 0005)", () =>
     // for the flat `Settings`.
     store.globalSettings.patch({ appearance: { theme: "dark" } });
     const afterSecond = store.globalSettings.all();
-    expect(afterSecond.general.defaultModel).toBe("claude-sonnet-4-5");
+    expect(afterSecond.general.submitWithCtrlEnter).toBe(true);
     expect(afterSecond.appearance.theme).toBe("dark");
 
     store.close();
     store = open();
-    expect(store.globalSettings.all().general.defaultModel).toBe("claude-sonnet-4-5");
+    expect(store.globalSettings.all().general.submitWithCtrlEnter).toBe(true);
     expect(store.globalSettings.all().appearance.theme).toBe("dark");
+  });
+
+  /**
+   * [7-P1] `general.defaultModel` is a **derived view** of
+   * `backends[general.defaultBackend].model`, so it is stripped before every
+   * write. Storing it too would let the two drift — and, worse, would leave a
+   * stale alias behind after `reset("backends")` cleared the canonical model,
+   * which the next read would resurrect as if the user had chosen it.
+   */
+  it("never persists the derived general.defaultModel alias", () => {
+    // The alias names the selected backend's model, so this is one write of
+    // one field — it is translated onto `backends.claude.model` and the alias
+    // itself is never stored.
+    store.globalSettings.patch({ general: { defaultModel: "claude-sonnet-4-5" } });
+    const raw = JSON.parse(
+      store.db.get<{ value_json: string }>(
+        "SELECT value_json FROM settings WHERE key = ?",
+        "global_settings",
+      )!.value_json,
+    ) as { general: Record<string, unknown>; backends: Record<string, { model?: string }> };
+    expect("defaultModel" in raw.general).toBe(false);
+    expect(raw.backends.claude?.model).toBe("claude-sonnet-4-5");
+
+    // Clearing the canonical model leaves nothing behind to resurrect.
+    store.globalSettings.reset("backends");
+    const after = JSON.parse(
+      store.db.get<{ value_json: string }>(
+        "SELECT value_json FROM settings WHERE key = ?",
+        "global_settings",
+      )!.value_json,
+    ) as { general: Record<string, unknown>; backends: Record<string, { model?: string }> };
+    expect("defaultModel" in after.general).toBe(false);
+    expect(after.backends.claude?.model).toBeUndefined();
+  });
+
+  /**
+   * [7-P1] The four read states used to collapse into "the shipping defaults",
+   * and the next `patch`/`reset` then wrote a merge of those defaults straight
+   * over bytes this build could not parse — losing a newer build's settings,
+   * or a user's real preferences, with no message at all.
+   */
+  describe("globalSettings read states", () => {
+    function rawRow(): string | undefined {
+      return store.db.get<{ value_json: string }>(
+        "SELECT value_json FROM settings WHERE key = ?",
+        "global_settings",
+      )?.value_json;
+    }
+
+    it("reports a missing row as writable defaults", () => {
+      const read = store.globalSettings.read();
+      expect(read.state).toBe("missing");
+      expect(read.writable).toBe(true);
+      expect(read.settings).toEqual(DEFAULT_GLOBAL_SETTINGS);
+    });
+
+    it("reports a row this build wrote as valid and writable", () => {
+      store.globalSettings.patch({ appearance: { theme: "dark" } });
+      const read = store.globalSettings.read();
+      expect(read.state).toBe("valid");
+      expect(read.writable).toBe(true);
+      expect(read.settings.appearance.theme).toBe("dark");
+    });
+
+    it("serves a newer build's row read-only and preserves its bytes", () => {
+      const future = JSON.stringify({ version: 99, appearance: { theme: "dark" }, futureField: 1 });
+      store.settings.setRaw("global_settings", JSON.parse(future));
+      const read = store.globalSettings.read();
+      expect(read.state).toBe("future");
+      expect(read.writable).toBe(false);
+      expect(read.reason).toMatch(/newer version/i);
+      expect(read.settings).toEqual(DEFAULT_GLOBAL_SETTINGS);
+      expect(() => store.globalSettings.patch({ appearance: { theme: "light" } })).toThrow(
+        /newer version/i,
+      );
+      expect(() => store.globalSettings.reset("all")).toThrow(/newer version/i);
+      // The unknown field a newer build wrote is still there.
+      expect(JSON.parse(rawRow()!)).toMatchObject({ version: 99, futureField: 1 });
+    });
+
+    it("serves an unparseable row read-only and preserves its bytes", () => {
+      store.db.run(
+        `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`,
+        "global_settings",
+        "{not json",
+        Date.now(),
+      );
+      const read = store.globalSettings.read();
+      expect(read.state).toBe("corrupt");
+      expect(read.writable).toBe(false);
+      expect(read.settings).toEqual(DEFAULT_GLOBAL_SETTINGS);
+      expect(() => store.globalSettings.patch({ closeToTray: false })).toThrow(/could not read/i);
+      expect(rawRow()).toBe("{not json");
+    });
   });
 
   it("globalSettings.reset() resets one section, and 'all' resets everything", () => {

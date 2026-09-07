@@ -52,6 +52,13 @@ export interface AppState {
   error: string | null;
 
   settings: Settings;
+  /**
+   * [7-P1] Agents whose model/config edit is waiting for their current turn to
+   * end before the harness is rebuilt (`agent.runtime`). The agents pane badges
+   * these, so "your change applies to the next turn" is visible rather than
+   * something the user has to infer.
+   */
+  pendingAgentRestarts: string[];
   projects: Project[];
   /**
    * The project this **window** is on (Phase 7-P0). Every project-scoped IPC
@@ -345,6 +352,29 @@ export const useAppStore = create<AppState>()((set, get) => {
       set({ chainStopped: { turnId, reason } });
     });
 
+    /**
+     * [7-P1] The settings hub owns the canonical object; this store holds the
+     * flat compatibility view (`settings.get`). The broadcast carries the
+     * canonical payload, which does not contain the flat-only fields — and a
+     * mixed write moves both halves — so the view is **re-read** rather than
+     * derived from the event. It is sent after the whole transaction has
+     * committed, so this read cannot see a half-applied write.
+     */
+    client.on("settings.changed", () => {
+      void client
+        .invoke("settings.get", {})
+        .then((settings) => set({ settings }))
+        .catch(() => undefined);
+    });
+
+    client.on("agent.runtime", ({ agentId, restartPending }) => {
+      set((s) => ({
+        pendingAgentRestarts: restartPending
+          ? [...new Set([...s.pendingAgentRestarts, agentId])]
+          : s.pendingAgentRestarts.filter((id) => id !== agentId),
+      }));
+    });
+
     client.on("app.status", ({ level, message }) => {
       if (level === "error") set({ error: message });
     });
@@ -452,6 +482,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     bridgeAvailable: hasBridge(),
     error: null,
     settings: DEFAULT_SETTINGS,
+    pendingAgentRestarts: [],
     projects: [],
     selectedProjectId: null,
     sessions: [],

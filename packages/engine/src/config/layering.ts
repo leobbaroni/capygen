@@ -18,10 +18,14 @@
  * any layer means "no opinion" and falls through; it never overwrites with
  * `undefined`.
  */
+import { resolveBackendModel } from "@capygen/shared";
 import type {
   Agent,
   AgentConfig,
   Backend,
+  ModelCatalogue,
+  ModelResolution,
+  PermissionMode,
   GlobalApiDefaults,
   GlobalClaudeDefaults,
   GlobalCodexDefaults,
@@ -78,18 +82,67 @@ export function effectiveAgentConfig(
 }
 
 /**
- * The model an agent runs on: its own, else the global default for its
- * backend, else the app-wide `general.defaultModel`. A harness is never given
- * an empty model string — COMPAT.md's Claude row is explicit that the account
- * default must never be relied on.
+ * [7-P1] Model resolution lives in `@capygen/shared`
+ * (`resolveBackendModel`): `@capygen/db` derives the same alias for its flat
+ * compatibility view and must not disagree with the runtime by a step. This is
+ * the engine-side name for it, plus the `Agent`-shaped overload every caller
+ * here actually wants.
  */
-export function effectiveModel(
+export type { ModelCatalogue, ModelResolution, ModelResolutionError } from "@capygen/shared";
+
+export function resolveModel(
   global: GlobalSettings,
   agent: Pick<Agent, "backend" | "model">,
-): string {
-  if (agent.model && agent.model.length > 0) return agent.model;
-  if (agent.backend === "api" && global.backends.api.model) return global.backends.api.model;
-  return global.general.defaultModel;
+  catalogue?: ModelCatalogue,
+): ModelResolution {
+  return resolveBackendModel(global, agent.backend, agent.model, catalogue);
+}
+
+/** One backend's canonical global defaults, as a plain bag. */
+function backendDefaults(global: GlobalSettings, backend: Backend): Record<string, unknown> {
+  switch (backend) {
+    case "claude":
+      return global.backends.claude as Record<string, unknown>;
+    case "codex":
+      return global.backends.codex as Record<string, unknown>;
+    case "api":
+      return global.backends.api as Record<string, unknown>;
+    default:
+      return {};
+  }
+}
+
+/**
+ * The permission mode one agent actually runs under: its own override for its
+ * own backend, else the canonical global default for that backend, else the
+ * safe `"default"`.
+ *
+ * [7-P1] The flat `Settings.permissionMode` row is **not** consulted. It was
+ * the app-wide fallback for every backend, so a global `bypassPermissions`
+ * meant for Claude also loosened an `api` agent — and it is now a derived
+ * compatibility view of `backends.claude.permissionMode` anyway, so reading it
+ * here would be reading the Claude default under another backend's name.
+ * `codex` has no `permissionMode` of its own (`approvalPolicy` is its
+ * equivalent, read straight off `config.codex`) and so always answers
+ * `"default"` unless something set one explicitly.
+ */
+export function resolvePermissionMode(
+  global: GlobalSettings,
+  agentConfig: AgentConfig | null | undefined,
+  backend: Backend,
+): PermissionMode {
+  const effective = effectiveBackendConfig(global, agentConfig, backend);
+  const mode = effective.permissionMode;
+  return isPermissionMode(mode) ? mode : "default";
+}
+
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return (
+    value === "default" ||
+    value === "acceptEdits" ||
+    value === "bypassPermissions" ||
+    value === "plan"
+  );
 }
 
 /**

@@ -28,6 +28,10 @@ import {
   mergeGlobalSettingsPatch,
   newId,
   resetGlobalSettingsSection,
+  translateDefaultModelAlias,
+  deriveDefaultModel,
+  SETTINGS_COMPAT_FIELDS,
+  SETTINGS_FLAT_ONLY_FIELDS,
   type Agent,
   type AgentDraft,
   type AgentPatch,
@@ -39,6 +43,7 @@ import {
   type DevServerPatch,
   type GlobalSettings,
   type GlobalSettingsPatch,
+  type ModelCatalogue,
   type GlobalSettingsSection,
   type McpServerEntry,
   type McpServerEntryPatch,
@@ -933,37 +938,168 @@ export class UsageRepo {
  * the table are ignored (a downgrade must not crash), and missing keys fall back
  * to the shipping defaults.
  */
+/**
+ * [7-P1] Phase 2's flat `Settings`, as a **compatibility view** over the
+ * canonical `GlobalSettings`.
+ *
+ * There used to be two mutable authorities: this repo stored every field, the
+ * settings hub stored its own, and `SettingsService` *projected* one onto the
+ * other after each hub write. A `settings.set` therefore won until the next
+ * `settings.patch` silently reverted it, and which of the two a given consumer
+ * saw depended on the order they happened to run in.
+ *
+ * The split is now by field, and it is enforced here rather than one layer up,
+ * because shipping code calls `store.settings.all()` directly:
+ *
+ *  - `SETTINGS_COMPAT_FIELDS` (theme, permissionMode, defaultBackend,
+ *    defaultModel, compactionThreshold, closeToTray) are **derived** from the
+ *    canonical object on read and **translated onto it** on write. They are not
+ *    stored in this table any more.
+ *  - `SETTINGS_FLAT_ONLY_FIELDS` (hopCap, showThinking, uiFontSize) have no
+ *    canonical home and stay exactly where they are — including while the
+ *    canonical row is unreadable, since they were never in it.
+ *  - `getRaw`/`setRaw` bookkeeping (window geometry, backend session ids) is
+ *    untouched by any of this.
+ *
+ * This table is key/value, not fixed columns, so an overlapping key is genuinely
+ * *absent* rather than defaulted — which is what makes the one-time migration
+ * able to tell "the user set this" from "the schema supplied this".
+ */
 export class SettingsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly globalSettings: GlobalSettingsRepo,
+    /** Injected by the desktop; see `CapygenStore.setModelCatalogue`. */
+    private readonly catalogue: () => ModelCatalogue | undefined = () => undefined,
+  ) {}
 
   all(): Settings {
-    const rows = this.db.all<Row>("SELECT key, value_json FROM settings");
-    const raw: Record<string, unknown> = {};
-    for (const row of rows) {
-      const key = String(row.key);
-      if (!(key in DEFAULT_SETTINGS)) continue;
-      raw[key] = fromJson<unknown>(row.value_json, undefined);
-    }
-    const parsed = SettingsSchema.safeParse(raw);
-    return parsed.success ? parsed.data : DEFAULT_SETTINGS;
+    const global = this.globalSettings.all();
+    return SettingsSchema.parse({
+      ...this.flatOnlyValues(),
+      theme: global.appearance.theme,
+      // Claude's canonical default, or the safe mode — never one app-wide value
+      // applied to every backend, which is what this field used to be.
+      permissionMode: global.backends.claude.permissionMode ?? DEFAULT_SETTINGS.permissionMode,
+      defaultBackend: global.general.defaultBackend,
+      defaultModel: deriveDefaultModel(global, this.catalogue()),
+      compactionThreshold: clampFraction(global.efficiency.compactionThresholdPct / 100),
+      closeToTray: global.closeToTray,
+    });
   }
 
+  /**
+   * Write in the old shape. The overlapping half becomes one canonical patch
+   * and the flat-only half stays here; both land in **one** transaction, so a
+   * failure on either side leaves neither applied.
+   */
   patch(patch: Partial<Settings>): Settings {
-    const merged = SettingsSchema.parse({ ...this.all(), ...patch });
-    const ts = now();
-    this.db.transaction(() => {
-      for (const [key, value] of Object.entries(merged)) {
-        this.db.run(
-          `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
-                                          updated_at = excluded.updated_at`,
-          key,
-          JSON.stringify(value),
-          ts,
+    const canonical = this.canonicalPatchFor(patch);
+    const flatOnly: [string, unknown][] = [];
+    for (const key of SETTINGS_FLAT_ONLY_FIELDS) {
+      const value = (patch as Record<string, unknown>)[key];
+      if (value === undefined) continue;
+      // [7-P1] Validated **before** the write. Writing an out-of-range value
+      // and then hiding it behind a default in `all()` leaves a row on disk
+      // that no read ever reports — the settings page shows 3, the table says
+      // 900, and nothing tells the caller their write did not take.
+      const parsed = flatFieldSchema(key).safeParse(value);
+      if (!parsed.success) {
+        throw new Error(
+          `settings.${key}: ${parsed.error.issues[0]?.message ?? "invalid value"}`,
         );
       }
+      flatOnly.push([key, parsed.data]);
+    }
+    if (!canonical && flatOnly.length === 0) return this.all();
+    // [7-P1] A canonical row this build must not rewrite makes the **whole**
+    // compatibility surface read-only, flat-only fields included. They are
+    // still readable, and internal `getRaw`/`setRaw` state is unaffected; what
+    // is refused is a user preference write while the authority is unreadable.
+    const read = this.globalSettings.read();
+    if (!read.writable) throw new Error(read.reason ?? "the stored settings are read-only");
+    this.db.transaction(() => {
+      if (canonical) this.globalSettings.patch(canonical);
+      const ts = now();
+      for (const [key, value] of flatOnly) this.writeRaw(key, value, ts);
     });
-    return merged;
+    return this.all();
+  }
+
+  /** The canonical patch a flat write means, or null when it names none. */
+  private canonicalPatchFor(patch: Partial<Settings>): GlobalSettingsPatch | null {
+    const next: GlobalSettingsPatch = {};
+    const general: Record<string, unknown> = {};
+    const backends: Record<string, Record<string, unknown>> = {};
+    if (patch.theme !== undefined) next.appearance = { theme: patch.theme };
+    if (patch.closeToTray !== undefined) next.closeToTray = patch.closeToTray;
+    if (patch.compactionThreshold !== undefined) {
+      next.efficiency = { compactionThresholdPct: Math.round(patch.compactionThreshold * 100) };
+    }
+    if (patch.defaultBackend !== undefined) general.defaultBackend = patch.defaultBackend;
+    if (patch.permissionMode !== undefined) {
+      backends.claude = { ...backends.claude, permissionMode: patch.permissionMode };
+    }
+    // Left as the alias: `GlobalSettingsRepo.patch` translates it onto
+    // `backends[selected].model`, including the backend this same patch selects.
+    if (patch.defaultModel !== undefined) general.defaultModel = patch.defaultModel;
+    if (Object.keys(general).length > 0) next.general = general;
+    if (Object.keys(backends).length > 0) next.backends = backends;
+    return Object.keys(next).length > 0 ? next : null;
+  }
+
+  /**
+   * The overlapping keys **actually present** as rows, for the one-time
+   * migration. A key that is absent is "the user never set this", which is a
+   * different thing from the schema default `all()` would report — and the
+   * distinction is the whole reason the migration can be safe.
+   */
+  presentCompatKeys(): Map<string, unknown> {
+    const out = new Map<string, unknown>();
+    for (const key of SETTINGS_COMPAT_FIELDS) {
+      const row = this.db.get<Row>("SELECT value_json FROM settings WHERE key = ?", key);
+      if (!row) continue;
+      const value = fromJson<unknown>(row.value_json, undefined);
+      if (value !== undefined) out.set(key, value);
+    }
+    return out;
+  }
+
+  /**
+   * Delete the overlapping keys outright. Used by the migration once their
+   * values have been moved onto the canonical row.
+   *
+   * A `patch` of shipping defaults would not do: this table is key/value and
+   * `patch` writes *every* field of the merged object, so "resetting" the
+   * overlapping keys would re-create all six as rows — leaving exactly the
+   * second authority the migration exists to remove.
+   */
+  removeCompatKeys(): void {
+    for (const key of SETTINGS_COMPAT_FIELDS) {
+      this.db.run("DELETE FROM settings WHERE key = ?", key);
+    }
+  }
+
+  /**
+   * The flat-only preferences, parsed **one key at a time**.
+   *
+   * [7-P1] Parsing them as one object meant a single corrupt row failed the
+   * whole parse and reset the other two to their shipping defaults: a bad
+   * `hopCap` silently discarded the user's `showThinking` and `uiFontSize`.
+   * Each key stands or falls alone, and an invalid one falls back to its own
+   * default rather than taking its siblings with it.
+   */
+  private flatOnlyValues(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const key of SETTINGS_FLAT_ONLY_FIELDS) {
+      const row = this.db.get<Row>("SELECT value_json FROM settings WHERE key = ?", key);
+      if (!row) continue;
+      const raw = fromJson<unknown>(row.value_json, undefined);
+      if (raw === undefined) continue;
+      const parsed = flatFieldSchema(key).safeParse(raw);
+      if (parsed.success) out[key] = parsed.data;
+    }
+    return out;
   }
 
   /** Arbitrary non-user state (window geometry, last session id, …). */
@@ -973,15 +1109,28 @@ export class SettingsRepo {
   }
 
   setRaw(key: string, value: unknown): void {
+    this.writeRaw(key, value ?? null, now());
+  }
+
+  private writeRaw(key: string, value: unknown, ts: number): void {
     this.db.run(
       `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
                                       updated_at = excluded.updated_at`,
       key,
       JSON.stringify(value ?? null),
-      now(),
+      ts,
     );
   }
+}
+
+function clampFraction(value: number): number {
+  return Math.min(Math.max(value, 0.1), 0.95);
+}
+
+/** One flat-only field's own schema, for per-key parse and pre-write checks. */
+function flatFieldSchema(key: (typeof SETTINGS_FLAT_ONLY_FIELDS)[number]) {
+  return SettingsSchema.shape[key];
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,27 +1477,127 @@ export class TasksRepo {
 
 const GLOBAL_SETTINGS_KEY = "global_settings";
 
+/**
+ * [7-P1] Why the canonical row was read the way it was.
+ *
+ * `all()` used to collapse all four of these into "the shipping defaults", and
+ * then `patch()`/`reset()` wrote a merge of those defaults straight over the
+ * bytes that could not be parsed. A row a newer build wrote, or one a half-
+ * finished write corrupted, was therefore silently replaced by this build's
+ * idea of the settings — losing the user's real preferences with no message.
+ * The four states are now distinct, and only the first two accept a write.
+ */
+export type GlobalSettingsState =
+  /** No row yet: a fresh profile, or one that predates the settings hub. */
+  | "missing"
+  /** A row this build understands. */
+  | "valid"
+  /** A well-formed row whose `version` is newer than this build's schema. */
+  | "future"
+  /** Present but unparseable — not JSON, or not this shape. */
+  | "corrupt";
+
+export interface GlobalSettingsRead {
+  state: GlobalSettingsState;
+  /** Always usable: the parsed row, or the shipping defaults. */
+  settings: GlobalSettings;
+  /**
+   * The object as it is **actually stored**, for a `valid` row only.
+   *
+   * The one-time normalisation needs it: a row an older build wrote may carry a
+   * `general.defaultModel` that this build strips on write, and `settings`
+   * above has already had that key refilled by the schema's own `.default()`.
+   * Telling "the user stored this" from "the schema supplied this" is only
+   * possible against the raw bytes.
+   */
+  raw?: Record<string, unknown>;
+  /** False for `future`/`corrupt` — those serve defaults **read-only** and
+   *  their bytes are preserved exactly as they are. */
+  writable: boolean;
+  /** Why a write is refused; set only when `writable` is false. */
+  reason?: string;
+}
+
+/** The newest `version` this build knows how to write. */
+export const GLOBAL_SETTINGS_VERSION = DEFAULT_GLOBAL_SETTINGS.version;
+
 export class GlobalSettingsRepo {
   constructor(private readonly db: Database) {}
 
-  all(): GlobalSettings {
+  /**
+   * The canonical row and what may be done with it. Never throws — a settings
+   * page must open even on an unreadable profile; it just cannot save.
+   */
+  read(): GlobalSettingsRead {
     const row = this.db.get<Row>(
       "SELECT value_json FROM settings WHERE key = ?",
       GLOBAL_SETTINGS_KEY,
     );
-    const raw = row ? fromJson<unknown>(row.value_json, undefined) : undefined;
-    const parsed = GlobalSettingsSchema.safeParse(raw ?? {});
-    // A row a future build wrote in a shape this build no longer understands
-    // (or none at all yet) falls back to the shipping defaults, the same
-    // "an unreadable row must not crash" posture `SettingsRepo.all` takes.
-    return parsed.success ? parsed.data : DEFAULT_GLOBAL_SETTINGS;
+    if (!row) return { state: "missing", settings: DEFAULT_GLOBAL_SETTINGS, writable: true };
+    const raw = fromJson<unknown>(row.value_json, undefined);
+    if (raw === undefined || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return {
+        state: "corrupt",
+        settings: DEFAULT_GLOBAL_SETTINGS,
+        writable: false,
+        reason: CORRUPT_REASON,
+      };
+    }
+    const version = (raw as { version?: unknown }).version;
+    if (typeof version === "number" && version > GLOBAL_SETTINGS_VERSION) {
+      // Checked *before* parsing: a newer build may have added fields this
+      // schema drops, and writing the parsed subset back would delete them.
+      return {
+        state: "future",
+        settings: DEFAULT_GLOBAL_SETTINGS,
+        writable: false,
+        reason:
+          `these settings were written by a newer version of capygen (format ${version}, this ` +
+          `build understands ${GLOBAL_SETTINGS_VERSION}). They are shown read-only and left ` +
+          "exactly as they are; update capygen to edit them.",
+      };
+    }
+    const parsed = GlobalSettingsSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        state: "corrupt",
+        settings: DEFAULT_GLOBAL_SETTINGS,
+        writable: false,
+        reason: CORRUPT_REASON,
+      };
+    }
+    return {
+      state: "valid",
+      settings: parsed.data,
+      writable: true,
+      raw: raw as Record<string, unknown>,
+    };
+  }
+
+  /** The settings to *use*. Safe defaults for a row that cannot be read — the
+   *  same posture `SettingsRepo.all` takes, now without the silent overwrite. */
+  all(): GlobalSettings {
+    return this.read().settings;
   }
 
   /** `settings.patch` — deep-merges into the existing object
    *  (`mergeGlobalSettingsPatch`), never a flat overwrite; see that
-   *  function's doc comment in `@capygen/shared`. */
+   *  function's doc comment in `@capygen/shared`. Refuses on a row this build
+   *  must not rewrite. */
+  /**
+   * [7-P1] The alias is translated **here**, not only in the service.
+   *
+   * `general.defaultModel` is a derived view that `write` strips, so a patch
+   * naming only the alias used to be accepted and then silently discarded —
+   * and other shipping consumers reach this repo directly, so putting the
+   * translation one layer up would leave exactly that hole open.
+   */
   patch(patch: GlobalSettingsPatch): GlobalSettings {
-    const merged = mergeGlobalSettingsPatch(this.all(), patch);
+    const current = this.requireWritable();
+    const merged = mergeGlobalSettingsPatch(
+      current,
+      translateDefaultModelAlias(current, patch),
+    );
     this.write(merged);
     return merged;
   }
@@ -1356,22 +1605,67 @@ export class GlobalSettingsRepo {
   /** `settings.reset` — one section back to its shipping default, or the
    *  whole object for `"all"`. */
   reset(section: GlobalSettingsSection): GlobalSettings {
-    const next = resetGlobalSettingsSection(this.all(), section);
+    const current = this.requireWritable();
+    const next = resetGlobalSettingsSection(current, section);
     this.write(next);
     return next;
   }
 
+  /**
+   * Replace the whole canonical row. Used by the one-time legacy→canonical
+   * normalisation, which computes the whole object in one go.
+   *
+   * [7-P1] Validated against the schema **before** it is persisted. The caller
+   * assembles this object out of raw legacy JSON, and an out-of-range value
+   * that reached the row would make it unparseable on the next read — turning a
+   * profile whose preferences were merely old into one this build refuses to
+   * write at all, with the flat rows it migrated from already deleted.
+   */
+  replace(value: GlobalSettings): GlobalSettings {
+    this.requireWritable();
+    const parsed = GlobalSettingsSchema.parse(value);
+    this.write(parsed);
+    return parsed;
+  }
+
+  private requireWritable(): GlobalSettings {
+    const read = this.read();
+    if (!read.writable) throw new Error(read.reason ?? CORRUPT_REASON);
+    return read.settings;
+  }
+
+  /**
+   * [7-P1] `general.defaultModel` is **stripped before every write**.
+   *
+   * It is a derived view of `backends[general.defaultBackend].model` (see its
+   * doc comment in `@capygen/shared`). Storing it as well would let the two
+   * drift, and — worse — would leave a stale alias behind after
+   * `reset("backends")` cleared the canonical model, which the next read would
+   * resurrect as if the user had chosen it. The schema's own `.default()`
+   * refills the key on read, and `SettingsService` overwrites it with the
+   * derived value before anyone sees it.
+   */
   private write(value: GlobalSettings): void {
+    // Every path into the row goes through the schema: `patch` merges through
+    // it, `replace` parses first, and this is the last line of defence for
+    // anything that reaches here another way.
+    const checked = GlobalSettingsSchema.parse(value);
+    const { defaultModel: _derived, ...general } = checked.general;
+    const stored = { ...checked, general };
     this.db.run(
       `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
                                       updated_at = excluded.updated_at`,
       GLOBAL_SETTINGS_KEY,
-      JSON.stringify(value),
+      JSON.stringify(stored),
       now(),
     );
   }
 }
+
+const CORRUPT_REASON =
+  "capygen could not read the stored settings, so they were left untouched and the shipping " +
+  "defaults are shown instead. Nothing will be saved over them.";
 
 // ---------------------------------------------------------------------------
 // Integrations caches: mcp_servers / plugins / skills / policies (Phase 6,

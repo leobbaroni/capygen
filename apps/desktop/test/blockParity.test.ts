@@ -67,6 +67,8 @@ const MIGRATIONS_DIR = fileURLToPath(
 class ScriptedHarness implements Harness {
   events = new AsyncQueue<EngineEvent>();
   answered: { requestId: string; value: unknown }[] = [];
+  private markSent!: () => void;
+  readonly sent = new Promise<void>((resolve) => { this.markSent = resolve; });
 
   constructor(readonly backend: Backend) {}
 
@@ -74,6 +76,7 @@ class ScriptedHarness implements Harness {
 
   send(): AsyncIterable<EngineEvent> {
     this.events = new AsyncQueue<EngineEvent>();
+    this.markSent();
     return this.events;
   }
 
@@ -452,6 +455,9 @@ async function runParityTurn(backend: Backend): Promise<ParityTurn> {
   const sessionId = created.session.id;
   const sent = (await call("chat.send", { sessionId, text: "go" })) as { agentTurnId: string };
 
+  // chat.send acknowledges the turn before asynchronous harness startup settles.
+  // Feed the stream only after send() has created the queue the runner consumes.
+  await harness.sent;
   for (const event of parityStream(backend)) harness.events.push(event);
 
   const expected = BACKEND_BLOCK_PARITY[backend].applicable.length;

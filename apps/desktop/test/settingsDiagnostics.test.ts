@@ -57,7 +57,7 @@ beforeEach(() => {
       dbFile: h.store.db.file,
     }),
     listHarnesses: () => [
-      { backend: "claude", label: "Claude Code", available: true, models: [], defaultModel: "x" },
+      { backend: "claude", label: "Claude Code", available: true, models: [], defaultModel: "x", providers: [] },
       {
         backend: "api",
         label: "API model",
@@ -65,6 +65,7 @@ beforeEach(() => {
         reason: "no API key stored — add one in Settings ▸ API keys",
         models: [],
         defaultModel: "",
+      providers: [],
       },
     ],
     diagnostics: {

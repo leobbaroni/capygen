@@ -16,6 +16,7 @@ import {
   AgentConfigSchema,
   AgentDescribeSchema,
   AgentDraftSchema,
+  AgentRuntimeInfoSchema,
   AgentPatchSchema,
   AgentRoleSchema,
   AgentSchema,
@@ -210,6 +211,13 @@ export const INVOKE_CHANNELS = {
   ),
   /** One agent's usage description, Claude-Code-info-card style (R13). */
   "agents.describe": channel(z.object({ agentId: z.string().min(1) }), AgentDescribeSchema),
+  /** [7-P1] The minimal non-secret runtime facts about one agent's live
+   *  harness — effective model, effort, permission mode, whether a restart is
+   *  pending. Never the effective config object, environment or any key. */
+  "agents.runtime": channel(
+    z.object({ agentId: z.string().min(1) }),
+    AgentRuntimeInfoSchema.nullable(),
+  ),
 
   "turns.list": channel(
     z.object({ sessionId: z.string().min(1) }),
@@ -672,13 +680,12 @@ export const INVOKE_CHANNELS = {
     }),
     z.array(GitDiffSchema),
   ),
-  /** `paths` omitted commits everything currently staged/changed, matching
-   *  plain `git commit -a` — not "nothing to commit". */
+  /** Commit an explicit, nonempty selection of literal paths. */
   "git.commit": channel(
     z.object({
       projectId: z.string().min(1),
       message: z.string().min(1),
-      paths: z.array(z.string().min(1)).optional(),
+      paths: z.array(z.string().min(1)).min(1),
     }),
     z.object({ ok: z.boolean(), sha: z.string().optional() }),
   ),
@@ -810,6 +817,14 @@ export const EVENT_CHANNELS = {
   /** A session's agent roster changed (add/update/remove/setLead) — the
    *  whole roster, in `order`, so the agent tree replaces rather than merges. */
   "agents.updated": z.object({ sessionId: z.string(), agents: z.array(AgentSchema) }),
+  /** [7-P1] One agent's live harness changed state: a model/config edit is
+   *  waiting for the current turn to end (`restartPending: true`), or it has
+   *  been applied (`false`). Carries no configuration — read the details with
+   *  `agents.runtime`. */
+  "agent.runtime": z.object({
+    agentId: z.string().min(1),
+    restartPending: z.boolean(),
+  }),
   /** The dispatcher stopped an agent-to-agent chain at the hop cap, or on an
    *  error mid-chain (ADR-0002, SPEC R11); `chat.continue` resumes it. */
   "chat.chainStopped": z.object({

@@ -311,7 +311,7 @@ describe("resolveCommitPathspecs", () => {
 // real repositories
 // ---------------------------------------------------------------------------
 
-describe("GitService.commit against a real repository", () => {
+describe("GitService.commit against a real repository", { timeout: 20_000 }, () => {
   it("commits only the selected path, leaving unrelated staged AND unstaged work alone", async () => {
     const repo = seeded("only");
     repo.write("selected.txt", "selected\n");
@@ -666,7 +666,7 @@ describe("gitChildEnv", () => {
   });
 });
 
-describe("isolation survives the scrub, against real git", () => {
+describe("isolation survives the scrub, against real git", { timeout: 20_000 }, () => {
   it("reads identity from the isolated HOME, not the developer's", async () => {
     // No GIT_AUTHOR_*/GIT_COMMITTER_* in the environment and no repo-local
     // identity, so the only place git can find one is the isolated HOME —

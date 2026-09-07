@@ -781,9 +781,15 @@ describe("Stop reaches a delegated sub-agent (SPEC R12/R27)", () => {
     parent.hold = true;
     agents.set(carol.id, parent);
     // The delegated child, held open so the interrupt has something to reach.
+    //
+    // [7-P1] Keyed `#sub1`, not `#delegate`. The runner used to build one child
+    // agent for the harness *factory* (`#delegate`) while `delegate.ts` built a
+    // second one for the actual `start()` (`#sub<n>`) — so the factory was told
+    // about a run that never happened, and asserting on its input proved
+    // nothing about the child. There is one child agent now, and this is its id.
     const child = new ScriptedAgent("codex");
     child.hold = true;
-    agents.set(`${carol.id}#delegate`, child);
+    agents.set(`${carol.id}#sub1`, child);
 
     await call("chat.send", { sessionId: table.sessionId, text: "@carol delegate this" });
     await vi.waitFor(() => expect(parent.prompts).toHaveLength(1));

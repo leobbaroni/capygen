@@ -415,6 +415,22 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   // One CLI-version probe for every page that asks (see its doc comment).
   const sharedCliProbe = cachedCliProbe();
 
+  // One lister for the whole process: `harness.list` awaits it, and the
+  // model-resolution paths read its `snapshot()` synchronously.
+  const harnessLister = createHarnessLister({
+    defaultModel: () => activeStore.settings.all().defaultModel,
+    // The `api` default model comes from the provider the settings select.
+    apiProvider: () => activeStore.globalSettings.all().backends.api.provider ?? null,
+    // `has` only: whether a key exists decides availability, and the value
+    // itself never leaves `secrets.get` for anything but the api harness.
+    secrets: secretsStore,
+    // [review] One shared, TTL-cached CLI probe for the whole process. The
+    // Harnesses page and Settings ▸ Diagnostics ask the same CLIs the same
+    // `--version` question; before this they spawned a child process each,
+    // and diagnostics re-spawned on every `diagnostics.get`.
+    probe: sharedCliProbe,
+  });
+
   const context = createIpcContext({
     store: activeStore,
     broadcast,
@@ -431,17 +447,15 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
         }
       : {}),
     secrets: secretsStore,
-    listHarnesses: createHarnessLister({
-      defaultModel: () => activeStore.settings.all().defaultModel,
-      // `has` only: whether a key exists decides availability, and the value
-      // itself never leaves `secrets.get` for anything but the api harness.
-      secrets: secretsStore,
-      // [review] One shared, TTL-cached CLI probe for the whole process. The
-      // Harnesses page and Settings ▸ Diagnostics ask the same CLIs the same
-      // `--version` question; before this they spawned a child process each,
-      // and diagnostics re-spawned on every `diagnostics.get`.
-      probe: sharedCliProbe,
-    }),
+    listHarnesses: harnessLister,
+    // [7-P1] The **same** lister, read synchronously. Every path that has to
+    // resolve or validate a model — `sessions.create`, `agents.*`,
+    // `SessionRunner` — needs the catalogue without spawning a probe, so it
+    // reads the last answer a probe actually produced. Left unwired, these
+    // consumers saw an empty catalogue: a Codex agent with no explicit model
+    // was refused instead of taking Codex's own default, and the cross-backend
+    // mismatch guard had no evidence and never fired.
+    catalogue: () => [...harnessLister.snapshot()],
 
     // [Phase 6] The Settings hub's OS-facing half (SPEC R19, R30). Each one is
     // a function rather than an Electron object so `SettingsService` — and its

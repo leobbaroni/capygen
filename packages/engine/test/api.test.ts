@@ -784,18 +784,24 @@ describe("reasoning effort on the wire", () => {
 });
 
 describe("config, prompt and pricing", () => {
-  it("reads the agent's api config and falls back to the agent's own model", () => {
+  it("uses the agent model and falls back to api config only when it is empty", () => {
     expect(
       resolveApiConfig(
-        agent({ config: { api: { provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } } }),
+        agent({ model: "gpt-5.6-luna", config: { api: { provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } } }),
         {},
       ),
     ).toMatchObject({
       provider: "openrouter",
-      model: "anthropic/claude-sonnet-4.5",
+      model: "gpt-5.6-luna",
       maxTokens: 8_192,
       permissionMode: "default",
     });
+    expect(
+      resolveApiConfig(
+        agent({ model: "", config: { api: { provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } } }),
+        {},
+      ),
+    ).toMatchObject({ provider: "openrouter", model: "anthropic/claude-sonnet-4.5" });
     expect(resolveApiConfig(agent({ config: null, model: "gpt-5" }), {})).toMatchObject({
       provider: "anthropic",
       model: "gpt-5",

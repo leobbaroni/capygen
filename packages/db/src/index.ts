@@ -5,6 +5,7 @@
  * Only the Electron main process opens the real database; renderers reach it
  * through the IPC contract in `@capygen/shared`.
  */
+import type { ModelCatalogue } from "@capygen/shared";
 import { openDatabase, type OpenDatabaseOptions } from "./migrate.js";
 import type { Database } from "./driver.js";
 import {
@@ -47,8 +48,17 @@ export interface CapygenStore {
   /** Agent-derived and manual tasks (migration 0004, SPEC R16/P10). */
   tasks: TasksRepo;
   /** The sectioned Settings hub object (Phase 6, SPEC R19/R30) — one more
-   *  row in `settings`, distinct from the flat `settings` repo above. */
+   *  row in `settings`, and, since 7-P1, the **canonical** home of every
+   *  preference the flat `settings` repo above also shows. */
   globalSettings: GlobalSettingsRepo;
+  /**
+   * [7-P1] Tell the flat compatibility view each backend's own catalogue
+   * default, so `settings.all().defaultModel` agrees with what a harness would
+   * actually run. Set once by the desktop from the same cached `harness.list`
+   * the picker uses; without it the built-in defaults still apply
+   * (`BUILTIN_BACKEND_DEFAULT_MODEL`), so nothing here ever probes.
+   */
+  setModelCatalogue(catalogue: ModelCatalogue | undefined): void;
   /** Integrations caches (Phase 6, SPEC R28-R29): MCP servers, plugins,
    *  skills, per-tool policies — migration 0001's tables, migration 0005's
    *  `backend` column. */
@@ -83,7 +93,12 @@ function reconcileInFlight(db: Database): { turns: number; sessions: number } {
 export function openStore(file: string, options: OpenDatabaseOptions = {}): CapygenStore {
   const { db, result } = openDatabase(file, options);
   const reconciled = reconcileInFlight(db);
+  const globalSettings = new GlobalSettingsRepo(db);
+  let catalogue: ModelCatalogue | undefined;
   return {
+    setModelCatalogue: (next) => {
+      catalogue = next;
+    },
     reconciled,
     db,
     projects: new ProjectsRepo(db),
@@ -92,11 +107,11 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     blocks: new BlocksRepo(db),
     toolOutputs: new ToolOutputsRepo(db),
     usage: new UsageRepo(db),
-    settings: new SettingsRepo(db),
+    settings: new SettingsRepo(db, globalSettings, () => catalogue),
     workspaceLayouts: new WorkspaceLayoutsRepo(db),
     devServers: new DevServersRepo(db),
     tasks: new TasksRepo(db),
-    globalSettings: new GlobalSettingsRepo(db),
+    globalSettings,
     mcpServers: new McpServersRepo(db),
     plugins: new PluginsRepo(db),
     skills: new SkillsRepo(db),

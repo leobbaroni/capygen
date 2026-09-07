@@ -59,6 +59,7 @@ export function AgentsPane({ sessionId, onClose, className }: AgentsPaneProps) {
   const agents = useAppStore((s) => s.agents);
   const blocks = useAppStore((s) => s.blocks);
   const harnesses = useAppStore((s) => s.harnesses);
+  const pendingRestarts = useAppStore((s) => s.pendingAgentRestarts);
   const session = useAppStore((s) => s.sessions.find((x) => x.id === sessionId));
   const setLead = useAppStore((s) => s.setLead);
   const removeAgent = useAppStore((s) => s.removeAgent);
@@ -114,6 +115,7 @@ export function AgentsPane({ sessionId, onClose, className }: AgentsPaneProps) {
                     key={agent.id}
                     agent={agent}
                     subagents={subagentsByParent.get(agent.id) ?? []}
+                    restartPending={pendingRestarts.includes(agent.id)}
                     onSelect={() => setSelectedAgentId(agent.id)}
                     onMakeLead={() => void setLead(sessionId, agent.id)}
                     // The last agent is not removable: a session with an empty
@@ -165,12 +167,15 @@ export function AgentsPane({ sessionId, onClose, className }: AgentsPaneProps) {
 function AgentTreeRow({
   agent,
   subagents,
+  restartPending,
   onSelect,
   onMakeLead,
   onRemove,
 }: {
   agent: Agent;
   subagents: SubagentBlock[];
+  /** A model/config edit is waiting for this agent's current turn to end. */
+  restartPending: boolean;
   onSelect: () => void;
   onMakeLead: () => void;
   /** Null when this agent cannot be removed (it is the only one left). */
@@ -214,6 +219,18 @@ function AgentTreeRow({
           <AgentAvatar agent={agent} size={18} />
           <span className="min-w-0 flex-1 truncate text-sm text-foreground">{agent.displayName}</span>
         </button>
+        {/* [7-P1] A model/config edit made while this agent was mid-turn takes
+            effect on its next turn, not the running one. Saying so beats
+            leaving the user to wonder whether the change was lost. */}
+        {restartPending ? (
+          <span
+            data-testid="agent-restart-pending"
+            title="This agent's configuration changed; it applies on the next turn."
+            className="shrink-0 rounded-full bg-warning/15 px-1.5 text-[10px] font-medium text-warning"
+          >
+            next turn
+          </span>
+        ) : null}
         {agent.role === "lead" ? (
           <CrownIcon className="size-3 shrink-0 text-warning" aria-label="Lead agent" />
         ) : (

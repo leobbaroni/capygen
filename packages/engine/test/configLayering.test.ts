@@ -17,7 +17,8 @@ import {
   effectiveAgentConfig,
   effectiveBackendConfig,
   effectiveEfficiency,
-  effectiveModel,
+  resolveModel,
+  resolvePermissionMode,
 } from "../src/config/index.js";
 
 function globalWith(patch: Record<string, unknown>): ReturnType<typeof GlobalSettingsSchema.parse> {
@@ -83,17 +84,91 @@ describe("global → backend default → agent override", () => {
   });
 });
 
-describe("effective model", () => {
-  it("prefers the agent's own, then the api default, then the app default", () => {
-    const global = globalWith({
-      general: { ...DEFAULT_GLOBAL_SETTINGS.general, defaultModel: "claude-opus-4-5" },
-      backends: { ...DEFAULT_GLOBAL_SETTINGS.backends, api: { model: "gpt-5" } },
+/**
+ * [7-P1] Resolution is **per backend**: an agent's own choice, then the
+ * canonical default for its *own* backend, then that backend's own catalogue
+ * default — and a refusal if none of those exists. `general.defaultModel` is a
+ * derived alias of the selected default backend and is never a fallback for
+ * another one; sending a Claude id to Codex is a spawn that fails from a picker
+ * that promised something else.
+ */
+describe("model resolution", () => {
+  const global = globalWith({
+    general: { ...DEFAULT_GLOBAL_SETTINGS.general, defaultModel: "claude-opus-4-5" },
+    backends: {
+      ...DEFAULT_GLOBAL_SETTINGS.backends,
+      api: { model: "gpt-5" },
+      claude: { model: "claude-opus-4-5" },
+    },
+  });
+
+  it("prefers the agent's own explicit model", () => {
+    expect(resolveModel(global, { backend: "claude", model: "claude-haiku-4-5" })).toEqual({
+      ok: true,
+      model: "claude-haiku-4-5",
     });
-    expect(effectiveModel(global, { backend: "claude", model: "claude-haiku-4-5" })).toBe(
-      "claude-haiku-4-5",
+  });
+
+  it("falls back to the canonical default for that same backend", () => {
+    expect(resolveModel(global, { backend: "api", model: "" })).toEqual({
+      ok: true,
+      model: "gpt-5",
+    });
+    expect(resolveModel(global, { backend: "claude", model: "" })).toEqual({
+      ok: true,
+      model: "claude-opus-4-5",
+    });
+  });
+
+  it("never borrows another backend's model, and uses the backend's own catalogue", () => {
+    // Codex has no canonical model here; the general alias says a Claude id.
+    expect(resolveModel(global, { backend: "codex", model: "" })).toEqual({
+      ok: false,
+      backend: "codex",
+      reason: expect.stringContaining("no model is selected for the codex backend"),
+    });
+    expect(
+      resolveModel(global, { backend: "codex", model: "" }, (b) =>
+        b === "codex" ? "gpt-5-codex" : "claude-opus-4-5",
+      ),
+    ).toEqual({ ok: true, model: "gpt-5-codex" });
+  });
+
+  it("refuses rather than sending an empty model", () => {
+    const bare = resolveModel(DEFAULT_GLOBAL_SETTINGS, { backend: "codex", model: "  " }, () => "");
+    expect(bare.ok).toBe(false);
+  });
+});
+
+/**
+ * [7-P1] The flat `Settings.permissionMode` is no longer consulted: it was one
+ * app-wide value applied to every backend, so a `bypassPermissions` meant for
+ * Claude also loosened an `api` agent.
+ */
+describe("permission mode resolution", () => {
+  it("takes the agent's own override, then the canonical backend default", () => {
+    const global = globalWith({
+      backends: {
+        ...DEFAULT_GLOBAL_SETTINGS.backends,
+        claude: { permissionMode: "bypassPermissions" },
+      },
+    });
+    expect(resolvePermissionMode(global, null, "claude")).toBe("bypassPermissions");
+    expect(resolvePermissionMode(global, { claude: { permissionMode: "plan" } }, "claude")).toBe(
+      "plan",
     );
-    expect(effectiveModel(global, { backend: "api", model: "" })).toBe("gpt-5");
-    expect(effectiveModel(global, { backend: "claude", model: "" })).toBe("claude-opus-4-5");
+  });
+
+  it("does not carry one backend's mode to another, and is safe by default", () => {
+    const global = globalWith({
+      backends: {
+        ...DEFAULT_GLOBAL_SETTINGS.backends,
+        claude: { permissionMode: "bypassPermissions" },
+      },
+    });
+    expect(resolvePermissionMode(global, null, "api")).toBe("default");
+    expect(resolvePermissionMode(global, null, "codex")).toBe("default");
+    expect(resolvePermissionMode(DEFAULT_GLOBAL_SETTINGS, null, "claude")).toBe("default");
   });
 });
 

@@ -8,7 +8,13 @@
  */
 import type { CapygenStore } from "@capygen/db";
 import type { KeyProvider } from "@capygen/engine";
-import type { AgentDescribe, EventChannel, EventInput, SlashCommand } from "@capygen/shared";
+import type {
+  AgentDescribe,
+  AgentRuntimeInfo,
+  EventChannel,
+  EventInput,
+  SlashCommand,
+} from "@capygen/shared";
 import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
 
@@ -132,6 +138,24 @@ export interface Engine {
    * the next message — the session's lead unless `agentId` names another (R14).
    */
   listCommands(sessionId?: string, agentId?: string | null): SlashCommand[];
+  /**
+   * [7-P1] One agent's model or config changed. The harness captured its
+   * effective configuration when it was built, so the old one has to go:
+   * an **idle** agent's harness is disposed immediately (its backend resume id
+   * is kept, so the next turn continues the same conversation), and an agent
+   * that is mid-turn is marked restart-pending and evicted when that turn ends,
+   * however it ends. A running turn's options are never changed underneath it.
+   *
+   * Optional so the echo double and the handler tests need not implement it.
+   */
+  agentConfigChanged?(agentId: string): { evicted: boolean; pending: boolean };
+  /**
+   * [7-P1] The minimal, non-secret runtime facts a settings/e2e assertion may
+   * read: which model an agent's harness is actually running, its effort when
+   * one is set, and whether a restart is waiting on the current turn. Never the
+   * effective config object, environment, headers or keys.
+   */
+  agentRuntime?(agentId: string): AgentRuntimeInfo | null;
   /**
    * Release every backend. Resolves only once each harness is down *and* the
    * final status of any turn it was running has been written, so a caller can
