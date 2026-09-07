@@ -16,6 +16,11 @@ import {
   ProjectSchema,
   SessionSchema,
   SessionSettingsSchema,
+  ShareBundleSchema,
+  ShareCommentSchema,
+  ShareCountsSchema,
+  ShareEntrySchema,
+  ShareSourceSchema,
   SettingsSchema,
   SkillEntrySchema,
   TaskSchema,
@@ -63,6 +68,11 @@ import {
   type SessionSettingsPatch,
   type SessionStatus,
   type Settings,
+  type ShareBundle,
+  type ShareComment,
+  type ShareCounts,
+  type ShareEntry,
+  type ShareSource,
   type SkillEntry,
   type SkillScope,
   type Task,
@@ -82,6 +92,7 @@ import {
   type UsageReport,
   type WorkspaceLayout,
 } from "@capygen/shared";
+import { canonicalSha256 } from "./canonicalJson.js";
 import {
   boolToInt,
   fromJson,
@@ -205,6 +216,7 @@ function rowToSession(row: Row): Session {
     id: row.id,
     projectId: row.project_id,
     origin: row.origin ?? "live",
+    artifactKind: row.artifact_kind ?? null,
     continuationSourceSessionId: row.continuation_source_session_id ?? null,
     mode: row.mode,
     leadAgentId: row.lead_agent_id ?? null,
@@ -652,9 +664,9 @@ export class ImportsRepo {
         const title = snapshot.title ?? `Imported ${snapshot.backend} transcript`;
         this.db.run(
           `INSERT INTO sessions
-             (id, project_id, origin, continuation_source_session_id, mode, lead_agent_id,
-              title, status, archived, created_at, updated_at)
-           VALUES (?, ?, 'import', NULL, 'solo', NULL, ?, 'idle', 0, ?, ?)`,
+             (id, project_id, origin, artifact_kind, continuation_source_session_id, mode,
+              lead_agent_id, title, status, archived, created_at, updated_at)
+           VALUES (?, ?, 'import', 'native-transcript', NULL, 'solo', NULL, ?, 'idle', 0, ?, ?)`,
           sessionId,
           input.projectId,
           title,
@@ -767,13 +779,19 @@ export class ImportsRepo {
         sessionId,
       );
       if (hasTurns) throw new Error("continuation destination must be a fresh session with no turns");
+      // The artifact kind is asserted, not inferred from the absence of a row
+      // in this table. A shared bundle is also `origin = 'import'`, and the
+      // only reason it fails this lookup today is that it lives in a sibling
+      // table — a guard that would quietly disappear the moment anything
+      // generalized the join. Native continuation stays native explicitly.
       const source = this.db.get<{ session_id: string }>(
         `SELECT i.session_id FROM transcript_imports i
          JOIN sessions s ON s.id = i.session_id
-         WHERE i.session_id = ? AND s.origin = 'import'`,
+         WHERE i.session_id = ? AND s.origin = 'import'
+           AND s.artifact_kind = 'native-transcript'`,
         sourceSessionId,
       );
-      if (!source) throw new Error("continuation source must be an imported source session");
+      if (!source) throw new Error("continuation source must be a native imported source session");
 
       this.db.run(
         "UPDATE sessions SET continuation_source_session_id = ?, updated_at = ? WHERE id = ?",
@@ -796,6 +814,275 @@ export class ImportsRepo {
       snapshot.sourceSha256,
     );
     return row ? new SessionsRepo(this.db).get(row.session_id) : null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// shared bundles
+// ---------------------------------------------------------------------------
+
+/** One received bundle's provenance and tallies, without its content. */
+export interface ShareImportRecord {
+  sessionId: string;
+  bundleId: string;
+  /** Canonical SHA-256 of the validated bundle; see `canonicalJson.ts`. */
+  contentSha256: string;
+  schemaVersion: number;
+  appVersion: string;
+  /** The writer's own timestamp, kept as the ISO string the bundle carried. */
+  bundleCreatedAt: string;
+  importedAt: number;
+  source: ShareSource;
+  counts: ShareCounts;
+}
+
+export interface ShareImportCommitResult {
+  session: Session;
+  duplicate: boolean;
+}
+
+interface ShareProvenanceRow {
+  session_id: string;
+  content_sha256: string;
+}
+
+/**
+ * Read-only shared-bundle artifacts (Phase 9 / P15).
+ *
+ * A committed bundle is a sibling of a native transcript import, not a variant
+ * of one: same `origin = 'import'` read-only guards, distinguished by
+ * `sessions.artifact_kind = 'shared-bundle'`. It gets no agents, no lead and no
+ * backend identity, because nothing in a bundle can resume anything.
+ *
+ * Every entry point re-validates with `ShareBundleSchema` before it touches the
+ * database. A direct repository caller is not a trusted caller: the bundle
+ * originated in a file from another machine, and the schema is the only thing
+ * standing between that file and these tables.
+ */
+export class SharesRepo {
+  constructor(private readonly db: Database) {}
+
+  /**
+   * Persist one validated bundle atomically.
+   *
+   * Identity is the bundle id. The same content re-imported is an idempotent
+   * duplicate; *different* content claiming an id that is already taken is a
+   * conflict and refused, because silently accepting it would let a tampered
+   * file overwrite or shadow the artifact a reader already reviewed.
+   */
+  commit(input: { projectId: string; bundle: ShareBundle }): ShareImportCommitResult {
+    const bundle = ShareBundleSchema.parse(input.bundle);
+    const contentSha256 = canonicalSha256(bundle);
+
+    const prior = this.provenance(bundle.bundleId);
+    if (prior) return this.resolvePrior(prior, bundle.bundleId, contentSha256);
+
+    try {
+      return this.db.transaction(() => {
+        // Recheck inside the transaction so two confirmations of the same
+        // bundle cannot both insert between the lookup and the write.
+        const raced = this.provenance(bundle.bundleId);
+        if (raced) return this.resolvePrior(raced, bundle.bundleId, contentSha256);
+
+        const project = this.db.get<{ id: string }>(
+          "SELECT id FROM projects WHERE id = ?",
+          input.projectId,
+        );
+        if (!project) throw new Error(`unknown project: ${input.projectId}`);
+
+        const sessionId = newId("session");
+        const importedAt = now();
+        const title = bundle.source.title ?? "Shared session";
+        // `sessions.mode` admits only the two live modes. A bundle may name
+        // `custom` for display; the artifact is stored as `solo` and the
+        // bundle's own mode is preserved verbatim in the metadata below.
+        const mode = bundle.source.mode === "round-table" ? "round-table" : "solo";
+        this.db.run(
+          `INSERT INTO sessions
+             (id, project_id, origin, artifact_kind, continuation_source_session_id, mode,
+              lead_agent_id, title, status, archived, created_at, updated_at)
+           VALUES (?, ?, 'import', 'shared-bundle', NULL, ?, NULL, ?, 'idle', 0, ?, ?)`,
+          sessionId,
+          input.projectId,
+          mode,
+          title,
+          importedAt,
+          importedAt,
+        );
+
+        this.db.run(
+          `INSERT INTO share_imports
+             (session_id, bundle_id, content_sha256, schema_version, app_version,
+              bundle_created_at, metadata_json, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          sessionId,
+          bundle.bundleId,
+          contentSha256,
+          bundle.version,
+          bundle.appVersion,
+          bundle.createdAt,
+          JSON.stringify({ source: bundle.source, counts: bundle.counts }),
+          importedAt,
+        );
+
+        for (const entry of bundle.entries) {
+          this.db.run(
+            `INSERT INTO share_import_entries (session_id, entry_index, entry_json)
+             VALUES (?, ?, ?)`,
+            sessionId,
+            entry.index,
+            JSON.stringify(entry),
+          );
+        }
+
+        // Bundle order is insert order, which is also what satisfies the
+        // reply-edge foreign key: the schema admits only replies to earlier
+        // comments, so a parent is always already present.
+        bundle.comments.forEach((comment, ordinal) => {
+          this.db.run(
+            `INSERT INTO share_import_comments
+               (session_id, comment_id, ordinal, entry_index, author, body, created_at,
+                reply_to_id, resolved)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            sessionId,
+            comment.id,
+            ordinal,
+            comment.entryIndex,
+            comment.author,
+            comment.body,
+            comment.createdAt,
+            comment.replyToId,
+            boolToInt(comment.resolved),
+          );
+        });
+
+        const session = new SessionsRepo(this.db).get(sessionId);
+        if (!session) throw new Error("shared session vanished immediately after insert");
+        return { session, duplicate: false };
+      });
+    } catch (error) {
+      // A different connection may have won the bundle-id UNIQUE race. Only
+      // translate the failure when that exact bundle now exists; anything else
+      // (a full disk, a constraint this bundle really violated) still throws.
+      const raced = this.provenance(bundle.bundleId);
+      if (raced && raced.content_sha256 === contentSha256) {
+        return this.resolvePrior(raced, bundle.bundleId, contentSha256);
+      }
+      throw error;
+    }
+  }
+
+  /** Provenance and tallies for a shared session, or null for anything else. */
+  get(sessionId: string): ShareImportRecord | null {
+    const row = this.db.get<Row>("SELECT * FROM share_imports WHERE session_id = ?", sessionId);
+    if (!row) return null;
+    const metadata = fromJson<{ source: unknown; counts: unknown }>(row.metadata_json, {
+      source: null,
+      counts: null,
+    });
+    return {
+      sessionId,
+      bundleId: String(row.bundle_id),
+      contentSha256: String(row.content_sha256),
+      schemaVersion: Number(row.schema_version),
+      appVersion: String(row.app_version),
+      bundleCreatedAt: String(row.bundle_created_at),
+      importedAt: Number(row.imported_at),
+      source: ShareSourceSchema.parse(metadata.source),
+      counts: ShareCountsSchema.parse(metadata.counts),
+    };
+  }
+
+  /** The session holding this bundle id, for duplicate reporting before import. */
+  findByBundleId(bundleId: string): Session | null {
+    const row = this.db.get<{ session_id: string }>(
+      "SELECT session_id FROM share_imports WHERE bundle_id = ?",
+      bundleId,
+    );
+    return row ? new SessionsRepo(this.db).get(row.session_id) : null;
+  }
+
+  /**
+   * Which artifact table owns this session, or null when it is a live one.
+   * A reader must select its artifact source by this, never by `origin` alone.
+   */
+  artifactKindOf(sessionId: string): "native-transcript" | "shared-bundle" | null {
+    const row = this.db.get<{ artifact_kind: string | null }>(
+      "SELECT artifact_kind FROM sessions WHERE id = ?",
+      sessionId,
+    );
+    const kind = row?.artifact_kind ?? null;
+    return kind === "native-transcript" || kind === "shared-bundle" ? kind : null;
+  }
+
+  entries(sessionId: string, page: TranscriptImportPage = {}): ShareEntry[] {
+    const { offset, limit } = importPage(page);
+    return this.db
+      .all<{ entry_json: string }>(
+        `SELECT entry_json FROM share_import_entries
+         WHERE session_id = ? ORDER BY entry_index LIMIT ? OFFSET ?`,
+        sessionId,
+        limit,
+        offset,
+      )
+      .map((row) => ShareEntrySchema.parse(fromJson<unknown>(row.entry_json, null)));
+  }
+
+  /** Last entries in chronological order, bounded — the continuation preview. */
+  tail(sessionId: string, limit = 100): ShareEntry[] {
+    const page = importPage({ limit });
+    return this.db
+      .all<{ entry_json: string }>(
+        `SELECT entry_json FROM share_import_entries
+         WHERE session_id = ? ORDER BY entry_index DESC LIMIT ?`,
+        sessionId,
+        page.limit,
+      )
+      .reverse()
+      .map((row) => ShareEntrySchema.parse(fromJson<unknown>(row.entry_json, null)));
+  }
+
+  /** Every comment in the bundle's own order. Bounded by the bundle schema. */
+  comments(sessionId: string): ShareComment[] {
+    return this.db
+      .all<Row>(
+        `SELECT * FROM share_import_comments WHERE session_id = ? ORDER BY ordinal`,
+        sessionId,
+      )
+      .map((row) =>
+        ShareCommentSchema.parse({
+          id: row.comment_id,
+          entryIndex: row.entry_index === null ? null : Number(row.entry_index),
+          author: row.author,
+          body: row.body,
+          createdAt: row.created_at,
+          replyToId: row.reply_to_id ?? null,
+          resolved: intToBool(row.resolved),
+        }),
+      );
+  }
+
+  private provenance(bundleId: string): ShareProvenanceRow | undefined {
+    return this.db.get<ShareProvenanceRow>(
+      "SELECT session_id, content_sha256 FROM share_imports WHERE bundle_id = ?",
+      bundleId,
+    );
+  }
+
+  private resolvePrior(
+    prior: ShareProvenanceRow,
+    bundleId: string,
+    contentSha256: string,
+  ): ShareImportCommitResult {
+    if (prior.content_sha256 !== contentSha256) {
+      throw new Error(
+        `a different bundle is already imported with id ${bundleId}; ` +
+          "the same id must always carry the same content",
+      );
+    }
+    const session = new SessionsRepo(this.db).get(prior.session_id);
+    if (!session) throw new Error(`shared session vanished: ${prior.session_id}`);
+    return { session, duplicate: true };
   }
 }
 

@@ -164,8 +164,9 @@ describe("transcript import persistence", () => {
 
       secondStore.db.run(
         `INSERT INTO sessions
-           (id, project_id, origin, mode, title, status, archived, created_at, updated_at)
-         VALUES (?, ?, 'import', 'solo', '', 'idle', 0, 1, 1)`,
+           (id, project_id, origin, artifact_kind, mode, title, status, archived,
+            created_at, updated_at)
+         VALUES (?, ?, 'import', 'native-transcript', 'solo', '', 'idle', 0, 1, 1)`,
         "session_collision",
         secondProject.id,
       );
@@ -313,6 +314,7 @@ describe("transcript import persistence", () => {
       "0006_transcript_imports",
       "0007_automations_inbox",
       "0008_usage_cost_known",
+      "0009_share_imports",
     ]);
     expect(store.migration.backupFile).toBeTruthy();
     expect(store.sessions.get("session_legacy")).toMatchObject({

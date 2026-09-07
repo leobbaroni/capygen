@@ -1993,12 +1993,33 @@ corepack pnpm exec vitest run apps/renderer/src/pages/HostsPage.test.tsx apps/re
 Test Files 2 passed (2)
 Tests 9 passed (9)
 corepack pnpm --filter @capygen/renderer typecheck
-Done
+$ tsc --noEmit
 corepack pnpm --filter @capygen/renderer build
-built successfully
+✓ built in 1.70s
 corepack pnpm exec playwright test tests/e2e/hosts.spec.ts
 1 passed (3.4s)
 ```
 Logs: e2e-out/phase10-hosts-focused.log, phase10-hosts-build.log and phase10-hosts-e2e.log;
 screenshots: e2e-out/hosts/desktop.png and narrow.png. The final refresh fixture is model-free.
 Phase 10 remains open for dictation, terminal attach and extensions; full phase gate pending.
+
+
+## Phase 9 atomic share persistence — 2026-09-07
+
+Opus implemented migration 0009 and SharesRepo, preserving native imports and the legacy
+shares table. Astra reviewed schema/transactions/canonical identity/read bounds. Root added
+artifactKind to returned sessions; its assertion failed before mapping, then passed. Luna
+reviewed that small integration for legacy compatibility. Shared artifacts stay origin=import
+with no agents/resume identity; share UI/continuation integration remains pending.
+```text
+corepack pnpm exec vitest run packages/db packages/shared
+Test Files 17 passed (17)
+Tests 226 passed (226)
+Duration 4.44s
+corepack pnpm --filter @capygen/db typecheck
+$ tsc --noEmit
+```
+Evidence: e2e-out/phase9-share-kind-red.log (1 failed / 17 passed),
+phase9-share-db-test.log and phase9-share-db-typecheck.log. This combined run includes four
+new policy-contract tests, which are uncommitted pending Opus review; 113 DB tests passed.
+Phase 9 is not accepted. Full gate remains pending integrated runtime/UI work.

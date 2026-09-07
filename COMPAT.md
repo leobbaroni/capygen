@@ -590,3 +590,14 @@ byte limits. HTML transport has an independent 96 MiB ceiling, checked before Sa
 future encoder. Reasoning is opt-in and `droppedThinking` records omission. Comment IDs
 are bundle-local; replies refer only to earlier comments and anchors must exist.
 The schema is available; export/import persistence and UI are not yet implemented.
+
+
+Migration `0009_share_imports` adds `sessions.artifact_kind` (NULL for live,
+`native-transcript` or `shared-bundle` for imports) without rebuilding sessions.
+`Session.artifactKind` reports it and is optional only for older client snapshots.
+The sibling share_imports/entries/comments tables preserve existing native provenance
+and the legacy shares table. Bundle IDs are globally unique: equal canonical content
+is idempotent, conflicting content is refused. Deletion removes the artifact identity;
+re-import then creates a fresh session. Comment identities are session-scoped.
+Shared artifacts have no agents/backend resume identity. Native continuation accepts
+only native-transcript sources; sharing needs its own fresh-continuation reader.

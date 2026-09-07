@@ -146,6 +146,7 @@ describe("migrations", () => {
       "0006_transcript_imports",
       "0007_automations_inbox",
       "0008_usage_cost_known",
+      "0009_share_imports",
     ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
@@ -198,6 +199,7 @@ describe("migrations", () => {
       "0006_transcript_imports",
       "0007_automations_inbox",
       "0008_usage_cost_known",
+      "0009_share_imports",
     ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),

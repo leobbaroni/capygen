@@ -429,6 +429,8 @@ export const SessionSchema = z.object({
   projectId: z.string().min(1),
   /** Missing only on legacy clients; persisted sessions always report their origin. */
   origin: z.enum(["live", "import"]).optional(),
+  /** Selects the inert artifact reader; absent only in legacy client snapshots. */
+  artifactKind: z.enum(["native-transcript", "shared-bundle"]).nullable().optional(),
   continuationSourceSessionId: z.string().min(1).nullable().optional(),
   mode: SessionModeSchema,
   /** Null only in the instant between inserting the session and its lead agent. */

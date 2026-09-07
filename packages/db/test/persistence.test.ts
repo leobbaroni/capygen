@@ -47,7 +47,8 @@ describe("automation persistence", () => {
   it("requires a live agent in the same project and keeps project immutable", () => {
     const a = seed("a"); const b = seed("b");
     expect(() => automation(a.project.id, b.agent.id)).toThrow(/different project/);
-    store.db.run("UPDATE sessions SET origin='import' WHERE id=?", a.session.id);
+    store.db.run("UPDATE sessions SET origin='import', artifact_kind='native-transcript' WHERE id=?",
+      a.session.id);
     expect(() => automation(a.project.id, a.agent.id)).toThrow(/imported/);
   });
 

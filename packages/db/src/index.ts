@@ -19,6 +19,7 @@ import {
   ProjectsRepo,
   SessionsRepo,
   SettingsRepo,
+  SharesRepo,
   SkillsRepo,
   TasksRepo,
   ToolOutputsRepo,
@@ -28,6 +29,7 @@ import {
   WorkspaceLayoutsRepo,
 } from "./repos.js";
 
+export * from "./canonicalJson.js";
 export * from "./driver.js";
 export * from "./migrate.js";
 export * from "./repos.js";
@@ -40,6 +42,9 @@ export interface CapygenStore {
   sessions: SessionsRepo;
   /** Read-only transcript artifacts and fresh-session continuation provenance. */
   imports: ImportsRepo;
+  /** Read-only shared-bundle artifacts (migration 0009, Phase 9 / P15) — the
+   *  sibling of `imports`, told apart by `sessions.artifact_kind`. */
+  shares: SharesRepo;
   turns: TurnsRepo;
   blocks: BlocksRepo;
   toolOutputs: ToolOutputsRepo;
@@ -113,6 +118,7 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     projects: new ProjectsRepo(db),
     sessions: new SessionsRepo(db),
     imports: new ImportsRepo(db),
+    shares: new SharesRepo(db),
     turns: new TurnsRepo(db),
     blocks: new BlocksRepo(db),
     toolOutputs: new ToolOutputsRepo(db),
