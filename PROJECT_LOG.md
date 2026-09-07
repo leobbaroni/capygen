@@ -2099,3 +2099,23 @@ $ tsc --noEmit
 Logs: e2e-out/phase9-policy-contract-review-red.log, -green.log and
 phase9-policy-contract-typecheck.log. Subsequent combined codec/contract confirmation also
 passed all four policy tests. Per-agent capability scope is clarified in ADR-0007.
+
+
+## Phase 9 sharing codec reviewed — 2026-09-07
+
+Opus implemented projection, safe filenames, strict JSON and inert HTML carriers. Astra review
+required runtime encode validation, raw-size-before-parse checks, no input-echo errors, fatal
+UTF-8, exact fallback bytes, reference tokens, cardinality refusals and correct comment anchor
+mapping after omitted blocks. Test timing exposed a quadratic URL-redaction pattern; bounded
+matching and a 512 KiB regression now cover it. Redaction remains explicitly heuristic.
+```text
+corepack pnpm exec vitest run apps/desktop/test/shareCodec.test.ts apps/desktop/test/shareCodecHardening.test.ts apps/desktop/test/shareCodecLimits.test.ts apps/desktop/test/shareCodecAnchors.test.ts
+Test Files 4 passed (4)
+Tests 44 passed (44)
+Duration 1.52s
+corepack pnpm --filter @capygen/desktop typecheck
+$ tsc --noEmit
+```
+Root confirmation: e2e-out/phase9-codec-final-test.log and phase9-codec-final-typecheck.log.
+This accepts the codec subtask, not Phase 9: staged native pick/save, comments, IPC and UI
+remain pending. Oversized/malformed content is refused rather than silently exported in part.

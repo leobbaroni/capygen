@@ -625,3 +625,15 @@ storeDynamicToolOutput callback retains the full value and returns its reference
 unwired/failed storage is explicitly reported as unavailable. Both tool and storage
 callbacks race cancellation, including callbacks that ignore abort. Desktop persistence
 wiring is needed before the shipping path can promise retained output references.
+
+
+Sharing codec (`apps/desktop/src/sharing`) validates at both encode and decode boundaries.
+Raw JSON bytes are capped before parsing; HTML imports decode exactly one canonical base64
+`template#capygen-share` carrier with fatal UTF-8 validation and never render the source HTML.
+Standalone output escapes content, uses offline inline tokens, and has no script/external
+assets. Encoded byte limits are independent; oversized HTML offers its exact validated JSON.
+Projection drops interactive/tool-result/widget/configuration data, makes reasoning opt-in,
+redacts heuristically before text clipping, and refuses cardinality overflow/unknown block kinds.
+Comment input anchors refer to source block positions, mapped through omitted blocks; comments
+on withheld blocks become session-level. Public display labels strip bidi control characters.
+Redaction is heuristic, so the eventual export flow must show the full reviewable snapshot.
