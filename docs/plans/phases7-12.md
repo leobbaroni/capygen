@@ -209,8 +209,9 @@ views edit one versioned declarative policy; generated drafts require review and
 Combine a solo lead with conditional round-table discussions in the existing chat. Preserve
 roles, model/effort assignments, task/difficulty conditions and instructions in both views.
 The image's example is an editable preset; model availability is resolved from the actual
-harness catalogue. No executable user code is needed for policy editing. Final runtime
-contract follows Astra/Fable debate and receives its own ADR before implementation.
+harness catalogue. No executable user code is needed for policy editing. The accepted runtime
+contract is `docs/adr/0006-custom-mode.md`, following two Astra/Fable debate rounds;
+implementation and capability proofs remain pending.
 
 Acceptance includes draft-generation errors/cancellation, invalid or unavailable models,
 visual→JSON→visual equivalence, apply/restart persistence, role routing, same-chat debate,

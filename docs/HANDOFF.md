@@ -108,3 +108,22 @@ The latest crew is Astra medium / Opus hard+medium / Luna simple / Fable medium 
 Initial Claude dispatches failed; after reauthentication Opus reviewed the findings and Fable
 debated the plan in two rounds. Four runtime findings remain open corrective tasks.
 Phases 7–12 are not implemented or newly accepted by this review.
+
+## Verified continuation checkpoint — 2026-09-07
+
+On `review/phase7-preparation`, P1-A canonical settings, captured runtime config,
+provider/model selection and restart corrections pass the full native gate:
+119 unit files, 1734 passed / 4 skipped; build and typecheck clean; Playwright
+43 passed / 12 skipped. The latest output tails are in `PROJECT_LOG.md`.
+The parser, bounded continuation formatter and window-owned staging are committed
+prerequisites. The tested parser worker is built separately, but import client,
+DB, IPC and UI wiring are still pending. P1-B scoped MCP discovery and widget
+identity, worktrees and the remaining phases are also pending.
+
+Custom Mode is specified in ADR-0006 and the Phase 9C plan; it is not implemented.
+Mascots remain static sharp PNGs. Live app prompts must use Luna low or Sonnet 5
+low, with dedicated test homes; the skipped live proofs are not completion.
+Opus/Fable hit the Claude session limit at approximately 02:35 Lisbon, with reset
+reported at 04:50. Final worker delta review by Fable remains unavailable; Astra
+reviewed the worker changes and Luna independently reviewed the small root fixes.
+No push was made. Preserve the unrelated untracked `state.lock`.

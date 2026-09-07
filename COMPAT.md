@@ -442,8 +442,8 @@ Successful commit with unavailable HEAD lookup returns success without a SHA.
 The client uses `env()`, `core.quotepath=false`, and literal pathspecs, with repository-routing
 and command-override variables removed from the cleaned environment. Installed simple-git
 sets `windowsHide: true` on its child spawns. Native isolated Git tests cover these semantics;
-repeat them when the dependency changes. IPC currently retains its legacy optional `paths`
-type; the service refuses omission, and schema tightening remains an integration follow-up.
+repeat them when the dependency changes. The `git.commit` IPC schema also requires a nonempty
+`paths` selection, refusing omission before dispatch and preserving literal path strings.
 
 ## Transcript import parser contracts (Phase 7 prerequisite)
 
@@ -462,3 +462,25 @@ The parser never scans native homes, follows recorded history paths, writes the 
 executes historical tools or assigns native resume identities. The SDK fixture uses explicit
 owned Claude/Codex homes and an inert project directory before importing the SDK; no provider
 call is made. Unsupported formats/content remain warned or refused, not claimed lossless.
+
+## Runtime settings and import worker checkpoint (2026-09-07)
+
+Canonical global settings own overlapping preferences; the flat settings IPC is a
+compatibility view. The general model alias derives from the selected backend's
+explicit model or its own cached catalogue. API provider and model are resolved
+together, including delegated requests. Explicit custom endpoints retain custom
+model IDs. `HarnessLister.snapshot()` reads the last successful catalogue without
+starting probes; an older in-flight refresh cannot overwrite a newer success.
+API agent provider/model fields are optional overrides. Public runtime metadata
+contains effective model, effort, permission mode and lifecycle status, never the
+effective configuration or transport values.
+
+The desktop build emits `importWorker.cjs`. Protocol v1 accepts one bounded
+64 KiB request with explicit absolute source/result/job paths. The child has
+owned backend homes and an inert project directory. It lazily loads the pinned
+Claude SDK only for Claude reconstruction. The normalized transcript is written
+exclusively in bounded chunks; partial writes are retried. IPC returns bounded
+metadata or a sanitized error, not the transcript. This is process separation,
+not an OS filesystem sandbox. The Electron utility-process client and packaged
+SDK-resolution smoke test remain pending; current worker checks use owned plain
+Node children and do not access personal backend homes.

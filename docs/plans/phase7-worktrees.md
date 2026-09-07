@@ -2,7 +2,9 @@
 
 Astra contract, prepared against the existing `GitService`, `DiffPane`, project store and
 read-only reference `useHostWorktrees.ts` / `worktreeDefaultPreferences.ts`.
-Implementation starts after the corrective runtime configuration batch is accepted.
+Worktree integration starts after the corrective runtime configuration batch is accepted.
+The existing commit-selection defect is an independent corrective task against accepted P0
+project scope; its service/renderer fix may proceed while P1 runtime configuration is built.
 
 ## Identity and storage
 

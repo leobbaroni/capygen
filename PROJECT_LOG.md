@@ -1573,3 +1573,179 @@ order, multi-byte/escaped byte limits, historical truncation and empty artifacts
 this exact reference to preview, persisted provenance and all three backend requests remains
 pending; this task does not establish continuation delivery or close Phase 7.
 
+### Phase 7-P1-A — canonical settings, model resolution, runtime lifecycle (Opus 5)
+
+Settings/model authority (after Astra's migration corrections):
+`SettingsRepo` is itself the flat compatibility view — shipping code calls it
+directly, so the split lives there, not one layer up. Overlapping fields derive
+from `GlobalSettings` and translate onto it; `hopCap`/`showThinking`/`uiFontSize`
+stay where they are, parsed and validated per key. `general.defaultModel` is a
+derived alias, stripped on every write; `translateDefaultModelAlias` runs in
+`GlobalSettingsRepo.patch`, and an explicit `backends[selected].model` in the
+same patch wins over the alias. Migration only converts flat keys that are
+actually present (missing canonical) or the row's own stored alias (valid
+canonical), validating each legacy field against its own schema so one bad value
+cannot discard its siblings or make the row unreadable; `replace`/`write` parse
+before persisting. Overlapping keys are deleted, not reset. `normalizedVersion`
+survives every reset; reserved `version`/`normalizedVersion`/`telemetry` refuse a
+change and accept an echo. An unreadable canonical row makes the whole preference
+surface read-only (flat-only included), leaving values readable and
+`getRaw`/`setRaw` untouched. Model resolution is one shared chain
+(`resolveBackendModel`): explicit → that backend's canonical default → its own
+catalogue → its own built-in (`BUILTIN_BACKEND_DEFAULT_MODEL.claude`) → refuse.
+The `api` catalogue default now follows the effective provider.
+
+Runtime: `SessionRunner` captures the effective config once per harness
+lifecycle and gives the **same** object to the factory and `start()`.
+`runTurn` reserves the agent synchronously, then awaits the full startup —
+including the previous harness's teardown and `ApiHarness`'s async
+`loadHistory` — before `send()`. Start failures dispose the partial harness and
+surface a visible error turn; a Stop during startup reports success and never
+launches; a start that resolves after `dispose()` sends and writes nothing.
+Resume ids are tagged with the captured backend. `delegate.ts` builds one child
+agent, resolving the target backend's canonical model and defaults, keeping the
+parent's explicit section for that backend and never its permission mode.
+`ApiHarness` no longer lets `config.api.model` override the resolved model.
+Renderer re-reads `settings.get` after `settings.changed` and badges agents whose
+restart is pending.
+
+```
+typecheck shared/db/engine/desktop/renderer   all Done
+vitest --project db --project shared                     115 passed
+vitest --project engine configLayering.test.ts            13 passed
+vitest --project desktop (11 owned suites)               200 passed
+vitest --project renderer (6 owned suites)                66 passed
+```
+
+New: `apps/desktop/test/runtimeConfig.test.ts` (25),
+`apps/desktop/test/runtimeStartup.test.ts` (15, real `ApiHarness` + captured
+provider + strict lifecycle fake), `apps/renderer/src/store/settingsSubscription.test.ts` (3).
+Every guard confirmed by reverting it. No commit, push, install, live call or
+real-home read; all homes isolated, MCP discovery stubbed (P1-B owns the
+resolver). Not touched: `GitService`/`DiffPane`, engine imports files,
+`CodexHarness`/`protocol.ts`.
+
+### Phase 7-P1-A corrective — effective-provider model resolution (Opus 5)
+
+`api` model resolution now asks the **effective** provider for this dispatch, not
+the one global `harness.list` row. `effectiveApiProvider` reads the agent's (or
+the delegation target's) `config.api.provider`, then the canonical global
+default, then the first keyed provider; `catalogueFrom` answers with that
+provider's own first model. `checkModelSelection` takes the effective backend
+section and additionally refuses a resolved model that certainly belongs to
+another provider — but only when a provider was actually **chosen**, since the
+keyed-provider fallback is capygen's guess and refusing over a guess would
+reject a valid selection. Unknown ids stay allowed, so custom models and custom
+`baseUrl` endpoints are untouched. Precedence is unchanged: explicit
+agent/request/route → canonical own-backend model → effective provider
+catalogue → built-in.
+
+Wiring: `SessionRunner` resolves the effective config first and validates
+against it; `resolveTarget` resolves and validates the delegated child's model
+against the **target's** effective config; `sessions.create`/`agents.add`/
+`agents.update` validate against the config the write lands on.
+`HarnessInfo.providers` (optional) reports which providers hold a credential,
+from the same cached probe — no new probes. `ApiAgentConfigSchema.provider`/
+`.model` are now optional, like every other backend section: they were required,
+so an agent that only wanted to name a provider had to restate a model in the
+very field that used to override `Agent.model`.
+
+```
+typecheck shared/db/engine/desktop/renderer     all Done
+vitest --project db --project shared                     118 passed
+vitest --project engine configLayering.test.ts            13 passed
+vitest --project desktop (12 owned suites)               220 passed
+vitest --project renderer (8 owned suites)               105 passed
+```
+
+Each guard confirmed by reverting it: provider-aware catalogue (1 fail),
+provider mismatch check (3), the "chosen" gate (1), threading the effective
+config into the validator (2).
+
+### Phase 7-P1-A corrective 2 — provider materialisation + custom endpoints (Opus 5)
+
+Two runtime defects from root's provider review:
+
+1. **Provider and model now materialise together.** `effectiveApiProvider`
+   always returns the provider the harness will really use — explicit → canonical
+   → first keyed → the documented built-in (Anthropic, which is what
+   `ApiHarness.resolveConfig` defaults to). `checkModelSelection` returns it, and
+   `SessionRunner` writes it into the captured `config.api` for ordinary agents
+   and `resolveTarget` for delegated ones, so factory, `start()` and the request
+   agree. The `chosen` gate is gone: a deterministic fallback is a real runtime
+   choice and is validated like any other. Previously an OpenAI-only profile with
+   no stored provider validated `gpt-5` and then sent it to Anthropic.
+2. **A custom `baseUrl` is not the public provider.** Any explicit `baseUrl`
+   skips both catalogue-based mismatch checks for `api` — a gateway routinely
+   serves ids from another vendor's list, and the curated catalogues are no
+   evidence about it. Recognising "the canonical public URL" would be a guess of
+   its own, so any `baseUrl` counts as custom; that reading only ever allows
+   more. Unknown ids stay allowed everywhere.
+
+```
+typecheck shared/db/engine/desktop/renderer   Done (desktop: only importWorker.test.ts, root-owned)
+vitest --project desktop (10 affected suites)            213 passed
+vitest --project db --project shared                     118 passed
+vitest --project renderer (4 affected suites)             54 passed
+```
+
+Red first: 11 new/updated cases failed against the old code, including the real
+`ApiHarness` captures for an OpenAI-only profile with no provider configured and
+for a known foreign model id at a custom endpoint. One fixture corrected
+(`runtimeConfig`'s `api` row now lists `openai` first, matching the `gpt-5`
+agents it creates). No mutation sweeps.
+
+## 2026-09-07 — Astra acceptance of runtime settings and import prerequisites
+
+P1-A now captures canonical settings at each harness lifecycle, resolves backend
+models and API providers together, restarts changed agents safely, and preserves
+compatible resume identity. Main wiring supplies the last successful catalogue
+to both settings and dispatch. Root's real delegated API capture found and fixed
+a provider lost when a valid route overrode an incompatible canonical model.
+All six child-provider cases pass through the real API harness with fake transport
+seams and isolated homes; no live model prompts were sent. Opus implemented the
+main batch; Astra reviewed and corrected it. Luna independently reviewed the
+small root provider correction and its captures.
+
+The selected Git paths IPC is required and nonempty. Unit maintenance now awaits
+the actual scripted-harness send before injecting events; native Git fixture
+groups receive a 20-second timeout without changing assertions. The initial
+full gate exposed these issues (13 failures); the corrected gate passed.
+
+Import staging (8864ac5) has 67 focused checks for ownership, cancellation,
+quota, partial writes and retained cleanup failures. The worker boundary writes
+its result to an exclusive file and returns bounded metadata, using owned homes.
+Astra reviewed Opus's implementation; Fable reviewed the initial core design,
+but its final delta review hit the Claude session limit (reset reported 04:50
+Lisbon). Astra reviewed the final worker changes and Luna reviewed the root
+short-write fix. Worker red: 1 failed / 12 passed; green: 13 passed.
+
+Final native Windows full gate, after the delegated API correction:
+
+```text
+corepack pnpm typecheck
+packages/db typecheck: Done
+packages/engine typecheck: Done
+apps/renderer typecheck: Done
+apps/desktop typecheck: Done
+
+corepack pnpm test
+Test Files  119 passed (119)
+Tests       1734 passed | 4 skipped (1738)
+Duration    46.36s
+
+corepack pnpm build
+dist\importWorker.cjs 64.4kb
+Done in 321ms
+[build] desktop bundle written to ...\apps\desktop\dist
+
+corepack pnpm exec playwright test
+12 skipped
+43 passed (1.0m)
+```
+
+Full output: `e2e-out/review/p1-import-{typecheck,unit,build,e2e}.log`.
+Phase 7 remains open: scoped MCP runtime/widget resolution (P1-B), import
+worker client/staging adoption/DB/IPC/UI/continuation wiring, and worktrees remain.
+Live skipped checks need dedicated authenticated test homes. No phase was ticked
+and nothing was pushed.
