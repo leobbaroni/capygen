@@ -1,9 +1,9 @@
 # capygen — agent instructions (Claude side)
 
-The project lead from Phase 7 on is **GPT Astra (Codex), medium**; its instructions live in `AGENTS.md`
-and are the source of truth for both CLIs. **Opus 5** handles hard/medium tasks and substantive
-reviews; **GPT Luna** handles simple tasks. **Fable 5.1 (medium)** debates core decisions,
-frameworks and architecture with Astra. Astra owns design and final decisions. Read `AGENTS.md`,
+The project lead from Phase 7 on is **GPT-6-Astra (Codex), low**; its instructions live in `AGENTS.md`
+and are the source of truth for both CLIs. **GPT-5.6-Sol (medium)** handles hard/medium tasks and
+substantive reviews; **GPT-5.6-Luna (medium)** handles easy tasks. **GPT-5.6-Sol** challenges core
+decisions, frameworks and architecture with Astra. Astra owns orchestration, design and final decisions. Read `AGENTS.md`,
 then `SPEC.md` (contract), `PLAN.md` (build order, assumptions, crew), `CONTEXT.md` (terms),
 `docs/POLICIES.md` (app policies), `docs/HANDOFF.md` (state and how to run a phase).
 

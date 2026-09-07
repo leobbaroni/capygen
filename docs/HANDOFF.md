@@ -1,7 +1,8 @@
 # capygen — handoff (2026-09-06, end of Phase 6)
 
-Lead from here: **GPT Astra (Codex)** — see `AGENTS.md`. Reviewers for dev: Claude Fable 5.1 /
-Opus 5 (`CLAUDE.md`). Phases 1–6 were built by Claude Fable 5.1 orchestrating Opus 5 / Sonnet 5
+Lead from here: **GPT-6-Astra (Codex), low** — see `AGENTS.md`. Current hard/medium implementation
+and substantive review is **GPT-5.6-Sol, medium**; easy work is **GPT-5.6-Luna, medium**.
+Phases 1–6 were built by Claude Fable 5.1 orchestrating Opus 5 / Sonnet 5
 subagents with cross-model review waves.
 
 ## Current continuation — 2026-09-07
@@ -104,7 +105,8 @@ No pushes were made; origin is not configured.
 
 See `docs/reviews/phase1-6.md` for recovered session provenance and confirmed open findings.
 See `docs/plans/phases7-12.md` for the corrective prerequisite batch and next-phase briefs.
-The latest crew is Astra medium / Opus hard+medium / Luna simple / Fable medium core debate.
+The current crew is Astra low (lead/orchestrator/design/final decisions) / Sol medium
+(hard+medium work and core-decision challenge) / Luna medium (easy work); Astra decides core issues.
 Initial Claude dispatches failed; after reauthentication Opus reviewed the findings and Fable
 debated the plan in two rounds. Four runtime findings remain open corrective tasks.
 Phases 7–12 are not implemented or newly accepted by this review.

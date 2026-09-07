@@ -9,16 +9,19 @@ This document adds dependencies, concrete tests and work ownership; it does not 
 
 | Role | Assignment |
 |---|---|
-| Lead, design, final decisions, integration acceptance | GPT Astra (`gpt-6-astra`), medium |
-| Hard and medium implementation | Opus 5 |
-| Simple mechanical implementation and inventories | GPT Luna (`gpt-5.6-luna`) |
-| Core architecture/framework/trust-model debate | Fable 5.1, medium, with Astra deciding |
-| Independent review | Different model from implementer; Opus reviews Astra work, Astra reviews Opus work |
+| Lead, orchestration, design, final decisions, integration acceptance | GPT-6-Astra (`gpt-6-astra`), low |
+| Hard and medium implementation | GPT-5.6-Sol (`gpt-5.6-sol`), medium |
+| Easy mechanical implementation and inventories | GPT-5.6-Luna (`gpt-5.6-luna`), medium |
+| Core architecture/framework/trust-model challenge | GPT-5.6-Sol, medium, with Astra deciding |
+| Independent review | Different model from implementer; Sol reviews Astra work, Astra reviews Sol work |
+
+This current crew assignment supersedes active Phase 7–12 owner references below; the dated
+preparation and review provenance above remains historical.
 
 No silent model substitution. Check actual availability before dispatch. Missing reviewers
 leave an explicit gate open. Bound each batch to three workers and two review rounds; if
 serious findings remain, open a corrective batch rather than declaring success. A failed task
-gets one clarified attempt, then Opus diagnosis/fix; unavailable Opus means a recorded blocker.
+gets one clarified attempt, then Sol diagnosis/fix; unavailable Sol means a recorded blocker.
 
 For every phase: Astra freezes contracts and task briefs; assign disjoint files; the integrator
 alone owns shared IPC registration/main wiring; builders commit only their task files by path.
@@ -37,11 +40,11 @@ R-A–R-E refer to `docs/reviews/phase1-6.md`.
 
 | Task | Owner/model | Surface | Acceptance |
 |---|---|---|---|
-| 7-P0 explicit project/repository/worktree identity | Astra contract; Opus implements | shared IPC/domain and desktop integration boundary, serial | two projects/windows; all settings operations and caches select the requested project; unknown ids refused |
-| 7-P1/7-P3 effective runtime configuration | Opus, one owner | existing config stores/resolver, SessionRunner and API/widget factory wiring | add/disable API and Claude user-scope server through IPC → real fixture tools reflect it; no real-home reads/spawns; disabled/project approval precedence retained |
-| 7-P2 connection identity | Opus | `apps/desktop/src/ipc/mcpPools.ts` and its tests | env/header differences isolate pools; equivalent maps share; no credentials in logs or digest inputs returned to renderer |
-| 7-P3 acceptance within 7-P1 | same Opus owner | SessionRunner harness construction and boundary tests | hub defaults captured in Claude/Codex/API request options, overrides win, reset/restart/delegation covered |
-| 7-P4 claims-to-code inventory | Luna, after behavior is verified | documentation only (R-E already fixed) | every claim cites a consumer/test; no unenforced policy presented as enforced |
+| 7-P0 explicit project/repository/worktree identity | Astra contract; Sol implements | shared IPC/domain and desktop integration boundary, serial | two projects/windows; all settings operations and caches select the requested project; unknown ids refused |
+| 7-P1/7-P3 effective runtime configuration | Sol, one owner | existing config stores/resolver, SessionRunner and API/widget factory wiring | add/disable API and Claude user-scope server through IPC → real fixture tools reflect it; no real-home reads/spawns; disabled/project approval precedence retained |
+| 7-P2 connection identity | Sol | `apps/desktop/src/ipc/mcpPools.ts` and its tests | env/header differences isolate pools; equivalent maps share; no credentials in logs or digest inputs returned to renderer |
+| 7-P3 acceptance within 7-P1 | same Sol owner | SessionRunner harness construction and boundary tests | hub defaults captured in Claude/Codex/API request options, overrides win, reset/restart/delegation covered |
+| 7-P4 claims-to-code inventory | GPT-5.6-Luna, after behavior is verified | documentation only (R-E already fixed) | every claim cites a consumer/test; no unenforced policy presented as enforced |
 
 7-P1 and 7-P3 are one implementation task because they own the same harness boundary.
 7-P0/P1 share scope resolution and must not run concurrently on the same files. 7-P2 is
@@ -67,18 +70,18 @@ Detailed acceptance contracts: `phase7-worktrees.md` and `phase7-imports.md` in 
 1. Astra contracts: project/worktree relation and explicit source/target project identifiers;
    import provenance, warnings, supported format/version and deduplication key; typed IPC.
    A migration needs a backup/restore fixture before acceptance.
-2. Opus git/worktree implementation: argument arrays, no shell interpolation; validate branch
+2. Sol git/worktree implementation: argument arrays, no shell interpolation; validate branch
    names and repository identity; paths with spaces/non-ASCII; select files for commit rather
    than staging everything; actionable no-git/unborn/detached/dirty/locked errors. Removing a
    dirty worktree requires a separate explicit destructive-action confirmation.
-3. Opus import parsers: user-selected Claude JSONL and Codex rollout JSONL; bounded streaming,
+3. Sol import parsers: user-selected Claude JSONL and Codex rollout JSONL; bounded streaming,
    clear malformed/truncated-line diagnostics, stable order and source ids, duplicate detection,
    unknown event type/count preservation without arbitrary raw payloads. Imported tool calls never execute, imported
    permissions never authorize current work, source paths never become execution cwd implicitly.
    Do not import config, credentials, or raw environment dumps. Preview counts/warnings and
    destination before committing the transaction. Cancellation/failure leaves no partial session.
-4. Luna handles established UI plumbing/fixtures after Astra supplies the reference layout and
-   contracts; Opus owns stateful import/worktree behavior. Main registration remains serial.
+4. GPT-5.6-Luna handles established UI plumbing/fixtures after Astra supplies the reference layout and
+   contracts; Sol owns stateful import/worktree behavior. Main registration remains serial.
 5. Integration e2e: composer creates worktree → agent cwd is that worktree → file change appears
    in Diff → explicit UI commit contains only selected paths. Import both synthetic transcripts,
    restart, verify history/provenance and repeat import without duplicates. Source hashes unchanged.
@@ -94,13 +97,13 @@ Build on existing TasksService, notification tap and usage_events. The Codex
 `turn/plan/updated` mapping prerequisite is implemented with synthetic transport tests
 (2026-09-07); full phase acceptance and the Tasks page remain pending.
 
-- Opus: persisted schedule lifecycle, next-run/recovery policy, one run lease per automation,
+- Sol: persisted schedule lifecycle, next-run/recovery policy, one run lease per automation,
   no overlap, pause/delete/cancel behavior, app-closed behavior, DST/time-zone semantics and
-  missed-run policy. Astra decision after Fable debate: run only while capygen's process is running (tray counts),
+  missed-run policy. Astra decision after Sol challenge: run only while capygen's process is running (tray counts),
   skip missed executions and never replay a backlog after restart; explain this in the UI.
-- Opus: Inbox projection from existing needs-input/finished/error events with stable dedup keys;
+- Sol: Inbox projection from existing needs-input/finished/error events with stable dedup keys;
   restart does not duplicate notifications. Focused-window suppression remains in place.
-- Luna: page wiring and fixture presentation after contracts; Tasks links to source session,
+- GPT-5.6-Luna: page wiring and fixture presentation after contracts; Tasks links to source session,
   Inbox links to the actual pending card, Usage groups per backend/model/day.
 - Usage must distinguish unavailable prices from zero cost; do not fabricate sub-agent cost.
 - Acceptance: real scheduler with injected clock and one real minute fixture; app restart,
@@ -112,14 +115,14 @@ Build on existing TasksService, notification tap and usage_events. The Codex
 This phase completes local policy enforcement; current unenforced rows stay clearly labelled
 until then. Existing backend permission files remain authoritative (R29).
 
-- Astra/Fable decision gate: precedence and limits of local policy relative to Claude/Codex
+- Astra/Sol decision gate: precedence and limits of local policy relative to Claude/Codex
   native permissions, scope of member identity on one local machine, share schema/redaction.
   A policy UI must never claim it can intercept backend operations the protocol does not expose.
-- Opus: enforcement at the actual tool/approval boundary, explicit allow/deny/ask precedence,
+- Sol: enforcement at the actual tool/approval boundary, explicit allow/deny/ask precedence,
   scoped grants and revocation, audit metadata, no grant imported from history.
-- Opus: inert HTML/JSON export/import with schema version, bounded assets, safe filenames,
+- Sol: inert HTML/JSON export/import with schema version, bounded assets, safe filenames,
   no scripts or active widgets on import, credential redaction, atomic import.
-- Luna: catalogue/member/share/approval pages against agreed contracts and reference layouts.
+- GPT-5.6-Luna: catalogue/member/share/approval pages against agreed contracts and reference layouts.
 - Acceptance: deny through the actual runtime despite UI tampering; ask reaches user and answer
   reaches correct request; revoked grant cannot authorize queued work; export→import→restart;
   malformed/traversal/script-bearing bundles rejected or rendered inert. MCP tools must be
@@ -127,7 +130,7 @@ until then. Existing backend permission files remain authoritative (R29).
 
 ## Phase 10: dictation, local hosts, terminal attach, extensions
 
-Two genuinely unresolved core decisions require Fable debate and Astra's written decision:
+Two genuinely unresolved core decisions require Sol challenge and Astra's written decision:
 
 1. Dictation: verify native Windows speech support/availability versus a local whisper runtime;
    language coverage, offline operation, microphone permission, installer size and CPU budget.
@@ -138,14 +141,14 @@ Two genuinely unresolved core decisions require Fable debate and Astra's written
 
 Local hosts means this machine's harness status, not remote hosting (SPEC scope). Terminal
 attach means explicitly launching a raw CLI in the existing terminal; no claim to reconnect
-an SDK session unless the installed CLI supports and proves it. Opus handles lifecycle/security,
-Luna handles reference-page plumbing. Acceptance includes mic cancel/denied/no-device,
+an SDK session unless the installed CLI supports and proves it. Sol handles lifecycle/security,
+GPT-5.6-Luna handles reference-page plumbing. Acceptance includes mic cancel/denied/no-device,
 terminal interrupt/close, and a hostile sample extension denied privileged operations.
 
 ## Additional corrective acceptance: output byte bounds
 
 `ApiHarness.ts` currently uses `DEFAULT_MAX_TOOL_OUTPUT_CHARS`; multibyte content can exceed
-64 KB. Add an Opus corrective task at the tool-result boundary: enforce UTF-8 bytes without
+64 KB. Add a Sol corrective task at the tool-result boundary: enforce UTF-8 bytes without
 splitting a character, store the full output behind an outputRef, and prove the displayed stub
 retrieves the original after restart. Do not loosen AGENTS R25 to match the current code.
 This shares tool-output/persistence ownership, so schedule it serially with runtime wiring.
@@ -192,7 +195,7 @@ Codex activity; browser hidden-tab history loss; floating-tab affordance; sub-ag
 Codex plan mapping; native packaging; connector widget fallback. Assign to the relevant phase
 above and retain the remaining items in the handoff until their checks actually pass.
 
-## Codex delegation feasibility order (Astra after Fable debate)
+## Codex delegation feasibility order (Astra after Sol challenge)
 
 In Phase 9, read the pinned thread-start schema and test `dynamicTools` with tool-call replies
 first, then per-thread `config` overrides, then spawn-time overrides; stop at a proven suitable

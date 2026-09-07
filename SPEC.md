@@ -337,3 +337,12 @@ mascot direction above.
 - All live testing prompts, smoke runs and benchmarks from now on use **GPT Luna low** and
   **Sonnet 5 low**. This changes test execution, not the implementation/review crew or models
   the finished app allows users to select. No silent higher-cost fallback.
+
+## Correction — 2026-09-07, current development crew
+
+The current development crew supersedes the 2026-09-06 crew assignment for active work:
+GPT-6-Astra at low effort leads and orchestrates, owns design and makes final decisions;
+GPT-5.6-Sol at medium effort handles hard and medium tasks, substantive reviews, and challenges
+core decisions with Astra deciding; GPT-5.6-Luna at medium effort handles easy tasks. The
+different-model review requirement remains in force. This documentation correction changes the
+development crew only and does not rewrite or alter requirements R1–R34 or the parity inventory.

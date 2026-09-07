@@ -1749,3 +1749,21 @@ Phase 7 remains open: scoped MCP runtime/widget resolution (P1-B), import
 worker client/staging adoption/DB/IPC/UI/continuation wiring, and worktrees remain.
 Live skipped checks need dedicated authenticated test homes. No phase was ticked
 and nothing was pushed.
+
+## 2026-09-07 — Remaining-phase continuation baseline
+
+User requests continued development through Phases 7–12 and Custom Mode 9C.
+Current crew: Astra low lead/orchestrator, Sol medium hard/medium work, Luna medium easy work,
+with different-model review. Existing branch: review/phase7-preparation. Preserve state.lock.
+Worktree metadata writes were denied in the sandbox; continuation uses the existing branch.
+Node runtime resolution also required the approved outside-sandbox test execution.
+
+Fresh baseline before behavioral edits:
+```text
+corepack pnpm test
+Test Files  119 passed (119)
+Tests       1734 passed | 4 skipped (1738)
+Duration    59.48s
+```
+Output: e2e-out/baseline-continuation.log. No phase newly accepted by this baseline.
+Active bounded work: P1-B MCP discovery/snapshot ownership and import worker client/adoption.

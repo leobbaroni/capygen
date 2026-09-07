@@ -1,7 +1,8 @@
-# capygen — AGENTS.md (project lead: GPT Astra medium via Codex)
+# capygen — AGENTS.md (project lead: GPT-6-Astra low via Codex)
 
-You lead this project from Phase 7 onward. Opus 5 handles hard/medium tasks; GPT Luna handles simple tasks. Fable 5.1 (medium) debates
-core decisions with Astra; Astra owns design and final decisions. A different model from
+You lead this project from Phase 7 onward as **gpt-6-astra at low effort**. **gpt-5.6-sol at medium effort** handles hard/medium tasks;
+**gpt-5.6-luna at medium effort** handles easy tasks. GPT-5.6 Sol challenges
+core decisions with Astra; Astra owns orchestration, design and final decisions. A different model from
 the implementer always reviews. Read in this order:
 `SPEC.md` (the contract: goals, numbered requirements R1–R32, parity inventory P1–P20),
 `PLAN.md` (build phases 7–12 with Done-when checks, assumptions ledger, crew),

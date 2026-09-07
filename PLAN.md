@@ -40,14 +40,14 @@ capygen/
 Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) · `pnpm e2e`
 (Playwright Electron) · `pnpm build:win` (electron-builder NSIS + portable).
 
-## Crew (user instruction, 2026-09-06)
+## Crew (current user instruction, 2026-09-07)
 
 | Role | Model | Responsibility |
 |---|---|---|
-| Lead / designer / decision maker | **GPT Astra**, medium (`gpt-6-astra`) | plans, design, core decisions, task briefs, final acceptance |
-| Hard and medium tasks | **Opus 5** | implementation and substantive reviews |
-| Simple tasks | **GPT Luna** (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
-| Core-decision debate | **Fable 5.1**, medium | challenge frameworks, architecture and core policy changes; Astra decides |
+| Lead / orchestrator / designer / decision maker | **GPT-6-Astra**, low (`gpt-6-astra`) | orchestration, plans, design, core decisions, task briefs, final acceptance |
+| Hard and medium tasks | **GPT-5.6-Sol**, medium (`gpt-5.6-sol`) | implementation and substantive reviews |
+| Easy tasks | **GPT-5.6-Luna**, medium (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
+| Core-decision challenge | **GPT-5.6-Sol**, medium | challenge frameworks, architecture and core policy changes; Astra decides |
 | Independent review | different model from implementer | verify concrete findings and fixes before phase acceptance |
 
 The original Fable/Opus/Sonnet crew built Phases 1–6. Its workflow scripts remain historical
@@ -300,7 +300,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       assignments; Apply persists the mode; task/difficulty routes and conditional same-chat
       round-table debate execute under existing permission/hop/budget limits; restart preserves
       mode and history. Offline fixtures exercise the exact example from the user's diagram.
-      Steps: Astra/Fable contract debate; versioned declarative policy schema; generator draft
+      Steps: Astra/Sol contract challenge; versioned declarative policy schema; generator draft
       and preview; visual/text editors; route/debate runtime; persistence and e2e.
       Dependencies: Phase 9 permissions and cross-backend delegation proof.
 - [ ] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
@@ -383,5 +383,5 @@ Count: 6; none failed the necessity test.
 Continue remaining phases through final verification, including Phase 9C Custom Mode.
 Test prompts use only GPT Luna low / Sonnet 5 low; record resolved backend model IDs and
 effort in test evidence, refuse silent substitutions. Fixture tests remain model-free.
-Astra remains lead/design/decisions; Opus handles hard/medium implementation; Luna handles
-simple implementation; Fable 5.1 medium debates core decisions.
+Astra remains lead/orchestrator/design/decisions; Sol handles hard/medium implementation; Luna
+handles easy implementation; Sol challenges core decisions with Astra deciding.
