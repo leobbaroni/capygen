@@ -97,30 +97,70 @@ export function DiffPane({ params }: WorkspacePaneProps) {
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Which rows go into the next commit. Every entry starts ticked, so the
-   *  default is still "commit what I changed" — it is just now *visible*
-   *  which files that means, and untickable. */
+  /** Which rows go into the next commit. Until the user touches a checkbox
+   *  every entry is ticked, so the default is still "commit what I changed" —
+   *  visibly, and untickable. */
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set());
+  /** Set the first time the user ticks or unticks anything. After that a
+   *  refresh keeps their selection and a newly discovered file arrives
+   *  *unticked*: silently adding one would commit a file they never saw. */
+  const userChose = useRef(false);
   /** Rising id per `git.status` request; a response from an older one is
    *  dropped rather than allowed to overwrite a newer working tree (the same
    *  guard `FilesPane`'s search uses). */
   const statusSeq = useRef(0);
+  /** The same guard for `git.diff`/`fs.read`: clicking b while a is in flight
+   *  must not render a's patch under b's name. */
+  const diffSeq = useRef(0);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The project every in-flight request and the current selection belong to.
+   *  Read at commit time so a selection made before a project switch can never
+   *  be sent against the new project. */
+  const activeProject = useRef(projectId);
+  const projectEpoch = useRef(0);
 
   const loadStatus = useCallback(async () => {
     const seq = ++statusSeq.current;
     try {
       const result = await ipc().invoke("git.status", { projectId });
-      if (statusSeq.current !== seq) return;
+      // Stale, or answered after the pane moved to another project: dropping it
+      // is what stops one project's file list appearing under another's name.
+      if (statusSeq.current !== seq || activeProject.current !== projectId) return;
       setStatus(result);
-      setChecked(new Set((result?.entries ?? []).map((entry) => entry.path)));
+      const paths = (result?.entries ?? []).map((entry) => entry.path);
+      setChecked((prev) =>
+        userChose.current
+          ? // Keep what is still there, drop what git no longer reports, add
+            // nothing: a file that appeared since the user chose stays off.
+            new Set(paths.filter((path) => prev.has(path)))
+          : new Set(paths),
+      );
       setError(null);
     } catch (err) {
-      if (statusSeq.current !== seq) return;
+      if (statusSeq.current !== seq || activeProject.current !== projectId) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (statusSeq.current === seq) setLoaded(true);
+      if (statusSeq.current === seq && activeProject.current === projectId) setLoaded(true);
     }
+  }, [projectId]);
+
+  // A different project is a different working tree: every piece of state here
+  // describes the old one. Invalidating the sequence numbers also discards any
+  // response still in flight for it.
+  useEffect(() => {
+    activeProject.current = projectId;
+    projectEpoch.current += 1;
+    setCommitting(false);
+    statusSeq.current += 1;
+    diffSeq.current += 1;
+    userChose.current = false;
+    setStatus(null);
+    setLoaded(false);
+    setChecked(new Set());
+    setSelected(null);
+    setDiff(null);
+    setMessage("");
+    setError(null);
   }, [projectId]);
 
   useEffect(() => {
@@ -153,12 +193,16 @@ export function DiffPane({ params }: WorkspacePaneProps) {
    * is asked for its *staged* half before being called unchanged.
    */
   async function selectEntry(entry: GitStatusEntry): Promise<void> {
+    const seq = ++diffSeq.current;
+    const forProject = projectId;
+    const fresh = (): boolean => diffSeq.current === seq && activeProject.current === forProject;
     setSelected(entry.path);
     setDiff(null);
     setError(null);
     try {
       if (isUntracked(entry.status)) {
         const file = await ipc().invoke("fs.read", { projectId, path: entry.path });
+        if (!fresh()) return;
         setDiff({
           path: entry.path,
           unified: file.binary ? "" : patchForNewFile(entry.path, file.content),
@@ -167,6 +211,7 @@ export function DiffPane({ params }: WorkspacePaneProps) {
         return;
       }
       const worktree = await ipc().invoke("git.diff", { projectId, path: entry.path });
+      if (!fresh()) return;
       const first = worktree[0];
       if (first && (first.unified !== "" || first.binary)) {
         setDiff(first);
@@ -177,13 +222,16 @@ export function DiffPane({ params }: WorkspacePaneProps) {
         path: entry.path,
         staged: true,
       });
+      if (!fresh()) return;
       setDiff(staged[0] ?? { path: entry.path, unified: "" });
     } catch (err) {
+      if (!fresh()) return;
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   function toggleChecked(path: string): void {
+    userChose.current = true;
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
@@ -194,24 +242,31 @@ export function DiffPane({ params }: WorkspacePaneProps) {
 
   async function commit(): Promise<void> {
     const trimmed = message.trim();
+    // Derived from the rendered list, so only paths git currently reports can
+    // be sent — and `activeProject` pins them to the project they were chosen
+    // in, so a switch mid-edit cannot commit them against the new one.
+    const forProject = activeProject.current;
+    const epoch = projectEpoch.current;
+    const fresh = () => activeProject.current === forProject && projectEpoch.current === epoch;
     const paths = (status?.entries ?? [])
       .map((entry) => entry.path)
       .filter((path) => checked.has(path));
-    if (trimmed === "" || paths.length === 0) return;
+    if (trimmed === "" || paths.length === 0 || forProject !== projectId) return;
     setCommitting(true);
     setError(null);
     try {
       // Named paths, never `--all`: `GitService.commit` stages exactly these
       // first, which is also what makes an untracked file committable here.
-      await ipc().invoke("git.commit", { projectId, message: trimmed, paths });
+      await ipc().invoke("git.commit", { projectId: forProject, message: trimmed, paths });
+      if (!fresh()) return;
       setMessage("");
       setSelected(null);
       setDiff(null);
       await loadStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (fresh()) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCommitting(false);
+      if (fresh()) setCommitting(false);
     }
   }
 

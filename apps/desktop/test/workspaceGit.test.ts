@@ -8,9 +8,10 @@
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GitService, splitUnifiedDiff } from "../src/workspace/GitService.js";
+import { gitChildEnv, GitService, splitUnifiedDiff } from "../src/workspace/GitService.js";
 import { makeHarness, seed, type Harness } from "./workspaceHarness.js";
 
 function gitAvailable(): boolean {
@@ -26,17 +27,52 @@ const HAS_GIT = gitAvailable();
 
 let h: Harness;
 let service: GitService;
+let gitHome: string;
+let gitEnv: Record<string, string>;
+
+function isolatedGitEnv(home: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value !== "string" || key.toUpperCase().startsWith("GIT_")) continue;
+    env[key] = value;
+  }
+  Object.assign(env, {
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  });
+  return env;
+}
 
 function git(args: string[], cwd = h.root): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  return execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", windowsHide: true });
 }
 
 beforeEach(() => {
   h = makeHarness({ prefix: "capygen-git-" });
-  service = new GitService({ store: h.store, log: h.log });
+  gitHome = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-git-home-"));
+  fs.mkdirSync(path.join(gitHome, ".config"), { recursive: true });
+  gitEnv = isolatedGitEnv(gitHome);
+  service = new GitService({
+    store: h.store,
+    log: h.log,
+    createClient: async (root: string) => {
+      const mod = await import("simple-git");
+      const client = (mod.simpleGit as unknown as (options: { baseDir: string; config: string[] }) => {
+        env: (env: Record<string, string>) => unknown;
+      })({ baseDir: root, config: ["core.quotepath=false"] });
+      client.env(gitChildEnv(gitEnv));
+      return client as never;
+    },
+  });
 });
 
-afterEach(() => h.close());
+afterEach(() => {
+  h.close();
+  fs.rmSync(gitHome, { recursive: true, force: true });
+});
 
 describe("git.status", () => {
   it("answers null for a folder that is not a repository — not an error", async () => {
@@ -49,8 +85,10 @@ describe("git.status", () => {
   });
 
   it("refuses to commit into a non-repo, loudly", async () => {
+    // A nonempty selection, so this reaches the repository check rather than
+    // the selection check that now runs first.
     await expect(
-      service.commit({ projectId: h.projectId, message: "nope" }),
+      service.commit({ projectId: h.projectId, message: "nope", paths: ["tracked.txt"] }),
     ).rejects.toThrow(/not a git repository/);
   });
 });
@@ -122,12 +160,28 @@ describe.skipIf(!HAS_GIT)("git.status / diff / commit on a real repo", () => {
     expect(git(["log", "-1", "--pretty=%s"]).trim()).toBe("add a file");
   });
 
-  it("commits everything tracked when no paths are given", async () => {
+  it("refuses a missing selection instead of committing the whole tree", async () => {
+    // This used to run `git commit --all`, so a dropped `paths` field turned
+    // "commit nothing" into "commit everything the user had open".
     fs.writeFileSync(path.join(h.root, "tracked.txt"), "changed\n");
-    const result = await service.commit({ projectId: h.projectId, message: "commit -a" });
+    await expect(
+      service.commit({ projectId: h.projectId, message: "commit -a" }),
+    ).rejects.toThrow(/non-empty selection/);
+    const status = await service.status({ projectId: h.projectId });
+    expect(status?.entries.map((entry) => entry.path)).toEqual(["tracked.txt"]);
+  });
+
+  it("commits only the named path, leaving other changes alone", async () => {
+    fs.writeFileSync(path.join(h.root, "tracked.txt"), "changed\n");
+    fs.writeFileSync(path.join(h.root, "src", "app.ts"), "export const a = 2;\n");
+    const result = await service.commit({
+      projectId: h.projectId,
+      message: "one path",
+      paths: ["tracked.txt"],
+    });
     expect(result.ok).toBe(true);
     const status = await service.status({ projectId: h.projectId });
-    expect(status?.entries).toEqual([]);
+    expect(status?.entries.map((entry) => entry.path)).toEqual(["src/app.ts"]);
   });
 });
 
@@ -147,7 +201,15 @@ describe("git.commit argv", () => {
       log: h.log,
       createClient: () => ({
         checkIsRepo: async () => true,
-        status: async () => ({ files: [], current: "main", ahead: 0, behind: 0 }),
+        status: async () => ({
+          files: [
+            { path: "-p", index: " ", working_dir: "M" },
+            { path: "src/app.ts", index: " ", working_dir: "M" },
+          ],
+          current: "main",
+          ahead: 0,
+          behind: 0,
+        }),
         diff: async () => "",
         add: async (files: string[]) => void addCalls.push(files),
         commit: async (
@@ -155,7 +217,11 @@ describe("git.commit argv", () => {
           files?: string[],
           options?: Record<string, null>,
         ) => void commitCalls.push([message, files, options]),
-        revparse: async () => "0".repeat(40),
+        // Different before/after, so the commit is not read as a no-op.
+        revparse: (() => {
+          let call = 0;
+          return async () => (call++ === 0 ? "0".repeat(40) : "1".repeat(40));
+        })(),
       }),
     });
 
@@ -165,6 +231,8 @@ describe("git.commit argv", () => {
       paths: ["-p", "src/app.ts"],
     });
 
+    // A file really named `-p` is a path, not an option — `--` is what keeps
+    // `git add -p` (which waits on stdin forever) from being the command.
     expect(addCalls).toEqual([["--", "-p", "src/app.ts"]]);
     expect(commitCalls[0]).toEqual(["one", ["--", "-p", "src/app.ts"], undefined]);
   });

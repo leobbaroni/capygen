@@ -1486,3 +1486,34 @@ in-progress runtime/import batch; neither Phase 7 nor Phase 8 is marked complete
 Follow-up: the expanded plan test had a redundant property access that TypeScript could not
 narrow from the block union. Astra removed it; Luna confirmed the preceding exact nested-input
 assertion still rejects unknown fields. Native engine typecheck now exits 0 (`$ tsc --noEmit`).
+
+
+### Selected-file commits reviewed and checked
+
+Opus corrected the Diff pane's commit service so missing/empty selections cannot commit the
+whole tree. Astra review caught literal arrow filenames, path remapping, copy sources and
+already-staged deletions; isolated native Git regressions now cover them. Git child environments
+cannot redirect the operation to an inherited repository/index. Unrelated staged and unstaged
+changes remain intact. Luna isolated the legacy workspace Git tests and reviewed Astra's final
+UI fix: late commit success/failure after A→B→A does not clear a new draft or show stale errors.
+
+Native evidence (no model calls):
+
+```text
+corepack pnpm exec vitest run --project desktop test/gitSelection.test.ts
+Test Files 1 passed (1)
+Tests 37 passed (37)
+Duration 14.28s
+
+corepack pnpm exec vitest run --project desktop test/workspaceGit.test.ts
+Tests 13 passed (13)
+
+corepack pnpm exec vitest run --project renderer src/panes/diff/DiffPane.test.tsx
+Test Files 1 passed (1)
+Tests 15 passed (15)
+Duration 4.17s
+```
+
+The two new late-commit cases first failed (2 failed / 13 passed), then passed after the fix.
+This accepts the service/UI corrective task only. Worktree operations, IPC schema tightening,
+the combined full gate and the remaining Phase 7 Done-when checks are still pending.

@@ -428,3 +428,19 @@ paths currently skip before dispatch pending P1 effective runtime-default verifi
 agent-config paths assert the selected model/effort before sending. These tests prove current
 request policy, not live capability when skipped. Plugin listing uses a synthetic isolated
 registry instead of the machine's personal plugins. `testPolicy.spec.ts` covers the guards.
+
+
+### Selected Git commits (Phase 7 corrective prerequisite)
+
+`GitService` uses simple-git 3.36.0 `status().files[].from` only when `index === "R"`.
+The service refuses omitted/empty selections and matches exact changed paths before staging.
+It runs `add -- <paths>` only where staging is needed, then `commit -- <selected paths>`;
+already-staged deletions and rename originals are included only in the commit arguments.
+A copy's source is not selected implicitly. Unrelated staged and working-tree changes remain.
+Successful commit with unavailable HEAD lookup returns success without a SHA.
+
+The client uses `env()`, `core.quotepath=false`, and literal pathspecs, with repository-routing
+and command-override variables removed from the cleaned environment. Installed simple-git
+sets `windowsHide: true` on its child spawns. Native isolated Git tests cover these semantics;
+repeat them when the dependency changes. IPC currently retains its legacy optional `paths`
+type; the service refuses omission, and schema tightening remains an integration follow-up.
