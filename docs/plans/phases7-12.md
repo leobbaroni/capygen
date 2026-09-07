@@ -90,8 +90,9 @@ and a previewed, bounded historical quotation; native-id resume is outside this 
 
 ## Phase 8: Tasks, Inbox, Usage, Automations
 
-Build on existing TasksService, notification tap and usage_events. Map Codex
-`turn/plan/updated` into an observable block first (currently a known Phase 5 gap).
+Build on existing TasksService, notification tap and usage_events. The Codex
+`turn/plan/updated` mapping prerequisite is implemented with synthetic transport tests
+(2026-09-07); full phase acceptance and the Tasks page remain pending.
 
 - Opus: persisted schedule lifecycle, next-run/recovery policy, one run lease per automation,
   no overlap, pause/delete/cancel behavior, app-closed behavior, DST/time-zone semantics and

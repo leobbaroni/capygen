@@ -98,6 +98,7 @@ import {
   type CodexThreadStartResponse,
   type CodexTokenUsageBreakdown,
   type CodexTokenUsageNotification,
+  type CodexTurnPlanUpdatedNotification,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
   type CodexUserInput,
@@ -713,6 +714,10 @@ export class CodexHarness implements Harness {
         this.emitFileChange(next);
         return;
       }
+      case CODEX_NOTIFICATIONS.turnPlanUpdated: {
+        this.onTurnPlanUpdated(params);
+        return;
+      }
       case CODEX_NOTIFICATIONS.threadTokenUsageUpdated: {
         const { tokenUsage } = params as unknown as CodexTokenUsageNotification;
         if (!tokenUsage) return;
@@ -749,6 +754,55 @@ export class CodexHarness implements Harness {
       default:
         return;
     }
+  }
+
+  private onTurnPlanUpdated(rawParams: unknown): void {
+    const turn = this.active;
+    if (!turn || turn.settled || !isRecord(rawParams)) return;
+    const params = rawParams as Partial<CodexTurnPlanUpdatedNotification>;
+    if (params.threadId !== this.threadId || params.turnId !== turn.codexTurnId) return;
+
+    if (typeof params.explanation !== "string" && params.explanation !== null) {
+      this.log.warn("[codex] ignored malformed plan update");
+      return;
+    }
+    if (!Array.isArray(params.plan) || params.plan.length > 200) {
+      this.log.warn("[codex] ignored oversized or malformed plan update");
+      return;
+    }
+    const plan = [] as { step: string; status: "pending" | "inProgress" | "completed" }[];
+    for (const rawStep of params.plan) {
+      if (!isRecord(rawStep)) {
+        this.log.warn("[codex] ignored malformed plan update");
+        return;
+      }
+      const step = rawStep.step;
+      const status = rawStep.status;
+      if (
+        typeof step !== "string" ||
+        (status !== "pending" && status !== "inProgress" && status !== "completed")
+      ) {
+        this.log.warn("[codex] ignored malformed plan update");
+        return;
+      }
+      plan.push({ step, status });
+    }
+
+    const input = { explanation: params.explanation ?? null, plan };
+    if (new TextEncoder().encode(JSON.stringify(input)).byteLength > 64 * 1024) {
+      this.log.warn("[codex] ignored oversized plan update");
+      return;
+    }
+    const key = `plan:${turn.turnId}`;
+    this.emitBlock(key, {
+      kind: "tool_call",
+      name: "update_plan",
+      family: "other",
+      input,
+      output: null,
+      status: "success",
+      toolUseId: key,
+    });
   }
 
   private routeItem(item: CodexItem): void {

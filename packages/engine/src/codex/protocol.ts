@@ -341,6 +341,21 @@ export interface CodexPatchUpdatedNotification {
   changes: CodexFileChange[];
 }
 
+/** `v2/TurnPlanUpdatedNotification.ts` + `TurnPlanStepStatus.ts`. */
+export type CodexTurnPlanStepStatus = "pending" | "inProgress" | "completed";
+
+export interface CodexTurnPlanStep {
+  step: string;
+  status: CodexTurnPlanStepStatus;
+}
+
+export interface CodexTurnPlanUpdatedNotification {
+  threadId: string;
+  turnId: string;
+  explanation: string | null;
+  plan: CodexTurnPlanStep[];
+}
+
 /** `v2/TokenUsageBreakdown.ts`. */
 export interface CodexTokenUsageBreakdown {
   totalTokens?: number;
@@ -536,6 +551,7 @@ export const CODEX_NOTIFICATIONS = {
   reasoningSummaryTextDelta: "item/reasoning/summaryTextDelta",
   commandExecutionOutputDelta: "item/commandExecution/outputDelta",
   fileChangePatchUpdated: "item/fileChange/patchUpdated",
+  turnPlanUpdated: "turn/plan/updated",
   mcpToolCallProgress: "item/mcpToolCall/progress",
   mcpServerStartupStatusUpdated: "mcpServer/startupStatus/updated",
   serverRequestResolved: "serverRequest/resolved",

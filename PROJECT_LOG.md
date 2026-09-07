@@ -1463,3 +1463,22 @@ custom-store load, without spawning Claude or reading a backend home. Astra insp
 probe and checked Codex's pinned `rust-v0.153.4` history/rollout source. This is preparation,
 not completed import UI or phase acceptance. Opus owns isolated parser files while the separate
 runtime settings implementation remains in progress.
+
+### Codex native plan notification mapping
+
+Luna implemented the existing pinned `turn/plan/updated` protocol mapping; Astra reviewed it
+and ran native Windows checks. Valid updates become stable completed `update_plan` blocks for
+the existing Tasks derivation. Foreign/stale turns, invalid statuses, more than 200 entries
+and sanitized payloads above 64 KiB UTF-8 are refused without erasing the prior valid plan.
+Unknown fields are omitted and a valid empty plan clears it. No model or native CLI was called.
+
+```text
+corepack pnpm exec vitest run packages/engine/test/codexPlan.test.ts packages/engine/test/codexHarness.test.ts apps/desktop/test/workspaceTasks.test.ts
+Test Files 3 passed (3)
+Tests 55 passed (55)
+Duration 2.38s
+```
+
+The three new fake-transport cases run the shipping harness; the other suites cover existing
+Codex behavior and task derivation. This closes the mapping gap only. The full gate awaits the
+in-progress runtime/import batch; neither Phase 7 nor Phase 8 is marked complete.
