@@ -19,6 +19,7 @@
 import {
   IMPORT_LIMITS,
   ImportError,
+  type ImportedTranscript,
   type ParseTranscriptOptions,
 } from "../../../../packages/engine/src/imports/index.js";
 
@@ -59,22 +60,10 @@ export interface ImportWorkerRequest {
   limits?: Partial<ImportLimits>;
 }
 
-/** The metadata half of a parsed snapshot — everything except its entries. */
-export interface ImportWorkerSummary {
-  backend: string;
-  format: string;
-  nativeId: string;
-  title: string | null;
-  cwd: string | null;
-  startedAt: string | null;
-  endedAt: string | null;
-  sourceBytes: number;
-  sourceSha256: string;
-  counts: Record<string, number>;
-  warnings: { code: string; message: string; count?: number }[];
-  unknownTypes: { type: string; count: number }[];
-  complete: boolean;
-}
+/** The metadata half of a parsed snapshot — everything except its entries and
+ * source path. Keeping this tied to the parser's output prevents the wire
+ * adapter from widening validated discriminants such as `backend`. */
+export type ImportWorkerSummary = Omit<ImportedTranscript, "entries" | "sourcePath">;
 
 export interface ImportWorkerDone {
   v: number;

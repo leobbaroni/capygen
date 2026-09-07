@@ -620,9 +620,13 @@ describe("late results never publish", () => {
     const pending = h.service.preview({ ownerId: 1, ...PREVIEW });
     await held.entered;
 
-    await h.service.dispose();
+    let disposed = false;
+    const disposing = h.service.dispose().then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
     held.open();
 
+    await disposing;
     expect((await rejection(pending)).code).toBe("cancelled");
     expect(h.files()).toEqual([]);
   });
@@ -862,12 +866,38 @@ describe("consume", () => {
     const commit = vi.fn();
     const pending = h.service.consume(preview.handle, 1, commit);
     await held.entered;
-    await h.service.dispose();
+    let disposed = false;
+    const disposing = h.service.dispose().then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
     held.open();
 
+    await disposing;
     expect((await rejection(pending)).code).toBe("cancelled");
     expect(commit).not.toHaveBeenCalled();
     expect(h.files()).toEqual([]);
+  });
+
+  it("waits for a commit already in progress before completing dispose", async () => {
+    const h = await harness();
+    const preview = await h.service.preview({ ownerId: 1, ...PREVIEW });
+    const held = gate<string>();
+    const pending = h.service.consume(preview.handle, 1, () => {
+      held.enter();
+      return held.wait;
+    });
+    await held.entered;
+
+    let disposed = false;
+    const disposing = h.service.dispose().then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    held.open("committed");
+
+    expect(await pending).toBe("committed");
+    await disposing;
+    expect(h.files()).toEqual([]);
+    expect(h.service.outstanding()).toBe(0);
   });
 
   it("refuses when the destination disappeared between preview and commit", async () => {
@@ -1608,6 +1638,52 @@ describe("cleanup when admission is full", () => {
 });
 
 describe("worker-produced staged files", () => {
+  it("waits for an in-flight worker adoption to settle during dispose", async () => {
+    const dir = tempDir("worker-dispose-adoption");
+    const held = gate();
+    let signal: AbortSignal | null = null;
+    const body = JSON.stringify(snapshot());
+    const stage: StageTranscript = async (_source, resultPath, options) => {
+      signal = options.signal;
+      fs.writeFileSync(resultPath, body, { flag: "wx" });
+      options.onCreated();
+      held.enter();
+      await held.wait;
+      return {
+        resultBytes: Buffer.byteLength(body),
+        summary: {
+          backend: "claude", format: "claude-jsonl-v1", nativeId: "ses_synthetic",
+          title: "synthetic fixture", cwd: "C:/picked", startedAt: null, endedAt: null,
+          sourceBytes: 1234, sourceSha256: "a".repeat(64), counts: snapshot().counts,
+          unknownTypes: [], warnings: [], complete: true,
+        },
+      };
+    };
+    const service = new ImportStagingService({
+      directory: dir,
+      stage,
+      projectExists: () => true,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      maxSnapshotBytes: 8_000,
+      maxStagedBytes: 8_000,
+    });
+    await service.initialize();
+
+    const pending = service.preview({ ownerId: 1, ...PREVIEW });
+    await held.entered;
+    let disposed = false;
+    const disposing = service.dispose().then(() => { disposed = true; });
+    expect((signal as unknown as AbortSignal).aborted).toBe(true);
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    held.open();
+
+    expect((await rejection(pending)).code).toBe("cancelled");
+    await disposing;
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(service.outstanding()).toBe(0);
+  });
+
   it("publishes worker metadata without reading or reserializing the snapshot during preview", async () => {
     const dir = tempDir("worker-adoption");
     const sourcePath = path.join(dir, "selected.jsonl");

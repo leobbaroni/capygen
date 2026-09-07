@@ -262,6 +262,10 @@ interface Operation {
   /** True once the exclusive create succeeded: the only file we may unlink. */
   fileCreated: boolean;
   settling: Promise<void> | null;
+  /** Resolves after this operation's active preview/consume path has reached
+   * its cleanup barrier. Shutdown awaits it before the worker is disposed. */
+  completion: Promise<void>;
+  complete: () => void;
   destinationProjectId: string;
   preview: ImportPreview | null;
   expiresAt: number;
@@ -445,12 +449,18 @@ export class ImportStagingService {
   /** Abandon every window. The service refuses further work afterwards. */
   async dispose(): Promise<void> {
     this.disposed = true;
+    const tracked = [...this.operations];
     const settles: Promise<void>[] = [];
-    for (const op of [...this.operations]) {
+    for (const op of tracked) {
       this.revoke(op);
       if (op.state === "staged" || op.state === "orphaned") settles.push(this.settle(op));
     }
-    await Promise.all(settles);
+    // Writing and consuming operations own their files until their own
+    // continuations enter settle(). Waiting only for already-staged files lets
+    // main tear the worker down and close the profile while those paths are
+    // still adopting, reading or committing. Their completion barriers are
+    // resolved by settle after cleanup succeeds or exhausts its bounded retry.
+    await Promise.all([...settles, ...tracked.map((op) => op.completion)]);
   }
 
   /**
@@ -766,6 +776,8 @@ export class ImportStagingService {
 
   private open(ownerId: number, destinationProjectId: string): Operation {
     const handle = this.newHandle();
+    let complete!: () => void;
+    const completion = new Promise<void>((resolve) => { complete = resolve; });
     const op: Operation = {
       ownerId,
       generation: this.generationOf(ownerId),
@@ -777,6 +789,8 @@ export class ImportStagingService {
       cancelled: false,
       fileCreated: false,
       settling: null,
+      completion,
+      complete,
       destinationProjectId,
       preview: null,
       expiresAt: Number.POSITIVE_INFINITY,
@@ -842,6 +856,7 @@ export class ImportStagingService {
       if (!removed) {
         op.state = "orphaned";
         op.settling = null; // a later attempt may still succeed
+        op.complete();
         return;
       }
       op.state = "settled";
@@ -849,6 +864,7 @@ export class ImportStagingService {
       this.published.delete(op.handle);
       if (this.inFlight.get(op.ownerId) === op) this.inFlight.delete(op.ownerId);
       this.releaseReservation(op);
+      op.complete();
       void previous;
     })();
     return op.settling;
