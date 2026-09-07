@@ -16,3 +16,6 @@ docs/spikes/codex-app-server-schema/v0.139.0-*/
 
 # Staged from assets/ by apps/renderer/scripts/sync-assets.ts on dev/build.
 apps/renderer/public/
+
+# Isolated development workspaces.
+.worktrees/
