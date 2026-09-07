@@ -17,12 +17,22 @@
  * IPC enters a model's context, and no derivation costs a token).
  */
 import type { CapygenStore } from "@capygen/db";
-import type { Block, InvokeArgs, InvokeChannel, InvokeResult } from "@capygen/shared";
+import type {
+  Block,
+  InvokeArgs,
+  InvokeChannel,
+  InvokeResult,
+  WorktreeBranchChoice,
+} from "@capygen/shared";
 import { DevServerService } from "../workspace/DevServerService.js";
 import { FsService } from "../workspace/FsService.js";
 import { GitService } from "../workspace/GitService.js";
 import { TasksService } from "../workspace/TasksService.js";
 import { TerminalService } from "../workspace/TerminalService.js";
+import {
+  WorktreeService,
+  type WorktreeRemovalRisk,
+} from "../workspace/WorktreeService.js";
 import type { BrowserViewHandlers } from "../workspace/BrowserViewService.js";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
 
@@ -41,6 +51,10 @@ export const WORKSPACE_CHANNELS = [
   "git.status",
   "git.diff",
   "git.commit",
+  "worktrees.list",
+  "worktrees.create",
+  "worktrees.register",
+  "worktrees.remove",
   "terminal.create",
   "terminal.write",
   "terminal.resize",
@@ -78,6 +92,7 @@ export interface WorkspaceIpcDeps {
   /** Test seams, forwarded to the individual services. */
   fs?: FsOverrides;
   git?: GitOverrides;
+  worktrees?: WorktreeOverrides;
   terminal?: TerminalOverrides;
   servers?: ServerOverrides;
 }
@@ -87,6 +102,20 @@ type FsOverrides = Pick<
   "createWatcher" | "ripgrepPath"
 >;
 type GitOverrides = Pick<ConstructorParameters<typeof GitService>[0], "createClient">;
+export interface WorktreeOverrides {
+  /** Main's native destination chooser; the renderer never supplies a path. */
+  pickDestination?: (args: {
+    sourceProjectId: string;
+    branch: WorktreeBranchChoice;
+  }) => Promise<string | null>;
+  /** Main's native destructive dialog; it names the exact canonical path. */
+  confirmRemoval?: (risk: WorktreeRemovalRisk) => boolean | Promise<boolean>;
+  /** Live runner activity that may not yet be reflected in a session row. */
+  isActive?: (path: string) => boolean | Promise<boolean>;
+  /** Test seams for the Git child boundary. */
+  runGit?: ConstructorParameters<typeof WorktreeService>[0]["runGit"];
+  env?: ConstructorParameters<typeof WorktreeService>[0]["env"];
+}
 type TerminalOverrides = Pick<
   ConstructorParameters<typeof TerminalService>[0],
   "spawnPty" | "resolveShell" | "env" | "killTree"
@@ -104,6 +133,7 @@ export interface WorkspaceIpc {
    *  rather than a channel (tests, and `main.ts`'s shutdown). */
   readonly fs: FsService;
   readonly git: GitService;
+  readonly worktrees: WorktreeService;
   readonly terminals: TerminalService;
   readonly servers: DevServerService;
   readonly tasks: TasksService;
@@ -115,6 +145,19 @@ export function createWorkspaceIpc(deps: WorkspaceIpcDeps): WorkspaceIpc {
 
   const fs = new FsService({ store, broadcast, log, ...(deps.fs ?? {}) });
   const git = new GitService({ store, log, ...(deps.git ?? {}) });
+  const worktrees = new WorktreeService({
+    store,
+    log,
+    ...(deps.worktrees?.runGit ? { runGit: deps.worktrees.runGit } : {}),
+    ...(deps.worktrees?.env ? { env: deps.worktrees.env } : {}),
+    isActive: deps.worktrees?.isActive ?? (() => false),
+    confirmRemove: (risk) => {
+      if (!deps.worktrees?.confirmRemoval) {
+        throw new Error("worktrees.remove: no native destructive confirmation is wired");
+      }
+      return deps.worktrees.confirmRemoval(risk);
+    },
+  });
   const terminals = new TerminalService({ store, broadcast, log, ...(deps.terminal ?? {}) });
   const servers = new DevServerService({ store, broadcast, log, ...(deps.servers ?? {}) });
   const tasks = new TasksService({ store, broadcast, log });
@@ -141,6 +184,21 @@ export function createWorkspaceIpc(deps: WorkspaceIpcDeps): WorkspaceIpc {
     "git.status": (args) => git.status(args),
     "git.diff": (args) => git.diff(args),
     "git.commit": (args) => git.commit(args),
+
+    "worktrees.list": (args) => worktrees.list(args),
+    "worktrees.create": async (args) => {
+      if (!deps.worktrees?.pickDestination) {
+        throw new Error("worktrees.create: no native destination picker is wired");
+      }
+      // Validate source/ref before opening native UI, then `create` repeats the
+      // checks after the awaited dialog to close the branch-occupancy race.
+      await worktrees.validateCreate(args);
+      const destinationPath = await deps.worktrees.pickDestination(args);
+      if (destinationPath === null) return null;
+      return worktrees.create({ ...args, destinationPath });
+    },
+    "worktrees.register": (args) => worktrees.register(args),
+    "worktrees.remove": (args) => worktrees.remove(args),
 
     "terminal.create": (args) => terminals.create(args),
     "terminal.write": (args) => terminals.write(args),
@@ -173,6 +231,7 @@ export function createWorkspaceIpc(deps: WorkspaceIpcDeps): WorkspaceIpc {
     observeBlock: (block) => tasks.observeBlock(block),
     fs,
     git,
+    worktrees,
     terminals,
     servers,
     tasks,

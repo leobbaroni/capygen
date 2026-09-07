@@ -65,7 +65,7 @@ afterEach(async () => {
 describe("contract coverage", () => {
   it("every workspace channel in the shared contract is answered here", () => {
     const declared = INVOKE_CHANNEL_NAMES.filter((name) =>
-      /^(layout|fs|git|terminal|servers|tasks|browser)\./.test(name),
+      /^(layout|fs|git|worktrees|terminal|servers|tasks|browser)\./.test(name),
     );
     expect([...WORKSPACE_CHANNELS].sort()).toEqual([...declared].sort());
   });
@@ -78,6 +78,26 @@ describe("contract coverage", () => {
 });
 
 describe("round trips through the contract", () => {
+  it("validates the source repository before opening the native worktree picker", async () => {
+    const pickDestination = vi.fn(async () => path.join(h.dir, "never-picked"));
+    const workspace = createWorkspaceIpc({
+      store: h.store,
+      broadcast: h.broadcast,
+      log: h.log,
+      worktrees: { pickDestination },
+      fs: { ripgrepPath: () => null },
+    });
+    try {
+      await expect(workspace.handlers["worktrees.create"]({
+        sourceProjectId: h.projectId,
+        branch: { mode: "new", name: "feature/x", base: "HEAD" },
+      })).rejects.toMatchObject({ code: "not-repository" });
+      expect(pickDestination).not.toHaveBeenCalled();
+    } finally {
+      await workspace.dispose();
+    }
+  });
+
   it("layout.set then layout.get", async () => {
     expect(await call("layout.get", { projectId: h.projectId })).toBeNull();
     const layout = { grid: { root: { type: "branch" } }, panels: {} };
