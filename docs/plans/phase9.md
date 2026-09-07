@@ -33,3 +33,28 @@ Start: accepted Phase 8 `f80500c`; fresh baseline 1883 unit passes / 4 skips, ty
 
 All unchecked work above is pending. Migration 0009 is allocated to share persistence; 0010 to local policies/members;
 never reuse a number assigned to another task. No new phase is accepted by this file.
+
+
+## MCP catalogue integration findings (Astra, 2026-09-07)
+
+Reuse persisted agent.config.<backend>.mcpServers for credential-free session additions;
+IntegrationsService.resolveMcpServers already merges these at highest precedence. Do not add
+a shadow session MCP table. Authenticated registrations remain in backend stores/safeStorage.
+The session editor updates the existing agent config path and respects harness restart rules.
+
+Keep informational tool DTOs separate from SlashCommand. SlashMenu accepts serverName/name
+rows already, with no selection execution. Composer/runtime wiring remains pending.
+Use native runtime metadata rather than connecting duplicate MCP clients for native backends:
+
+- Installed Claude SDK sdk.d.ts:1117 exposes McpServerStatus.tools (name/description), and
+  Query.mcpServerStatus() at 2765. ClaudeHarness.ensureQuery can initialize its existing
+  streaming query; catalogue discovery must not enqueue a prompt or make a model call.
+- Pinned Codex mcpServerStatus/list supports threadId and returns server tools. Query the
+  same thread/client; do not spawn an extra configured stdio server for catalogue display.
+- API can reuse its existing reference-counted McpClientPool and cached listTools result.
+
+Discovery is explicit/lazy, with bounded names/status metadata only across IPC—no schemas,
+URLs, env, headers or raw backend failures. A failed/not-started catalogue is visible, not an
+empty list claimed to prove no tools. Refresh after supported config changes without silently
+showing an old lifecycle as current. Native/fixture tests must prove metadata only, no model
+prompt, and no duplicate server spawn. These findings are not implementation acceptance.

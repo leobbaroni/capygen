@@ -7,6 +7,7 @@ export * from "./ids.js";
 export * from "./constants.js";
 export * from "./imports.js";
 export * from "./shares.js";
+export * from "./localPolicies.js";
 export * from "./worktrees.js";
 export * from "./automations.js";
 export * from "./inbox.js";

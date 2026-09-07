@@ -2078,3 +2078,24 @@ returned MS-2057-80-DESK / en-GB; it never opened the microphone. Font metadata/
 checked by Astra and Luna: the TTF carries CC0 - No Rights Reserved. Packaging preservation
 checks remain listed rather than claimed done. Handoff now distinguishes these partial
 results from accepted Phases 7–8 and corrects the obsolete Codex config-only claim.
+
+
+## Phase 9 local rule/member contract — 2026-09-07
+
+Astra defined strict boundary/scope/member record schemas; Opus review caught implicit
+Codex fallback for future boundaries and control/bidi characters in profile labels. Both
+were fixed: exhaustive mapping, safe labels, and explicit ephemeral capability availability.
+Scoped tool names may contain literal @. Runtime matching stays in one main-process evaluator;
+UI previews will query it. Natural-key/built-in-owner constraints and grant/audit contracts
+are sequenced with migration 0010/service work; this schema alone enforces no runtime policy.
+Opus re-review closed the contract findings and confirmed sequencing.
+```text
+corepack pnpm exec vitest run packages/shared/src/localPolicies.test.ts
+review red: 2 failed | 2 passed (4)
+review green: 4 passed (4)
+corepack pnpm --filter @capygen/shared typecheck
+$ tsc --noEmit
+```
+Logs: e2e-out/phase9-policy-contract-review-red.log, -green.log and
+phase9-policy-contract-typecheck.log. Subsequent combined codec/contract confirmation also
+passed all four policy tests. Per-agent capability scope is clarified in ADR-0007.

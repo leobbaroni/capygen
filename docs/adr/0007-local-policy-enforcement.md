@@ -43,6 +43,10 @@ Codex approval restrictions under `never`). Global rules may be stored for futur
 sessions; dispatch refuses affected sessions whose boundary cannot satisfy their rules.
 Every dispatch refusal names the unavailable boundary and links to the owning rule/scope
 editor, just like a per-tool refusal. Do not silently change approvalPolicy/sandbox settings.
+Capability availability belongs to the specific agent and captured harness lifecycle. Never
+union one agent's supported boundaries into another agent's authorization. Dispatch checks the
+actual target backend; a Codex-only global rule does not block an API-only target. Delegated
+children and automation runs receive their own checks.
 Codex MCP/web/native-spawn interception remains unavailable until a concrete supported path
 is proved. `never` approval mode cannot advertise native approval-category enforcement.
 
