@@ -16,6 +16,7 @@ import { TasksPage } from "@/pages/TasksPage";
 import { InboxPage } from "@/pages/InboxPage";
 import { UsagePage } from "@/pages/UsagePage";
 import { AutomationsPage } from "@/pages/AutomationsPage";
+import { HostsPage } from "@/pages/HostsPage";
 import { useAppStore } from "@/store/appStore";
 
 export function App() {
@@ -35,6 +36,7 @@ export function App() {
           <Route path="/inbox" element={<InboxPage />} />
           <Route path="/usage" element={<UsagePage />} />
           <Route path="/automations" element={<AutomationsPage />} />
+          <Route path="/hosts" element={<HostsPage />} />
           <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
           <Route path="/settings/:section" element={<SettingsPage />} />
           {/* Fixture page for every card kind (B4 evidence) — dev-only, never

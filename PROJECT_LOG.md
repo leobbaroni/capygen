@@ -1978,3 +1978,27 @@ Duration 1.21s
 ```
 Evidence: e2e-out/phase9-share-schema-test.log. This accepts a contract subtask only;
 Phase 9 remains open. Migration 0009 is now allocated exclusively to the share DB worker.
+
+
+## Phase 10 local Hosts subtask — 2026-09-07
+
+Luna added the local Hosts route/sidebar and catalogue status/model counts using existing
+harness.list, with refresh/error states and configuration links. Astra reviewed implementation
+and desktop/narrow screenshots. The first native focused verification caught fixture wording
+mismatches, corrected before the final run; this was not a red-first implementation.
+Astra added an isolated Electron test; Luna review prompted stronger observable refresh
+assertions and cleanup covering launch/close failures. Re-review found no medium/high issues.
+```text
+corepack pnpm exec vitest run apps/renderer/src/pages/HostsPage.test.tsx apps/renderer/src/shell/Sidebar.test.tsx
+Test Files 2 passed (2)
+Tests 9 passed (9)
+corepack pnpm --filter @capygen/renderer typecheck
+Done
+corepack pnpm --filter @capygen/renderer build
+built successfully
+corepack pnpm exec playwright test tests/e2e/hosts.spec.ts
+1 passed (3.4s)
+```
+Logs: e2e-out/phase10-hosts-focused.log, phase10-hosts-build.log and phase10-hosts-e2e.log;
+screenshots: e2e-out/hosts/desktop.png and narrow.png. The final refresh fixture is model-free.
+Phase 10 remains open for dictation, terminal attach and extensions; full phase gate pending.
