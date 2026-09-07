@@ -1547,3 +1547,29 @@ The real SDK fixture uses owned homes and the production read-only custom store;
 no CLI/model call. Exact parser shapes and bounds are in COMPAT.md. Parser code and fixtures
 are accepted; native picker, isolated production worker, staging, database import,
 read-only UI, continuation and the combined full gate remain pending. Phase 7 stays open.
+
+### Phase 7 continuation reference formatter — accepted prerequisite
+
+Astra implemented a pure formatter for the accepted 6,000-byte continuation reference.
+It quotes inert labels/content as JSON lines, keeps a chronological recent tail, shortens
+only its earliest retained entry on Unicode boundaries, and budgets the complete wrapper
+and omission notices. Luna independently reviewed it with no actionable findings.
+
+Native focused evidence:
+
+```
+corepack pnpm vitest run --project engine packages/engine/test/importContinuation.test.ts
+Test Files 1 passed (1)
+Tests 5 passed (5)
+Duration 805ms
+
+cd packages/engine && corepack pnpm exec tsc --noEmit
+exit 0
+```
+
+The first test run failed at module loading before the implementation existed; no behavioral
+red-test claim is made for that run. Cases cover escaped hostile-looking text, recent-tail
+order, multi-byte/escaped byte limits, historical truncation and empty artifacts. Connecting
+this exact reference to preview, persisted provenance and all three backend requests remains
+pending; this task does not establish continuation delivery or close Phase 7.
+

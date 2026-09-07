@@ -161,6 +161,8 @@ export function createHarnessForBackend(
 // Inert transcript parsing; callers supply the isolated Claude reconstruction boundary.
 export {
   parseTranscriptFile,
+  buildImportReference,
+  IMPORT_REFERENCE_MAX_BYTES,
   createSdkChainReconstructor,
   ImportError,
   IMPORT_LIMITS,

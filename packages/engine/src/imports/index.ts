@@ -47,3 +47,4 @@ export {
 } from "./claude.js";
 export { CODEX_ROLLOUT_TYPES, CODEX_TRANSCRIPT_FORMAT, createCodexCollector } from "./codex.js";
 export type { CollectorSource, TranscriptCollector } from "./collector.js";
+export { buildImportReference, IMPORT_REFERENCE_MAX_BYTES } from "./continuation.js";
