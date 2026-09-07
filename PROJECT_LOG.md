@@ -1482,3 +1482,7 @@ Duration 2.38s
 The three new fake-transport cases run the shipping harness; the other suites cover existing
 Codex behavior and task derivation. This closes the mapping gap only. The full gate awaits the
 in-progress runtime/import batch; neither Phase 7 nor Phase 8 is marked complete.
+
+Follow-up: the expanded plan test had a redundant property access that TypeScript could not
+narrow from the block union. Astra removed it; Luna confirmed the preceding exact nested-input
+assertion still rejects unknown fields. Native engine typecheck now exits 0 (`$ tsc --noEmit`).

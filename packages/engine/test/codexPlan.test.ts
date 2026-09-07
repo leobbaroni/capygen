@@ -46,7 +46,6 @@ describe("CodexHarness turn/plan/updated", () => {
     expect(plans[0]?.key).toBe("plan:turn_row");
     expect(plans[1]).toMatchObject({ key: "plan:turn_row", patch: { name: "update_plan", status: "success", input: { plan: [] } } });
     expect(plans[0]?.patch).toEqual(expect.objectContaining({ input: { explanation: "first", plan: [{ step: "one", status: "pending" }] } }));
-    expect(plans[0]?.patch.input).not.toHaveProperty("unknown");
     await harness.dispose();
   });
 
