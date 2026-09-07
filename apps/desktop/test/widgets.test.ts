@@ -5,7 +5,7 @@
  */
 import { deepStrictEqual, match, ok, rejects, strictEqual } from "node:assert/strict";
 import { describe, it } from "vitest";
-import type { WidgetMcpAccess } from "@capygen/engine";
+import type { McpServerConfig, WidgetMcpAccess } from "@capygen/engine";
 import {
   WIDGET_SCHEME_PRIVILEGES,
   createWidgetHost,
@@ -104,6 +104,57 @@ describe("serve", () => {
     const { handlers } = host();
     strictEqual(handlers.serve("capygen-widget://blkunknown/index.html"), null);
     strictEqual(handlers.serve("not a url"), null);
+  });
+});
+
+describe("captured server lists", () => {
+  it("refuses the shipping path when no harness snapshot was captured", async () => {
+    const handlers = createWidgetHost({
+      log: silent,
+      projectPathFor: () => PROJECT,
+    });
+    await rejects(() => handlers.bridgeFor("ses_1", "agt_1"), /no MCP server snapshot/);
+  });
+
+  it("keeps two agents in one session on their own same-name server configuration", async () => {
+    const received: (readonly McpServerConfig[])[] = [];
+    const fake = access();
+    const handlers = createWidgetHost({
+      log: silent,
+      projectPathFor: (sessionId) => (sessionId === "ses_1" ? PROJECT : null),
+      createAccess: async (_project, servers) => {
+        received.push(servers ?? []);
+        return fake.access;
+      },
+    });
+    const one: McpServerConfig[] = [{ name: "shared", transport: "stdio", command: "one", source: "agent" }];
+    const two: McpServerConfig[] = [{ name: "shared", transport: "stdio", command: "two", source: "agent" }];
+    handlers.captureSession?.("ses_1", "agt_1", one);
+    handlers.captureSession?.("ses_1", "agt_2", two);
+    await handlers.detect({ ...OPEN, agentId: "agt_1", toolName: "mcp__fixture__show_card" });
+    await handlers.detect({ ...OPEN, agentId: "agt_2", toolName: "mcp__fixture__show_card" });
+    deepStrictEqual(received.map((servers) => servers[0]?.command), ["one", "two"]);
+    await handlers.dispose();
+  });
+
+  it("does not rebind an existing block after its agent captures a replacement list", async () => {
+    const received: (readonly McpServerConfig[])[] = [];
+    const fake = access();
+    const handlers = createWidgetHost({
+      log: silent,
+      projectPathFor: () => PROJECT,
+      createAccess: async (_project, servers) => { received.push(servers ?? []); return fake.access; },
+    });
+    handlers.captureSession?.("ses_1", "agt_1", [
+      { name: "fixture", transport: "stdio", command: "old", source: "agent" },
+    ]);
+    await handlers.open(OPEN);
+    handlers.captureSession?.("ses_1", "agt_1", [
+      { name: "fixture", transport: "stdio", command: "new", source: "agent" },
+    ]);
+    await handlers.open(OPEN);
+    deepStrictEqual(received.map((servers) => servers[0]?.command), ["old"]);
+    await handlers.dispose();
   });
 });
 

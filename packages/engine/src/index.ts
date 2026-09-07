@@ -162,6 +162,7 @@ export function createHarnessForBackend(
 export {
   parseTranscriptFile,
   buildImportReference,
+  IMPORTED_REFERENCE_SPEAKER_LABEL,
   IMPORT_REFERENCE_MAX_BYTES,
   createSdkChainReconstructor,
   ImportError,

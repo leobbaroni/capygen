@@ -1,4 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi, beforeEach } from "vitest";
 import { UsagePage } from "./UsagePage";
 
@@ -7,8 +9,19 @@ vi.mock("@/lib/ipc", () => ({ ipc: () => ({ invoke, on: () => () => {} }) }));
 beforeEach(() => invoke.mockClear());
 
 it("renders unknown cost events explicitly instead of treating them as zero", async () => {
-  render(<UsagePage />);
+  render(<MemoryRouter><UsagePage /></MemoryRouter>);
   await waitFor(() => expect(screen.getByText("Unknown cost events")).toBeTruthy());
   expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: "Review" }).getAttribute("href")).toBe("/c/s1");
   expect(invoke).toHaveBeenCalledWith("usage.report", expect.objectContaining({ timeZone: expect.any(String), from: expect.any(Number), to: expect.any(Number) }));
+});
+
+it("hides the previous report when the selected range fails", async () => {
+  const user = userEvent.setup();
+  render(<MemoryRouter><UsagePage /></MemoryRouter>);
+  await screen.findByRole("link", { name: "Review" });
+  invoke.mockRejectedValueOnce(new Error("Invalid range"));
+  await user.click(screen.getByRole("button", { name: "Custom" }));
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("link", { name: "Review" })).toBeNull();
 });

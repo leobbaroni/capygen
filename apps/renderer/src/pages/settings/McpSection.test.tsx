@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerEntry } from "@capygen/shared";
 import { useAppStore } from "@/store/appStore";
-import { McpSection, envRecord, readOnlyReason, scopeOptionsFor } from "./McpSection";
+import { McpSection, envRecord, parseArgs, readOnlyReason, scopeOptionsFor, secretMutation } from "./McpSection";
 
 const invoke = vi.fn();
 vi.mock("@/lib/ipc", () => ({
@@ -333,6 +333,24 @@ describe("envRecord", () => {
     expect(envRecord([{ key: " API_KEY ", value: "v" }, { key: "  ", value: "ignored" }])).toEqual({
       API_KEY: "v",
     });
+  });
+});
+
+describe("parseArgs", () => {
+  it("keeps spaces and Windows paths inside one line", () => {
+    expect(parseArgs("--flag\nC:\\Program Files\\server.js\nvalue with spaces")).toEqual([
+      "--flag", "C:\\Program Files\\server.js", "value with spaces",
+    ]);
+  });
+});
+
+describe("secretMutation", () => {
+  it("preserves blank existing values, replaces edited values, and removes deleted keys", () => {
+    expect(secretMutation([
+      { key: "KEEP", value: "" },
+      { key: "CHANGE", value: "next" },
+      { key: "NEW", value: "value" },
+    ], ["KEEP", "CHANGE", "REMOVE"])).toEqual({ CHANGE: "next", NEW: "value", REMOVE: null });
   });
 });
 

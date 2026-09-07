@@ -7,7 +7,7 @@
  * every id renders *something* when routed to, so the two can't drift apart.
  */
 import type { ComponentType } from "react";
-import { NavLink, useParams } from "react-router-dom";
+import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { SelectedProjectNote } from "@/components/settings/primitives";
 import { cn } from "@/lib/utils";
 import { findSettingsSection, SETTINGS_NAV_GROUPS } from "@/shell/settingsNav";
@@ -25,9 +25,9 @@ import { ToolsSection } from "./settings/ToolsSection";
 import { DevServersSection } from "./settings/DevServersSection";
 import { PrereqsSection } from "./settings/PrereqsSection";
 import { DiagnosticsSection } from "./settings/DiagnosticsSection";
+import { ImportSection } from "./settings/ImportSection";
 import {
   AccountSection,
-  ImportSection,
   LegacyIntegrationsSection,
   LocalCliSection,
   MembersSection,
@@ -73,19 +73,20 @@ const SECTION_BODIES: Record<string, ComponentType> = {
 const PROJECT_SCOPED_SECTIONS = new Set(["mcp", "skills", "plugins", "tools"]);
 
 export function SettingsPage() {
+  const navigate = useNavigate();
   const { section = "general" } = useParams();
   const current = findSettingsSection(section);
   const Body = SECTION_BODIES[current.id];
 
   return (
-    <div className="flex min-h-0 flex-1" data-testid="settings-page">
+    <div className="flex min-h-0 min-w-0 flex-1" data-testid="settings-page">
       <nav
         aria-label="Settings sections"
         data-testid="settings-nav"
         // The drag strip is fixed across the top 36px of the window, so the
         // first link would sit under it and clicking it would drag the window
         // instead of navigating.
-        className="titlebar-top-clearance flex w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border-weak p-3"
+        className="titlebar-top-clearance hidden w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border-weak p-3 md:flex"
       >
         {SETTINGS_NAV_GROUPS.map((group) => (
           <div key={group.title} className="flex flex-col gap-0.5">
@@ -118,7 +119,10 @@ export function SettingsPage() {
         ))}
       </nav>
 
-      <div className="titlebar-clearance min-h-0 flex-1 overflow-y-auto p-8" data-testid="settings-body">
+      <div className="titlebar-clearance min-h-0 min-w-0 flex-1 overflow-y-auto p-4 max-md:!pt-12 max-md:!pr-4 sm:p-8" data-testid="settings-body">
+        <select aria-label="Settings section" value={current.id} onChange={(event) => navigate(`/settings/${event.target.value}`)} className="mb-4 w-full rounded-md border border-border bg-background p-2 md:hidden">
+          {SETTINGS_NAV_GROUPS.map((group) => <optgroup key={group.title} label={group.title}>{group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</optgroup>)}
+        </select>
         <h1 className="mb-1 text-3xl font-normal tracking-[-0.03em]">{current.label}</h1>
         <div className="mt-6 max-w-2xl">
           {PROJECT_SCOPED_SECTIONS.has(current.id) ? <SelectedProjectNote /> : null}

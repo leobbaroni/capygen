@@ -96,7 +96,60 @@ describe("projects", () => {
   });
 });
 
+describe("automation dispatch", () => {
+  it("uses the selected agent's latest configuration and persists only agent completion in Inbox", async () => {
+    const { sessionId } = await newSession();
+    const source = store.sessions.agents(sessionId)[0]!;
+    const automation = await ipc.handlers["automations.create"]({
+      projectId: store.sessions.get(sessionId)!.projectId,
+      agentId: source.id, name: "Check project", prompt: "scheduled fixture",
+      rrule: "FREQ=MINUTELY", timeZone: "UTC", scheduleAnchorAt: Math.floor(Date.now() / 60_000) * 60_000,
+    });
+    await ipc.handlers["automations.update"]({ id: automation.id, patch: { enabled: false } });
+    store.sessions.updateAgent(source.id, { config: { claude: { effort: "low" } } });
+    const run = await ipc.handlers["automations.runNow"]({ id: automation.id });
+    expect(run.sessionId).toBeTruthy();
+    expect(run.sessionId).not.toBe(sessionId);
+    expect(store.sessions.agents(run.sessionId!)[0]?.config).toEqual({ claude: { effort: "low" } });
+    expect(store.inbox.list()).toHaveLength(0);
+    await vi.waitFor(() => expect(store.automations.getRun(run.id)?.status).toBe("succeeded"));
+    const inbox = store.inbox.list();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ kind: "finished", sessionId: run.sessionId });
+    expect(store.turns.get(inbox[0]!.turnId)?.role).toBe("agent");
+  });
+});
+
 describe("sessions", () => {
+  it("refuses inline MCP credentials at every agent write and redacts unsupported legacy rows", async () => {
+    const project = (await call("projects.pick", {})) as { id: string };
+    const config = { api: { mcpServers: { private: { command: "node", env: { TOKEN: "secret" } } } } };
+    await expect(call("sessions.create", {
+      projectId: project.id,
+      agents: [{ name: "api", backend: "api", model: "claude-opus-4-5", role: "lead", config }],
+    })).rejects.toThrow(/Settings > MCP servers/);
+
+    const { sessionId } = await newSession();
+    await expect(call("agents.add", {
+      sessionId, backend: "api", model: "claude-opus-4-5", config,
+    })).rejects.toThrow(/Settings > MCP servers/);
+    const agent = store.sessions.agents(sessionId)[0]!;
+    await expect(call("agents.update", { agentId: agent.id, patch: { config } })).rejects.toThrow(
+      /Settings > MCP servers/,
+    );
+
+    // A row written by an older build is never echoed to a renderer, even
+    // though the database remains untouched until the user replaces it.
+    store.sessions.updateAgent(agent.id, { config });
+    const listed = (await call("agents.list", { sessionId })) as { config: unknown }[];
+    expect(JSON.stringify(listed)).not.toContain("secret");
+    const loaded = (await call("sessions.get", { sessionId })) as { agents: { config: unknown }[] };
+    expect(JSON.stringify(loaded.agents)).not.toContain("secret");
+    const updated = await call("agents.update", { agentId: agent.id, patch: { displayName: "Renamed" } });
+    expect(JSON.stringify(updated)).not.toContain("secret");
+    expect(JSON.stringify(eventsOn("agents.updated").at(-1))).not.toContain("secret");
+  });
+
   it("creates a default lead agent from settings when none is supplied", async () => {
     const project = (await call("projects.pick", {})) as { id: string };
     const created = (await call("sessions.create", { projectId: project.id })) as {

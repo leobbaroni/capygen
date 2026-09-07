@@ -615,7 +615,10 @@ export const useAppStore = create<AppState>()((set, get) => {
       if (!loaded) return;
       // Opening a session points the window at that session's project, so
       // Settings ▸ MCP/Skills/Tools show the same project the agent runs in.
-      set({ selectedProjectId: loaded.session.projectId });
+      set((state) => ({
+        selectedProjectId: loaded.session.projectId,
+        sessions: [loaded.session, ...state.sessions.filter((item) => item.id !== loaded.session.id)],
+      }));
       // The main process still holds the hop the cap refused; rebuild the
       // Continue bar from that rather than from an event this renderer may
       // never have heard. `turnId` is the chain's last agent turn, which is

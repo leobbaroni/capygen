@@ -50,6 +50,7 @@ import type {
   ToolPolicyScope,
 } from "@capygen/shared";
 import type { EnvRecord } from "../env.js";
+import type { McpServerConfig } from "../mcp/client/types.js";
 import {
   nodeCliRunner,
   parseJsonOutput,
@@ -96,6 +97,12 @@ interface ClaudeReadContext {
   chain: { file: string; values: Record<string, unknown> }[];
   globalConfig: Record<string, unknown> | undefined;
 }
+
+type InternalMcpEntry = McpServerEntry & {
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  cwd?: string;
+};
 
 /** `permissions.<bucket>` ⇄ `ToolPolicyDecision`. */
 const DECISION_BUCKET: Record<ToolPolicyDecision, "allow" | "deny" | "ask"> = {
@@ -150,12 +157,18 @@ export class ClaudeConfigStore {
     const ctx = this.context();
     const plugins = this.readPlugins(ctx);
     return {
-      mcpServers: this.readMcpServers(plugins, ctx),
+      mcpServers: this.readMcpServers(plugins, ctx).map(publicMcpEntry),
       plugins,
       skills: this.readSkills(plugins, ctx),
       tools: this.readToolPolicies(ctx),
       marketplaces: this.readMarketplaces(),
     };
+  }
+
+  /** Full values for the main-process runtime resolver; never sent over IPC. */
+  runtimeMcpServers(): McpServerConfig[] {
+    const ctx = this.context();
+    return this.readMcpServers(this.readPlugins(ctx), ctx).map(runtimeMcpEntry);
   }
 
   /** The files every sub-read shares, parsed once. */
@@ -170,7 +183,7 @@ export class ClaudeConfigStore {
 
   /** `readMcpServers` over a freshly-read context — the shape every write's
    *  read-back needs. */
-  private currentMcpServers(): McpServerEntry[] {
+  private currentMcpServers(): InternalMcpEntry[] {
     const ctx = this.context();
     return this.readMcpServers(this.readPlugins(ctx), ctx);
   }
@@ -200,8 +213,8 @@ export class ClaudeConfigStore {
   private readMcpServers(
     plugins: PluginEntry[],
     ctx: ClaudeReadContext = this.context(),
-  ): McpServerEntry[] {
-    const out: McpServerEntry[] = [];
+  ): InternalMcpEntry[] {
+    const out: InternalMcpEntry[] = [];
     const globalConfig = ctx.globalConfig;
 
     // user scope — `.claude.json` → mcpServers
@@ -457,10 +470,12 @@ export class ClaudeConfigStore {
 
   async addMcpServer(scope: McpServerScope, draft: McpServerEntryDraft): Promise<McpServerEntry> {
     this.assertWritableMcpScope(scope, draft.name);
+    this.assertNativeMcpDraft(scope, draft);
     if (scope === "project") {
       this.writeProjectMcpJson((servers) => {
         servers[draft.name] = mcpServerJson(draft);
       });
+      if (draft.enabled !== undefined) this.setProjectMcpApproval(draft.name, draft.enabled);
     } else {
       await runCliOrThrow(this.run, this.bin, this.mcpAddArgs(scope, draft), this.cliOptions());
     }
@@ -472,7 +487,7 @@ export class ClaudeConfigStore {
         `capygen added the MCP server "${draft.name}" (${scope}) but could not read it back`,
       );
     }
-    return written;
+    return publicMcpEntry(written);
   }
 
   async updateMcpServer(
@@ -489,7 +504,9 @@ export class ClaudeConfigStore {
     const command = patch.command ?? existing.command;
     const args = patch.args ?? existing.args;
     const url = patch.url ?? existing.url;
-    const env = patch.env ?? existing.env;
+    const env = mergeSecretMap(existing.env, patch.env);
+    const headers = mergeSecretMap(existing.headers, patch.headers);
+    const cwd = patch.cwd ?? existing.cwd;
     const merged: McpServerEntryDraft = {
       name: patch.name ?? existing.name,
       transport: patch.transport ?? existing.transport,
@@ -497,14 +514,22 @@ export class ClaudeConfigStore {
       ...(args !== undefined ? { args } : {}),
       ...(url !== undefined ? { url } : {}),
       ...(env !== undefined ? { env } : {}),
+      ...(headers !== undefined ? { headers } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
       source: patch.source ?? existing.source,
       enabled: patch.enabled ?? existing.enabled,
     };
+    // Validate the complete replacement before the CLI removes the old row.
+    // Claude has no `mcp update`, so rejecting afterwards would lose a working
+    // server while reporting only an unsupported-field error.
+    this.assertNativeMcpDraft(scope, merged);
     if (scope === "project") {
       this.writeProjectMcpJson((servers) => {
         delete servers[name];
         servers[merged.name] = mcpServerJson(merged);
       });
+      if (name !== merged.name) this.removeProjectMcpApproval(name);
+      this.setProjectMcpApproval(merged.name, merged.enabled ?? false);
     } else {
       // The CLI has no `mcp update`: remove then add is what `claude mcp add`
       // itself does for an existing name, and doing it in this order means a
@@ -518,7 +543,7 @@ export class ClaudeConfigStore {
     if (!written) {
       throw new Error(`capygen updated "${name}" (${scope}) but could not read it back`);
     }
-    return written;
+    return publicMcpEntry(written);
   }
 
   async removeMcpServer(scope: McpServerScope, name: string): Promise<{ ok: boolean }> {
@@ -567,6 +592,9 @@ export class ClaudeConfigStore {
     const args = ["mcp", "add", "-s", scope];
     if (draft.transport !== "stdio") args.push("--transport", draft.transport);
     for (const [key, value] of Object.entries(draft.env ?? {})) args.push("-e", `${key}=${value}`);
+    for (const [key, value] of Object.entries(draft.headers ?? {})) {
+      args.push("--header", `${key}: ${value}`);
+    }
     args.push(draft.name);
     if (draft.transport === "stdio") {
       if (!draft.command) throw new Error(`stdio MCP server "${draft.name}" needs a command`);
@@ -580,6 +608,28 @@ export class ClaudeConfigStore {
     return args;
   }
 
+  /** Reject values Claude 2.1's CLI/SDK silently discard. */
+  private assertNativeMcpDraft(scope: McpServerScope, draft: McpServerEntryDraft): void {
+    if (draft.cwd !== undefined) {
+      throw new Error(
+        `Claude MCP servers do not support a per-server cwd ("${draft.cwd}"); ` +
+          "use an absolute command/argument path or a wrapper command instead",
+      );
+    }
+    if (draft.transport === "stdio" && Object.keys(draft.headers ?? {}).length > 0) {
+      throw new Error("Claude stdio MCP servers do not support HTTP headers");
+    }
+    if (draft.transport !== "stdio" && Object.keys(draft.env ?? {}).length > 0) {
+      throw new Error("Claude HTTP/SSE MCP servers do not support process environment variables");
+    }
+    if (scope !== "project" && draft.enabled === false) {
+      throw new Error(
+        `Claude cannot persistently disable a ${scope}-scope MCP server; ` +
+          "remove it instead, or use a project-scope .mcp.json server with Claude's approval controls",
+      );
+    }
+  }
+
   private writeProjectMcpJson(mutate: (servers: Record<string, unknown>) => void): void {
     const file = this.paths.projectMcpJson;
     if (!file) throw new Error("no project directory for .mcp.json");
@@ -587,6 +637,34 @@ export class ClaudeConfigStore {
       const servers = asRecord(root.mcpServers) ?? {};
       mutate(servers);
       root.mcpServers = servers;
+    });
+  }
+
+  /** `.mcp.json` enablement is stored in Claude's project-local approval lists. */
+  private setProjectMcpApproval(name: string, enabled: boolean): void {
+    const file = this.paths.projectLocalSettings;
+    if (!file) throw new Error("no project directory for MCP approval settings");
+    updateJsonFile(this.io, file, (root) => {
+      const approved = new Set(asStringArray(root.enabledMcpjsonServers) ?? []);
+      const disabled = new Set(asStringArray(root.disabledMcpjsonServers) ?? []);
+      approved.delete(name);
+      disabled.delete(name);
+      (enabled ? approved : disabled).add(name);
+      root.enabledMcpjsonServers = [...approved];
+      root.disabledMcpjsonServers = [...disabled];
+    });
+  }
+
+  private removeProjectMcpApproval(name: string): void {
+    const file = this.paths.projectLocalSettings;
+    if (!file) return;
+    updateJsonFile(this.io, file, (root) => {
+      root.enabledMcpjsonServers = (asStringArray(root.enabledMcpjsonServers) ?? []).filter(
+        (candidate) => candidate !== name,
+      );
+      root.disabledMcpjsonServers = (asStringArray(root.disabledMcpjsonServers) ?? []).filter(
+        (candidate) => candidate !== name,
+      );
     });
   }
 
@@ -840,10 +918,10 @@ export function assertCliPositional(kind: string, name: string): void {
 }
 
 /** Claude's `mcpServers` map → `McpServerEntry[]`. */
-function toEntries(value: unknown, scope: McpServerScope, source: string): McpServerEntry[] {
+function toEntries(value: unknown, scope: McpServerScope, source: string): InternalMcpEntry[] {
   const table = asRecord(value);
   if (!table) return [];
-  const out: McpServerEntry[] = [];
+  const out: InternalMcpEntry[] = [];
   for (const [name, raw] of Object.entries(table)) {
     const record = asRecord(raw);
     if (!record) continue;
@@ -865,10 +943,15 @@ function toEntries(value: unknown, scope: McpServerScope, source: string): McpSe
         ? { args: record.args.filter((a): a is string => typeof a === "string") }
         : {}),
       ...(url ? { url } : {}),
-      ...(stringRecord(record.env) ? { env: stringRecord(record.env) as Record<string, string> } : {}),
+      ...(transport === "stdio" && stringRecord(record.env)
+        ? { env: stringRecord(record.env) as Record<string, string> }
+        : {}),
+      ...(transport !== "stdio" && stringRecord(record.headers)
+        ? { headers: stringRecord(record.headers) as Record<string, string> }
+        : {}),
       scope,
       source,
-      enabled: record.disabled !== true,
+      enabled: true,
     });
   }
   return out;
@@ -887,8 +970,45 @@ function mcpServerJson(draft: McpServerEntryDraft): Record<string, unknown> {
   return {
     type: draft.transport === "sse" ? "sse" : "http",
     url: draft.url ?? "",
-    ...(draft.env && Object.keys(draft.env).length > 0 ? { env: draft.env } : {}),
+    ...(draft.headers && Object.keys(draft.headers).length > 0 ? { headers: draft.headers } : {}),
   };
+}
+
+function publicMcpEntry(entry: InternalMcpEntry): McpServerEntry {
+  const { env, headers, ...rest } = entry;
+  return {
+    ...rest,
+    ...(env && Object.keys(env).length ? { envKeys: Object.keys(env).sort() } : {}),
+    ...(headers && Object.keys(headers).length ? { headerKeys: Object.keys(headers).sort() } : {}),
+  };
+}
+
+function runtimeMcpEntry(entry: InternalMcpEntry): McpServerConfig {
+  return {
+    name: entry.name,
+    transport: entry.transport === "claudeai-proxy" ? "http" : entry.transport,
+    source: entry.scope === "project" ? "project-mcp-json" : "claude-settings",
+    ...(entry.command ? { command: entry.command } : {}),
+    ...(entry.args ? { args: [...entry.args] } : {}),
+    ...(entry.url ? { url: entry.url } : {}),
+    ...(entry.cwd ? { cwd: entry.cwd } : {}),
+    ...(entry.env ? { env: { ...entry.env } } : {}),
+    ...(entry.headers ? { headers: { ...entry.headers } } : {}),
+    ...(!entry.enabled ? { disabled: true } : {}),
+  };
+}
+
+function mergeSecretMap(
+  existing: Record<string, string> | undefined,
+  patch: Record<string, string | null> | undefined,
+): Record<string, string> | undefined {
+  if (patch === undefined) return existing ? { ...existing } : undefined;
+  const merged = { ...(existing ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete merged[key];
+    else merged[key] = value;
+  }
+  return Object.keys(merged).length ? merged : undefined;
 }
 
 /**

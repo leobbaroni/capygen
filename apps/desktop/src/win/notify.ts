@@ -54,6 +54,8 @@ export interface NotifierDeps {
   reveal?: () => void;
   /** A session's title, for the toast body. Missing → a generic line. */
   sessionTitle?: (sessionId: string) => string | null;
+  /** Durable deduplication supplied by the app's own database. */
+  claim?: (key: string) => boolean;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
@@ -70,6 +72,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
 
   function once(key: string): boolean {
     if (seen.has(key)) return false;
+    if (deps.claim && !deps.claim(key)) return false;
     seen.add(key);
     if (seen.size > NOTIFY_DEDUPE_LIMIT) {
       // Sets iterate in insertion order, so the first entry is the oldest.

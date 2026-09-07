@@ -7,7 +7,7 @@
  * list hasn't loaded yet); archived sessions are hidden unless the toggle at
  * the bottom is on, and each row grows an archive button on hover.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { ArchiveIcon, ArchiveRestoreIcon, Plus, SearchIcon, Settings as SettingsIcon } from "lucide-react";
 import type { Project, Session } from "@capygen/shared";
@@ -16,6 +16,7 @@ import { Wordmark } from "@/brand/Wordmark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
+import { hasBridge, ipc } from "@/lib/ipc";
 
 export interface SidebarProps {
   sessions: Session[];
@@ -31,6 +32,16 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
   const setShowArchived = useAppStore((s) => s.setShowArchived);
   const archiveSession = useAppStore((s) => s.archiveSession);
   const [query, setQuery] = useState("");
+  const [unreadCount, setUnreadCount] = useState(0);
+  useEffect(() => {
+    if (!hasBridge()) return;
+    let alive = true;
+    let revision = 0;
+    const off = ipc().on("inbox.changed", (event) => { revision++; setUnreadCount(event.unreadCount); });
+    const initial = revision;
+    void ipc().invoke("inbox.list", { limit: 1 }).then((result) => { if (alive && initial === revision) setUnreadCount(result.unreadCount); }).catch(() => {});
+    return () => { alive = false; off(); };
+  }, []);
 
   const projectById = useMemo(() => {
     const map = new Map<string, Project>();
@@ -84,6 +95,11 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
           <Plus className="ui-icon" />
           New session
         </Button>
+        <nav aria-label="Activity" className="grid grid-cols-2 gap-1">
+          {[["/tasks", "Tasks"], ["/inbox", "Inbox"], ["/usage", "Usage"], ["/automations", "Automations"]].map(([to, label]) => <NavLink key={to} to={to!} className={({ isActive }) => cn("flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted", isActive ? "bg-muted text-foreground" : "text-muted-foreground")}>
+            {label}{to === "/inbox" && unreadCount > 0 && <span data-testid="inbox-badge" className="rounded-full bg-primary px-1.5 text-primary-foreground">{unreadCount}</span>}
+          </NavLink>)}
+        </nav>
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input

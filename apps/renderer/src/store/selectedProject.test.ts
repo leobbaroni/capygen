@@ -86,6 +86,7 @@ describe("selectedProjectId", () => {
     });
     await useAppStore.getState().openSession("ses_1");
     expect(useAppStore.getState().selectedProjectId).toBe("p-a");
+    expect(useAppStore.getState().sessions).toContainEqual(session);
   });
 
   it("survives navigation — it is store state, not page state", async () => {

@@ -45,9 +45,13 @@ import {
   claudeWatchTargets,
   codexWatchTargets,
   resolveBackendHomes,
+  resolveMcpServerConfigs,
+  fromMcpServersObject,
+  type ApiMcpSecrets,
   type CliRunner,
   type FileIo,
   type IntegrationsSnapshot,
+  type McpServerConfig,
 } from "@capygen/engine";
 import type {
   Backend,
@@ -57,6 +61,7 @@ import type {
   McpServerScope,
   ToolPolicyEntry,
 } from "@capygen/shared";
+import { assertNoInlineAgentMcpCredentials } from "@capygen/shared";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
 import { defaultConfirm } from "../prereqs/electronDefaults.js";
 import type { ConfirmOptions } from "../prereqs/runGate.js";
@@ -92,7 +97,7 @@ export interface IntegrationsDeps {
   watchRetryCooldownMs?: number;
   now?: () => number;
   /** Connect to a server and list its tools — `integrations.mcp.test`. */
-  probeMcpServer?: (entry: McpServerEntry, projectPath: string | null) => Promise<string[]>;
+  probeMcpServer?: (entry: McpServerConfig, projectPath: string | null) => Promise<string[]>;
   /** Reveal a skill file; injected because it needs Electron's `shell`. */
   openPath?: (target: string) => Promise<void> | void;
   /**
@@ -102,6 +107,14 @@ export interface IntegrationsDeps {
    * so the gate exists with no wiring in `main.ts`; a test injects a fake.
    */
   confirmInstall?: (options: ConfirmOptions) => Promise<boolean>;
+  /** Main-process-only encrypted references for API-owned MCP values. */
+  mcpSecrets?: ApiMcpSecrets;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 /**
@@ -232,6 +245,38 @@ export class IntegrationsService {
         ...this.claude(scope).read().mcpServers,
         ...this.codex(scope).read().mcpServers,
       ],
+      ...(this.deps.mcpSecrets ? { secrets: this.deps.mcpSecrets } : {}),
+    });
+  }
+
+  /**
+   * Resolve the exact server snapshot a harness lifecycle captures. Every home
+   * and project path comes from this service's explicit scope; no caller can
+   * fall through to os.homedir().
+   */
+  resolveMcpServers(args: {
+    backend: Backend;
+    projectId?: string;
+    agentConfig?: unknown;
+  }): McpServerConfig[] {
+    const scope = this.scopeFor(args.projectId);
+    assertNoInlineAgentMcpCredentials(
+      { [args.backend]: args.agentConfig } as import("@capygen/shared").AgentConfig,
+    );
+    const config = asRecord(args.agentConfig);
+    const agent = fromMcpServersObject(config?.mcpServers, "agent");
+    const claude = args.backend === "api" || args.backend === "claude"
+      ? this.claude(scope).runtimeMcpServers()
+      : [];
+    const codex = args.backend === "api" || args.backend === "codex"
+      ? this.codex(scope).runtimeMcpServers()
+      : [];
+    return resolveMcpServerConfigs({
+      backend: args.backend,
+      agent,
+      api: args.backend === "api" ? this.api(scope).runtimeMcpServers() : [],
+      claude,
+      codex,
     });
   }
 
@@ -375,7 +420,12 @@ export class IntegrationsService {
     }
     if (this.deps.probeMcpServer && entry.transport !== "claudeai-proxy") {
       try {
-        const tools = await this.deps.probeMcpServer(entry, scope.projectPath);
+        const runtimeEntry = this.resolveMcpServers({
+          backend: args.backend,
+          ...(scope.projectId ? { projectId: scope.projectId } : {}),
+        }).find((candidate) => candidate.name === entry.name);
+        if (!runtimeEntry) throw new Error(`MCP server "${entry.name}" is disabled or unavailable`);
+        const tools = await this.deps.probeMcpServer(runtimeEntry, scope.projectPath);
         return { ok: true, status: "connected", tools };
       } catch (err) {
         // Fall through to the CLI only for Claude; for the others this *is*

@@ -26,7 +26,7 @@
  * (`panes/agents/AgentsWorkspacePane.tsx`).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ArrowDownIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
 import type { SessionMode } from "@capygen/shared";
 import { Mascot } from "@/brand/Mascot";
@@ -43,9 +43,13 @@ import { useMascotState } from "@/hooks/useMascotState";
 import { blocksOfTurn, isBusy, useAppStore } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { WorkspaceHost } from "@/workspace/WorkspaceHost";
+import { ImportedTranscript } from "@/components/ImportedTranscript";
 
 export function ChatPage() {
   const { sessionId = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  const targetTurn = searchParams.get("turn");
+  const targetBlock = searchParams.get("block");
   const openSession = useAppStore((s) => s.openSession);
   const send = useAppStore((s) => s.send);
   const interrupt = useAppStore((s) => s.interrupt);
@@ -98,8 +102,13 @@ export function ChatPage() {
 
   // A new session (or a switch) starts pinned again.
   useEffect(() => {
-    setPinned(true);
-  }, [sessionId]);
+    setPinned(!targetTurn && !targetBlock);
+  }, [sessionId, targetTurn, targetBlock]);
+  useEffect(() => {
+    const target = (targetBlock ? document.getElementById(`block-${targetBlock}`) : null)
+      ?? (targetTurn ? document.getElementById(`turn-${targetTurn}`) : null);
+    target?.scrollIntoView({ block: "center" });
+  }, [targetTurn, targetBlock, turns.length, blocks]);
 
   /** ADR-0002: switching a round-table session with more than one agent
    *  back to solo keeps history either way — the confirm is only so the
@@ -121,6 +130,9 @@ export function ChatPage() {
   const stoppedTurn = chainStopped ? turns.find((t) => t.id === chainStopped.turnId) : undefined;
   /** Which backends can actually run `/model` (SPEC R14). */
   const canSwitchModel = leadAgent ? leadAgent.backend !== "api" : false;
+
+  if (!session) return <div role="status" className="p-8">Loading session…</div>;
+  if (session.origin === "import") return <ImportedTranscript key={sessionId} sessionId={sessionId} />;
 
   return (
     // `min-w-0` on both: a flex item's default minimum width is its content,

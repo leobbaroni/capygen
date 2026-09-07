@@ -36,7 +36,6 @@ import type { InvokeArgs, InvokeResult } from "@capygen/shared";
 import {
   WidgetHostBridge,
   createPoolWidgetAccess,
-  loadMcpServers,
   McpClientPool,
   cleanEnv,
   type OpenWidgetInput,
@@ -44,8 +43,9 @@ import {
   type WidgetTarget,
   type WidgetResolution,
   type WidgetState,
+  type McpServerConfig,
 } from "@capygen/engine";
-import type { McpPoolRegistry } from "./mcpPools.js";
+import { serverListKey, type McpPoolRegistry } from "./mcpPools.js";
 
 /** The privileged scheme widget documents are served from. */
 export const WIDGET_SCHEME = "capygen-widget";
@@ -102,11 +102,8 @@ export interface WidgetHostDeps {
   log: WidgetHostLog;
   /** A session's project directory — where `.mcp.json` is looked for. */
   projectPathFor(sessionId: string): string | null;
-  /**
-   * Builds the MCP access for one project. Overridden in tests; the default
-   * reads the same server configuration the CLIs use and connects lazily.
-   */
-  createAccess?(projectPath: string): Promise<WidgetMcpAccess>;
+  /** Builds MCP access from a captured server list. Test seam only. */
+  createAccess?(projectPath: string, servers?: readonly McpServerConfig[]): Promise<WidgetMcpAccess>;
   /**
    * The shared, reference-counted MCP pool registry (R26). When present the
    * default access borrows from it instead of opening its own connections, so
@@ -138,6 +135,8 @@ export interface WidgetToolCall {
 }
 
 export interface WidgetHostHandlers {
+  /** Bind a session to the same immutable server list its harness captured. */
+  captureSession?(sessionId: string, agentId: string, servers: readonly McpServerConfig[]): void;
   /** `capygen-widget://…` → the document plus its CSP, or `null`. */
   serve(url: string): { body: string; csp: string } | null;
   /**
@@ -154,7 +153,7 @@ export interface WidgetHostHandlers {
   readResource(args: InvokeArgs<"mcp.readResource">): Promise<InvokeResult<"mcp.readResource">>;
   get(blockId: string): WidgetState | undefined;
   /** The bridge that owns a session's widgets, creating it on first use. */
-  bridgeFor(sessionId: string): Promise<WidgetHostBridge>;
+  bridgeFor(sessionId: string, agentId: string): Promise<WidgetHostBridge>;
   dispose(): Promise<void>;
 }
 
@@ -175,17 +174,15 @@ interface ProjectHost {
 }
 
 /**
- * The default {@link WidgetHostDeps.createAccess}: capygen's own MCP client
- * over the same servers the CLIs see (`~/.claude/settings.json`,
- * `<project>/.mcp.json`, `~/.codex/config.toml`). Nothing connects until a
- * widget actually needs a server (SPEC R26).
+ * Build capygen's MCP access from the exact list captured by the harness.
+ * Nothing connects until a widget actually needs a server (SPEC R26).
  */
 async function defaultAccess(
-  projectPath: string,
   log: WidgetHostLog,
   pools: McpPoolRegistry | undefined,
+  captured: readonly McpServerConfig[],
 ): Promise<{ access: WidgetMcpAccess; close: () => Promise<void> }> {
-  const servers = await loadMcpServers({ projectPath, log });
+  const servers = [...captured];
   // Shared with `ApiHarness` when both resolve the same server list, so a
   // project's stdio servers are spawned and listed once per session, not twice
   // (SPEC R26 — `apps/desktop/src/ipc/mcpPools.ts`).
@@ -205,6 +202,7 @@ async function defaultAccess(
 export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
   const { log } = deps;
   const hosts = new Map<string, Promise<ProjectHost>>();
+  const snapshots = new Map<string, { key: string; servers: readonly McpServerConfig[] }>();
   /** blockId → the project whose bridge owns it. */
   const owner = new Map<string, string>();
   /** widget host label → blockId, so `serve` needs no scan. */
@@ -216,12 +214,18 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
     return path;
   }
 
-  function hostFor(projectPath: string): Promise<ProjectHost> {
-    const existing = hosts.get(projectPath);
+  function hostFor(sessionId: string, agentId: string): Promise<ProjectHost> {
+    const projectPath = projectFor(sessionId);
+    const snapshot = snapshots.get(`${sessionId}:${agentId}`);
+    if (!snapshot && !deps.createAccess) {
+      throw new Error(`no MCP server snapshot is known for agent ${agentId} in session ${sessionId}`);
+    }
+    const key = snapshot?.key ?? `test:${projectPath}:${agentId}`;
+    const existing = hosts.get(key);
     if (existing) return existing;
     const pending = (async (): Promise<ProjectHost> => {
       if (deps.createAccess) {
-        const access = await deps.createAccess(projectPath);
+        const access = await deps.createAccess(projectPath, snapshot?.servers);
         return {
           access,
           bridge: new WidgetHostBridge({
@@ -232,7 +236,7 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
           close: async () => {},
         };
       }
-      const { access, close } = await defaultAccess(projectPath, log, deps.pools);
+      const { access, close } = await defaultAccess(log, deps.pools, snapshot!.servers);
       return {
         access,
         bridge: new WidgetHostBridge({
@@ -243,10 +247,10 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
         close,
       };
     })().catch((err: unknown) => {
-      hosts.delete(projectPath);
+      hosts.delete(key);
       throw err;
     });
-    hosts.set(projectPath, pending);
+    hosts.set(key, pending);
     return pending;
   }
 
@@ -264,22 +268,33 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
   }
 
   async function hostOf(blockId: string): Promise<ProjectHost> {
-    const projectPath = owner.get(blockId);
-    if (!projectPath) throw new Error(`no widget is open for block ${blockId}`);
-    return hostFor(projectPath);
+    const key = owner.get(blockId);
+    if (!key) throw new Error(`no widget is open for block ${blockId}`);
+    const host = hosts.get(key);
+    if (!host) throw new Error(`no widget host is open for block ${blockId}`);
+    return host;
   }
 
   return {
-    async bridgeFor(sessionId) {
-      return (await hostFor(projectFor(sessionId))).bridge;
+    captureSession(sessionId, agentId, servers) {
+      snapshots.set(`${sessionId}:${agentId}`, { key: serverListKey(servers), servers: servers.map((server) => ({
+        ...server,
+        ...(server.args ? { args: [...server.args] } : {}),
+        ...(server.env ? { env: { ...server.env } } : {}),
+        ...(server.headers ? { headers: { ...server.headers } } : {}),
+      })) });
+    },
+    async bridgeFor(sessionId, agentId) {
+      return (await hostFor(sessionId, agentId)).bridge;
     },
 
     async detect(call) {
       const projectPath = deps.projectPathFor(call.sessionId);
       if (!projectPath) return null;
-      const host = await hostFor(projectPath).catch(() => null);
+      const key = snapshots.get(`${call.sessionId}:${call.agentId}`)?.key ?? `test:${projectPath}:${call.agentId}`;
+      const host = await hostFor(call.sessionId, call.agentId).catch(() => null);
       if (!host) return null;
-      settled.set(projectPath, host);
+      settled.set(key, host);
       return host.bridge.resolveTarget(call.toolName, {
         ...(call.resultMeta !== undefined ? { resultMeta: call.resultMeta } : {}),
       });
@@ -301,9 +316,15 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
 
     async open(input) {
       const projectPath = projectFor(input.sessionId);
-      const host = await hostFor(projectPath);
-      settled.set(projectPath, host);
-      owner.set(input.blockId, projectPath);
+      const existingKey = owner.get(input.blockId);
+      const key = existingKey ??
+        snapshots.get(`${input.sessionId}:${input.agentId}`)?.key ??
+        `test:${projectPath}:${input.agentId}`;
+      const host = existingKey
+        ? await (hosts.get(existingKey) ?? Promise.reject(new Error(`no widget host is open for block ${input.blockId}`)))
+        : await hostFor(input.sessionId, input.agentId);
+      settled.set(key, host);
+      owner.set(input.blockId, key);
       byHost.set(widgetHost(input.blockId), input.blockId);
       return host.bridge.open(input);
     },
@@ -371,7 +392,7 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
      * a renderer.
      */
     async readResource(args) {
-      const host = await hostFor(projectFor(args.sessionId));
+      const host = await hostFor(args.sessionId, args.agentId);
       const unreachable = host.access.unreachable?.(args.serverName);
       if (unreachable) throw new Error(`mcp.readResource: ${unreachable}`);
       const contents = await host.access.readResource(args.serverName, args.uri);
@@ -391,6 +412,7 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
       hosts.clear();
       settled.clear();
       owner.clear();
+      snapshots.clear();
       byHost.clear();
       await Promise.all(
         pending.map(async (promise) => {

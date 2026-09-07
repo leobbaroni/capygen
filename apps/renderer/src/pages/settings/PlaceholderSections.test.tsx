@@ -8,7 +8,6 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import {
   AccountSection,
-  ImportSection,
   LegacyIntegrationsSection,
   LocalCliSection,
   MembersSection,
@@ -23,7 +22,6 @@ function renderWithRouter(node: ReactElement) {
 
 describe("PlaceholderSections", () => {
   it.each([
-    ["settings-import", ImportSection, "Phase 7"],
     ["settings-updates", UpdatesSection, "Phase 12"],
     ["settings-members", MembersSection, "Phase 9"],
     ["settings-policies", PoliciesSection, "Phase 9"],

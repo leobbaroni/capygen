@@ -80,10 +80,16 @@ function fakeCli(): { run: CliRunner; calls: string[][] } {
       const transportAt = args.indexOf("--transport");
       const transport = transportAt >= 0 ? (args[transportAt + 1] as string) : "stdio";
       const env: Record<string, string> = {};
+      const headers: Record<string, string> = {};
       for (let i = 0; i < args.length; i += 1) {
-        if (args[i] !== "-e") continue;
-        const [key, ...rest] = (args[i + 1] as string).split("=");
-        env[key as string] = rest.join("=");
+        if (args[i] === "-e") {
+          const [key, ...rest] = (args[i + 1] as string).split("=");
+          env[key as string] = rest.join("=");
+        }
+        if (args[i] === "--header") {
+          const [key, ...rest] = (args[i + 1] as string).split(":");
+          headers[key as string] = rest.join(":").trimStart();
+        }
       }
       const dashes = args.indexOf("--");
       const name = (dashes >= 0 ? args[dashes - 1] : args[args.length - 2]) as string;
@@ -95,7 +101,7 @@ function fakeCli(): { run: CliRunner; calls: string[][] } {
               args: args.slice(dashes + 2),
               env,
             }
-          : { type: transport, url: args[args.length - 1] };
+          : { type: transport, url: args[args.length - 1], headers };
       const config = readGlobal();
       if (scope === "user") {
         const servers = (config.mcpServers as Record<string, unknown>) ?? {};
@@ -469,6 +475,65 @@ describe("ClaudeConfigStore — writes", () => {
     ]);
   });
 
+  it("passes HTTP headers through Claude's native --header option", async () => {
+    const { store, calls } = fresh();
+    const entry = await store.addMcpServer("user", {
+      name: "remote",
+      transport: "http",
+      url: "https://example.com/mcp",
+      headers: { Authorization: "Bearer secret", "X-Tenant": "capy" },
+      source: "settings",
+    });
+    expect(calls[0]).toEqual([
+      "claude", "mcp", "add", "-s", "user", "--transport", "http",
+      "--header", "Authorization: Bearer secret", "--header", "X-Tenant: capy",
+      "remote", "https://example.com/mcp",
+    ]);
+    expect(entry.headerKeys).toEqual(["Authorization", "X-Tenant"]);
+    expect(entry).not.toHaveProperty("headers");
+  });
+
+  it("rejects unsupported cwd and user disable before touching Claude's CLI-owned row", async () => {
+    const { store, calls } = fresh();
+    await expect(store.addMcpServer("user", {
+      name: "bad-cwd",
+      transport: "stdio",
+      command: "node",
+      cwd: "C:/ignored/by-claude",
+      source: "settings",
+    })).rejects.toThrow(/do not support a per-server cwd/);
+    expect(calls).toEqual([]);
+
+    await store.addMcpServer("user", {
+      name: "keep-running",
+      transport: "stdio",
+      command: "node",
+      source: "settings",
+    });
+    const callsBeforeDisable = calls.length;
+    await expect(store.updateMcpServer("user", "keep-running", { enabled: false }))
+      .rejects.toThrow(/cannot persistently disable a user-scope MCP server/);
+    expect(calls).toHaveLength(callsBeforeDisable);
+    expect(store.read().mcpServers).toMatchObject([{ name: "keep-running", enabled: true }]);
+  });
+
+  it("enables and disables project .mcp.json servers through native approval lists", async () => {
+    const { store, project } = fresh();
+    write(path.join(project, ".mcp.json"), JSON.stringify({
+      mcpServers: { fixture: { type: "stdio", command: "node" } },
+    }));
+
+    expect((await store.updateMcpServer("project", "fixture", { enabled: true })).enabled).toBe(true);
+    let settings = readJson(path.join(project, ".claude", "settings.local.json"));
+    expect(settings.enabledMcpjsonServers).toEqual(["fixture"]);
+    expect(settings.disabledMcpjsonServers).toEqual([]);
+
+    expect((await store.updateMcpServer("project", "fixture", { enabled: false })).enabled).toBe(false);
+    settings = readJson(path.join(project, ".claude", "settings.local.json"));
+    expect(settings.enabledMcpjsonServers).toEqual([]);
+    expect(settings.disabledMcpjsonServers).toEqual(["fixture"]);
+  });
+
   it("edits .mcp.json directly for project scope and keeps its other keys", async () => {
     const { store, project } = fresh();
     write(
@@ -764,7 +829,7 @@ describe("CodexConfigStore", () => {
       scope: "user",
       transport: "stdio",
       command: "C:\\bin\\node_repl.exe",
-      env: { CODEX_HOME: "C:\\Users\\x\\.codex" },
+      envKeys: ["CODEX_HOME"],
       source: path.join(home, "config.toml"),
     });
     expect(snapshot.plugins[0]).toMatchObject({
@@ -795,7 +860,7 @@ describe("CodexConfigStore", () => {
       env: { A: "b" },
       source: "config.toml",
     });
-    expect(added).toMatchObject({ name: "capy", command: "node", env: { A: "b" } });
+    expect(added).toMatchObject({ name: "capy", command: "node", envKeys: ["A"] });
     const text = fs.readFileSync(path.join(home, "config.toml"), "utf8");
     expect(text).toContain("# do not lose me");
     expect(text).toContain("[projects.'c:\\users\\x']");
@@ -814,7 +879,11 @@ describe("CodexConfigStore", () => {
     const text = fs.readFileSync(path.join(home, "config.toml"), "utf8");
     expect(text).not.toContain("[mcp_servers.node_repl.env]");
     const entry = store.read().mcpServers.find((s) => s.name === "node_repl");
-    expect(entry?.env).toEqual({ ONLY: "one" });
+    expect(entry?.envKeys).toEqual(["CODEX_HOME", "ONLY"]);
+    expect(store.runtimeMcpServers().find((s) => s.name === "node_repl")?.env).toEqual({
+      CODEX_HOME: "C:\\Users\\x\\.codex",
+      ONLY: "one",
+    });
     expect(entry?.command).toBe("C:\\bin\\node_repl.exe");
     expect(text).toContain("[mcp_servers.comfy-mcp]");
   });
@@ -994,6 +1063,116 @@ describe("ApiConfigStore", () => {
     const entries = store.read().mcpServers.filter((e) => e.name === "from-claude");
     expect(entries).toHaveLength(1);
     expect(entries[0]?.command).toBe("mine");
+  });
+
+  it("refuses a rename collision before staging secrets", () => {
+    let table: Record<string, unknown> = {
+      one: { transport: "stdio", command: "one", env: { TOKEN: "secret" } },
+      two: { transport: "stdio", command: "two" },
+    };
+    let staged = 0;
+    const store = new ApiConfigStore({
+      own: { read: () => structuredClone(table), write: (value) => { table = value; } },
+      inherited: () => [],
+      secrets: {
+        newRef: () => `mcp/${String(++staged).padStart(32, "0")}`,
+        setRef: () => undefined, getRef: () => null, hasRef: () => false, deleteRef: () => undefined,
+      },
+    });
+    expect(() => store.updateMcpServer("user", "one", { name: "two" })).toThrow(/already has/);
+    expect(staged).toBe(0);
+    expect(table).toHaveProperty("one");
+    expect(table).toHaveProperty("two");
+  });
+
+  it("migrates legacy plaintext secrets on an unrelated update", () => {
+    let table: Record<string, unknown> = {
+      legacy: { transport: "stdio", command: "node", env: { TOKEN: "old" } },
+    };
+    const values = new Map<string, string>();
+    const store = new ApiConfigStore({
+      own: { read: () => structuredClone(table), write: (value) => { table = value; } },
+      inherited: () => [],
+      secrets: {
+        newRef: () => "mcp/00000000000000000000000000000001",
+        setRef: (ref, value) => void values.set(ref, value), getRef: (ref) => values.get(ref) ?? null,
+        hasRef: (ref) => values.has(ref), deleteRef: (ref) => void values.delete(ref),
+      },
+    });
+    store.updateMcpServer("user", "legacy", { enabled: false });
+    expect(JSON.stringify(table)).not.toContain('"env"');
+    expect(values.get("mcp/00000000000000000000000000000001")).toBe("old");
+    expect(store.runtimeMcpServers()[0]?.env).toEqual({ TOKEN: "old" });
+  });
+
+  it("never returns MCP environment or header values through the public snapshot", () => {
+    let table: Record<string, unknown> = {
+      private: {
+        transport: "http",
+        url: "https://example.test/mcp",
+        cwd: "C:/owned/project",
+        env: { TOKEN: "legacy-env-secret" },
+        headers: { Authorization: "legacy-header-secret" },
+      },
+    };
+    const store = new ApiConfigStore({
+      own: {
+        read: () => structuredClone(table),
+        write: (value) => {
+          table = value;
+        },
+      },
+      inherited: () => [],
+      secrets: {
+        setRef: () => undefined,
+        getRef: () => null,
+        hasRef: () => false,
+        deleteRef: () => undefined,
+        newRef: () => "mcp/00000000000000000000000000000001",
+      },
+    });
+
+    const [entry] = store.read().mcpServers;
+    expect(entry).toMatchObject({
+      name: "private",
+      cwd: "C:/owned/project",
+      envKeys: ["TOKEN"],
+      headerKeys: ["Authorization"],
+    });
+    expect(entry).not.toHaveProperty("env");
+    expect(entry).not.toHaveProperty("headers");
+    expect(JSON.stringify(entry)).not.toContain("secret");
+  });
+
+  it("preserves a legacy plaintext row and cleans staged refs when persistence fails", () => {
+    const original = {
+      legacy: { transport: "stdio", command: "node", env: { TOKEN: "old" } },
+    };
+    let table: Record<string, unknown> = structuredClone(original);
+    const refs = new Map<string, string>();
+    let next = 0;
+    const store = new ApiConfigStore({
+      own: {
+        read: () => structuredClone(table),
+        write: () => {
+          throw new Error("database write failed");
+        },
+      },
+      inherited: () => [],
+      secrets: {
+        newRef: () => `mcp/${String(++next).padStart(32, "0")}`,
+        setRef: (ref, value) => void refs.set(ref, value),
+        getRef: (ref) => refs.get(ref) ?? null,
+        hasRef: (ref) => refs.has(ref),
+        deleteRef: (ref) => void refs.delete(ref),
+      },
+    });
+
+    expect(() =>
+      store.updateMcpServer("user", "legacy", { env: { TOKEN: "new" } }),
+    ).toThrow(/database write failed/);
+    expect(table).toEqual(original);
+    expect(refs.size).toBe(0);
   });
 });
 

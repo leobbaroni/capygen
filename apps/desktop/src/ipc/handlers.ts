@@ -12,8 +12,13 @@ import type { CapygenStore } from "@capygen/db";
 import { effectiveBackendConfig, type ModelCatalogue } from "@capygen/engine";
 import {
   builtinSlashCommandsFor,
+  assertNoInlineAgentMcpCredentials,
+  redactInlineAgentMcpCredentials,
+  type Agent,
+  type AgentDraft,
   type ApiProvider,
   type Block,
+  type EventInput,
   type InvokeArgs,
   type InvokeChannel,
   type InvokeResult,
@@ -21,9 +26,16 @@ import {
   type SlashCommand,
 } from "@capygen/shared";
 import { createSessionRunner } from "../engine/SessionRunner.js";
+import { InboxService } from "../inbox/InboxService.js";
+import { AutomationService } from "../automations/AutomationService.js";
 import { API_ENV_KEYS } from "./harnessList.js";
 import { catalogueFrom, checkModelSelection, type ModelSelectionDeps } from "./modelSelection.js";
 import { createPrereqsIpc, type PrereqsIpcDeps } from "./prereqs.js";
+import {
+  createImportsHandlers,
+  type ImportHandlers,
+  type ImportsHandlerDeps,
+} from "./imports.js";
 import { createWorkspaceIpc, type WorkspaceIpcDeps } from "./workspace.js";
 // [B1/Phase 6] The settings hub, the config-sync engine and diagnostics.
 import { createSettingsHubHandlers } from "./settings.js";
@@ -69,6 +81,10 @@ export interface SecretsStore {
    * `ApiHarnessDeps.keys`.
    */
   get(provider: ApiProvider): Promise<string | null> | string | null;
+  setRef?(ref: string, value: string): void;
+  getRef?(ref: string): string | null;
+  hasRef?(ref: string): boolean;
+  deleteRef?(ref: string): void;
 }
 
 /**
@@ -79,11 +95,16 @@ export interface SecretsStore {
  */
 export function createInMemorySecretsStore(): SecretsStore {
   const values = new Map<ApiProvider, string>();
+  const mcpValues = new Map<string, string>();
   return {
     set: (provider, value) => void values.set(provider, value),
     has: (provider) => values.has(provider),
     delete: (provider) => void values.delete(provider),
     get: (provider) => values.get(provider) ?? null,
+    setRef: (ref, value) => void mcpValues.set(ref, value),
+    getRef: (ref) => mcpValues.get(ref) ?? null,
+    hasRef: (ref) => mcpValues.has(ref),
+    deleteRef: (ref) => void mcpValues.delete(ref),
   };
 }
 
@@ -162,6 +183,9 @@ export interface IpcContextDeps {
    * deps, so the page can never disagree with `app.version` / `harness.list`.
    */
   diagnostics?: Omit<DiagnosticsDeps, "log" | "appInfo" | "listHarnesses">;
+  /** Native import picker and the process-owned staging service. Optional in
+   * tests and utility contexts; absent channels refuse without side effects. */
+  imports?: Omit<ImportsHandlerDeps, "store" | "broadcast" | "validateAgent">;
 }
 
 export type IpcHandlers = {
@@ -170,6 +194,7 @@ export type IpcHandlers = {
 
 export interface IpcContext {
   handlers: IpcHandlers;
+  automations: AutomationService;
   engine: Engine;
   /**
    * [B1/Phase 6] The config-sync engine, reachable directly so `main.ts` can
@@ -184,7 +209,19 @@ export interface IpcContext {
 }
 
 export function createIpcContext(deps: IpcContextDeps): IpcContext {
-  const { store, broadcast, log } = deps;
+  const { store, log } = deps;
+  let automationService: AutomationService | undefined;
+  const inbox = new InboxService(store, () => deps.broadcast("inbox.changed", { unreadCount: store.inbox.unreadCount() }));
+  const broadcast: Broadcast = (event, payload) => {
+    try { inbox.handle(event, payload); } catch (error) { log.warn("[inbox] event persistence failed", error); }
+    if (event === "session.updated") {
+      const session = store.sessions.get((payload as EventInput<"session.updated">).id);
+      if (session) automationService?.handleSessionUpdated(session);
+    }
+    if (event === "chat.turnStatus") automationService?.handleEvent("chat.turnStatus", payload as EventInput<"chat.turnStatus">);
+    deps.broadcast(event, payload);
+  };
+  inbox.reconcile();
   const secrets = deps.secrets ?? createInMemorySecretsStore();
 
   // [B3] The setup panel (SPEC R3): `prereqs.status` / `prereqs.run`. See
@@ -262,6 +299,16 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     store,
     broadcast,
     log,
+    ...(secrets.setRef && secrets.getRef && secrets.hasRef && secrets.deleteRef
+      ? {
+          mcpSecrets: {
+            setRef: secrets.setRef.bind(secrets),
+            getRef: secrets.getRef.bind(secrets),
+            hasRef: secrets.hasRef.bind(secrets),
+            deleteRef: secrets.deleteRef.bind(secrets),
+          },
+        }
+      : {}),
     ...(deps.integrations ?? {}),
   });
   const diagnostics = new DiagnosticsService({
@@ -302,6 +349,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     log,
     ...(deps.widgets ? { widgets: deps.widgets } : {}),
     ...(deps.pools ? { pools: deps.pools } : {}),
+    resolveMcpServers: (args) => integrations.resolveMcpServers(args),
     // R21: the engine never reads a key from disk. This is the only bridge
     // between the stored ciphertext and an `api` harness, and it hands over a
     // value the renderer can never ask for (`secrets.has` returns a boolean).
@@ -337,7 +385,11 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   /** Broadcast the whole roster after an agents.add/update/remove/setLead —
    *  the agent tree (R13) replaces its list rather than merging one row. */
   function emitAgents(sessionId: string): void {
-    broadcast("agents.updated", { sessionId, agents: store.sessions.agents(sessionId) });
+    broadcast("agents.updated", { sessionId, agents: store.sessions.agents(sessionId).map(publicAgent) });
+  }
+
+  function publicAgent(agent: Agent): Agent {
+    return { ...agent, config: redactInlineAgentMcpCredentials(agent.config) };
   }
 
   // Handed to whichever engine is wired, including a test's own — a runner
@@ -346,7 +398,62 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   // bare chain.
   const engine = (deps.makeEngine ?? createSessionRunner)({ ...engineDeps, ...runnerConfig });
 
+  function materializeImportedAgent(draft: AgentDraft): AgentDraft {
+    // An imported continuation persists this object as a normal live agent,
+    // so it receives the same credential and model checks as sessions.create
+    // before the transaction opens. Persist the resolved API provider too:
+    // otherwise a model selected from OpenAI can later fall back to Anthropic.
+    assertNoInlineAgentMcpCredentials(draft.config);
+    const check = checkModelSelection(modelSelection, {
+      backend: draft.backend,
+      model: draft.model,
+      name: draft.name,
+      config: effectiveBackendConfig(settingsService.all(), draft.config, draft.backend),
+    });
+    if (!check.ok) throw new Error(check.reason ?? "no model could be resolved");
+    if (draft.backend !== "api" || !check.provider) {
+      return { ...draft, model: check.model };
+    }
+    return {
+      ...draft,
+      model: check.model,
+      config: {
+        ...(draft.config ?? {}),
+        api: { ...(draft.config?.api ?? {}), provider: check.provider },
+      },
+    };
+  }
+
+  const importHandlers: ImportHandlers = deps.imports
+    ? createImportsHandlers({
+        store,
+        broadcast,
+        ...deps.imports,
+        validateAgent: materializeImportedAgent,
+      })
+    : unavailableImports();
+
   const handlers: IpcHandlers = {
+    "automations.list": (args) => automationService!.list(args),
+    "automations.create": (args) => automationService!.create(args),
+    "automations.update": (args) => automationService!.update(args.id, args.patch),
+    "automations.delete": (args) => ({ ok: automationService!.remove(args.id) }),
+    "automations.runNow": (args) => automationService!.runNow(args.id),
+    "automations.cancelRun": async (args) => ({ ok: await automationService!.cancelRun(args.runId) }),
+    "automations.listRuns": (args) => automationService!.listRuns(args.id, args.limit),
+    "inbox.list": (args) => ({ items: store.inbox.list(args), unreadCount: store.inbox.unreadCount() }),
+    "inbox.markRead": (args) => {
+      const item = store.inbox.markRead(args.id, args.read);
+      broadcast("inbox.changed", { unreadCount: store.inbox.unreadCount() });
+      return item;
+    },
+    "inbox.markAllRead": (args) => {
+      const count = store.inbox.markAllRead(Date.now(), args.sessionId);
+      broadcast("inbox.changed", { unreadCount: store.inbox.unreadCount() });
+      return { count };
+    },
+    "usage.report": (args) => store.usage.report(args),
+    ...importHandlers,
     "projects.pick": async (): Promise<Project | null> => {
       const dir = await deps.pickDirectory();
       if (!dir) return null;
@@ -381,6 +488,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       // Before the mutation: a session whose lead cannot resolve a model is a
       // session that fails on its first turn, with nothing to show for it.
       for (const draft of agents) {
+        assertNoInlineAgentMcpCredentials(draft.config);
         requireRunnable({
           backend: draft.backend,
           model: draft.model,
@@ -397,7 +505,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       store.projects.touch(args.projectId);
       broadcast("session.updated", created.session);
       log.info(`[ipc] session created ${created.session.id} (${args.mode})`);
-      return created;
+      return { ...created, agents: created.agents.map(publicAgent) };
     },
 
     "sessions.list": (args) =>
@@ -411,7 +519,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       if (!session) return null;
       return {
         session,
-        agents: store.sessions.agents(session.id),
+        agents: store.sessions.agents(session.id).map(publicAgent),
         turns: store.turns.list(session.id),
         blocks: store.blocks.listBySession(session.id),
         // Durable answer to "is the Continue button real?" — the renderer
@@ -442,9 +550,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return session;
     },
 
-    "agents.list": (args) => store.sessions.agents(args.sessionId),
+    "agents.list": (args) => store.sessions.agents(args.sessionId).map(publicAgent),
 
     "agents.add": (args) => {
+      assertNoInlineAgentMcpCredentials(args.config);
       requireRunnable({
         backend: args.backend,
         model: args.model,
@@ -462,7 +571,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       emitAgents(args.sessionId);
       // A `role: "lead"` add also moves `leadAgentId` (SessionsRepo.addAgent).
       emitSession(args.sessionId);
-      return agent;
+      return publicAgent(agent);
     },
 
     /**
@@ -476,6 +585,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      */
     "agents.update": (args) => {
       const before = store.sessions.agent(args.agentId);
+      if (args.patch.config !== undefined) assertNoInlineAgentMcpCredentials(args.patch.config);
       if (before && (args.patch.model !== undefined || args.patch.config !== undefined)) {
         requireRunnable({
           backend: before.backend,
@@ -490,7 +600,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
         engine.agentConfigChanged?.(agent.id);
       }
       emitAgents(agent.sessionId);
-      return agent;
+      return publicAgent(agent);
     },
 
     /** [7-P1] Minimal non-secret runtime facts; null for an unknown agent or
@@ -546,6 +656,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * the contract promises and what the composer scrolls to.
      */
     "chat.send": (args) => {
+      if (store.sessions.get(args.sessionId)?.origin === "import") {
+        throw new Error("Imported transcript sessions are read-only. Continue in a new session to send messages.");
+      }
       const dispatched = engine.dispatch({
         sessionId: args.sessionId,
         text: args.text,
@@ -851,12 +964,32 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     "app.version": () => deps.appInfo(),
   };
 
+  automationService = new AutomationService({
+    store,
+    execute: (automation, run) => {
+      const source = automation.agentId ? store.sessions.agent(automation.agentId) : null;
+      const sourceSession = source ? store.sessions.get(source.sessionId) : null;
+      if (!source || !sourceSession || sourceSession.projectId !== automation.projectId || sourceSession.origin === "import") throw new Error("automation_agent_unavailable");
+      const draft = materializeImportedAgent({ name: source.name, backend: source.backend, model: source.model, role: "lead", config: source.config });
+      const created = store.sessions.create({ projectId: automation.projectId, mode: "solo", title: automation.name, agents: [draft] });
+      store.automations.attachSession(run.id, created.session.id);
+      broadcast("session.updated", created.session);
+      engine.dispatch({ sessionId: created.session.id, text: automation.prompt, agentId: created.session.leadAgentId });
+      return { sessionId: created.session.id };
+    },
+    cancel: async (sessionId) => { await handlers["chat.interrupt"]({ sessionId }); },
+    onAutomationChanged: (automation) => broadcast("automations.changed", { automation, id: automation.id }),
+    onAutomationDeleted: (id) => broadcast("automations.changed", { automation: null, id }),
+    onRunChanged: (run) => broadcast("automationRun.changed", run),
+  });
   return {
     handlers,
+    automations: automationService,
     engine,
     integrations,
     settings: settingsService,
     dispose: async () => {
+      automationService?.dispose();
       // The engine first: a harness still writing a turn's final status must
       // not find the workspace services gone underneath it.
       await engine.dispose();
@@ -865,6 +998,21 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       // a chokidar instance left running keeps the process alive on quit.
       await integrations.dispose();
     },
+  };
+}
+
+function unavailableImports(): ImportHandlers {
+  const unavailable = (): never => {
+    throw new Error("transcript imports are unavailable in this process");
+  };
+  return {
+    "imports.pick": unavailable,
+    "imports.cancel": unavailable,
+    "imports.commit": unavailable,
+    "imports.get": unavailable,
+    "imports.entries": unavailable,
+    "imports.reference": unavailable,
+    "imports.continue": unavailable,
   };
 }
 

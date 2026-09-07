@@ -23,12 +23,13 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CrownIcon, Folder, GitBranch, UsersIcon, XIcon } from "lucide-react";
+import { CrownIcon, Folder, UsersIcon, XIcon } from "lucide-react";
 import { DEFAULT_HEADING, type AgentDraft, type SessionMode } from "@capygen/shared";
 import { AddAgentDialog } from "@/components/AddAgentDialog";
 import { Composer, type AgentChoice } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
 import { SetupBanner } from "@/components/SetupBanner";
+import { WorktreeChip } from "@/components/WorktreeChip";
 import { Mascot } from "@/brand/Mascot";
 import { Wordmark } from "@/brand/Wordmark";
 import { useMascotState } from "@/hooks/useMascotState";
@@ -179,16 +180,10 @@ export function LandingPage() {
                   {project ? project.name : "Choose a folder"}
                 </span>
               </button>
-              {/* Worktree chip: placeholder per the task brief — worktree
-                  creation (git ops, branch picker) lands in Phase 7 (P8). */}
-              <span
-                data-testid="worktree-chip"
-                title="Worktrees arrive in a later phase"
-                className="flex h-6 cursor-not-allowed items-center gap-1 rounded-full px-2.5 text-sm font-normal text-muted-foreground/60"
-              >
-                <GitBranch className="ui-icon" />
-                <span className="max-w-32 truncate">main</span>
-              </span>
+              <WorktreeChip projectId={project?.id ?? null} onSelect={(next) => useAppStore.setState((state) => ({
+                projects: [next, ...state.projects.filter((item) => item.id !== next.id)],
+                selectedProjectId: next.id,
+              }))} />
 
               <ModePicker mode={mode} onChange={changeMode} testId="landing-mode-picker" />
 

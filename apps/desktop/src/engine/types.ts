@@ -7,13 +7,14 @@
  * is the echo double the handler tests run against.
  */
 import type { CapygenStore } from "@capygen/db";
-import type { KeyProvider } from "@capygen/engine";
+import type { KeyProvider, McpServerConfig } from "@capygen/engine";
 import type {
   AgentDescribe,
   AgentRuntimeInfo,
   EventChannel,
   EventInput,
   SlashCommand,
+  Backend,
 } from "@capygen/shared";
 import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
@@ -53,6 +54,12 @@ export interface EngineDeps {
    * twice per session. Absent in tests and in the stub engine.
    */
   pools?: McpPoolRegistry;
+  /** Main-process resolver for the exact MCP list captured by a harness. */
+  resolveMcpServers?: (args: {
+    backend: Backend;
+    projectId?: string;
+    agentConfig?: unknown;
+  }) => McpServerConfig[];
 }
 
 export interface EngineSendArgs {

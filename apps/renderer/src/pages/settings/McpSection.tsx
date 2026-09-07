@@ -280,8 +280,10 @@ interface McpFormState {
   command: string;
   args: string;
   url: string;
+  cwd: string;
   scope: McpServerScope;
   env: EnvPair[];
+  headers: EnvPair[];
 }
 
 function toFormState(entry: McpServerEntry | null, scope: McpServerScope): McpFormState {
@@ -291,10 +293,12 @@ function toFormState(entry: McpServerEntry | null, scope: McpServerScope): McpFo
     // keeps every other kind out of the edit path entirely.
     transport: entry?.transport === "http" ? "http" : "stdio",
     command: entry?.command ?? "",
-    args: entry?.args?.join(" ") ?? "",
+    args: entry?.args?.join("\n") ?? "",
     url: entry?.url ?? "",
+    cwd: entry?.cwd ?? "",
     scope: entry?.scope ?? scope,
-    env: Object.entries(entry?.env ?? {}).map(([key, value]) => ({ key, value })),
+    env: (entry?.envKeys ?? []).map((key) => ({ key, value: "" })),
+    headers: (entry?.headerKeys ?? []).map((key) => ({ key, value: "" })),
   };
 }
 
@@ -307,6 +311,27 @@ export function envRecord(pairs: EnvPair[]): Record<string, string> {
     out[key] = pair.value;
   }
   return out;
+}
+
+/** One argument per line, so spaces and Windows paths round-trip exactly. */
+export function parseArgs(value: string): string[] {
+  return value === "" ? [] : value.split(/\r?\n/).filter((arg) => arg.length > 0);
+}
+
+/** Build an edit mutation without ever needing an existing secret value. */
+export function secretMutation(
+  pairs: EnvPair[],
+  originalKeys: readonly string[],
+): Record<string, string | null> | undefined {
+  const out: Record<string, string | null> = {};
+  const currentKeys = new Set(pairs.map((pair) => pair.key.trim()).filter(Boolean));
+  for (const key of originalKeys) if (!currentKeys.has(key)) out[key] = null;
+  for (const pair of pairs) {
+    const key = pair.key.trim();
+    if (!key) continue;
+    if (!originalKeys.includes(key) || pair.value !== "") out[key] = pair.value;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Add/edit dialog — `stdio` and `http`. */
@@ -369,7 +394,7 @@ function McpDialog({
     // [review] `args: []`, never `undefined`, when the field is cleared: both
     // stores merge with `patch.args ?? existing.args`, so an `undefined` here
     // silently restored the arguments the user had just deleted.
-    const args = stdio ? (form.args.trim() === "" ? [] : form.args.trim().split(/\s+/)) : undefined;
+    const args = stdio ? parseArgs(form.args) : undefined;
     try {
       if (initial) {
         await ipc().invoke("integrations.mcp.update", {
@@ -380,10 +405,12 @@ function McpDialog({
           patch: {
             name: form.name.trim(),
             transport: form.transport,
-            command: stdio ? form.command.trim() : undefined,
+            command: stdio ? form.command.trim() : "",
             args,
-            url: form.transport === "http" ? form.url.trim() : undefined,
-            env: envRecord(form.env),
+            url: form.transport === "http" ? form.url.trim() : "",
+            cwd: form.cwd.trim(),
+            env: secretMutation(form.env, initial.envKeys ?? []),
+            headers: secretMutation(stdio ? [] : form.headers, initial.headerKeys ?? []),
           },
         });
       } else {
@@ -397,7 +424,9 @@ function McpDialog({
             command: stdio ? form.command.trim() : undefined,
             args,
             url: form.transport === "http" ? form.url.trim() : undefined,
+            cwd: form.cwd.trim() || undefined,
             env: envRecord(form.env),
+            headers: envRecord(form.headers),
             source: "capygen",
           },
         });
@@ -467,13 +496,16 @@ function McpDialog({
                 />
               </Field>
               <Field label="Arguments" testId="mcp-field-args">
-                <SettingInput
+                <textarea
                   value={form.args}
-                  onChange={(v) => setForm((f) => ({ ...f, args: v }))}
-                  placeholder="-y some-mcp-server"
+                  onChange={(event) => setForm((f) => ({ ...f, args: event.target.value }))}
+                  placeholder={"-y\nsome-mcp-server\nC:\\path with spaces"}
                   data-testid="mcp-input-args"
                   aria-label="Arguments"
+                  rows={4}
+                  className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 font-mono text-sm text-foreground outline-none placeholder:text-foreground-tertiary focus:border-ring"
                 />
+                <span className="text-xs text-muted-foreground">One argument per line.</span>
               </Field>
             </>
           ) : (
@@ -487,7 +519,16 @@ function McpDialog({
               />
             </Field>
           )}
-          <EnvEditor pairs={form.env} onChange={(env) => setForm((f) => ({ ...f, env }))} />
+          <Field label="Working directory" testId="mcp-field-cwd">
+            <SettingInput value={form.cwd} onChange={(cwd) => setForm((f) => ({ ...f, cwd }))}
+              placeholder="Optional" data-testid="mcp-input-cwd" aria-label="Working directory" />
+          </Field>
+          <SecretEditor label="Environment variables" prefix="env" pairs={form.env}
+            onChange={(env) => setForm((f) => ({ ...f, env }))} />
+          {form.transport === "http" ? (
+            <SecretEditor label="HTTP headers" prefix="header" pairs={form.headers}
+              onChange={(headers) => setForm((f) => ({ ...f, headers }))} />
+          ) : null}
           {submitError ? (
             <p role="alert" data-testid="mcp-submit-error" className="text-xs text-destructive">
               {submitError}
@@ -519,24 +560,28 @@ function McpDialog({
  * sent to `integrations.mcp.*`, which writes them into the backend's own
  * config file.
  */
-function EnvEditor({
+function SecretEditor({
+  label,
+  prefix,
   pairs,
   onChange,
 }: {
+  label: string;
+  prefix: "env" | "header";
   pairs: EnvPair[];
   onChange: (pairs: EnvPair[]) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5" data-testid="mcp-field-env">
-      <span className="text-xs font-medium text-muted-foreground">Environment variables</span>
+    <div className="flex flex-col gap-1.5" data-testid={`mcp-field-${prefix}`}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {pairs.map((pair, index) => (
         <div key={index} className="flex items-center gap-2">
           <SettingInput
             value={pair.key}
             onChange={(v) => onChange(pairs.map((p, i) => (i === index ? { ...p, key: v } : p)))}
             placeholder="API_KEY"
-            data-testid={`mcp-env-key-${index}`}
-            aria-label={`Environment variable ${index + 1} name`}
+            data-testid={`mcp-${prefix}-key-${index}`}
+            aria-label={`${label} ${index + 1} name`}
           />
           <input
             type="password"
@@ -544,16 +589,16 @@ function EnvEditor({
             onChange={(e) =>
               onChange(pairs.map((p, i) => (i === index ? { ...p, value: e.target.value } : p)))
             }
-            placeholder="value"
-            data-testid={`mcp-env-value-${index}`}
-            aria-label={`Environment variable ${index + 1} value`}
+            placeholder={pair.value === "" ? "Leave blank to keep current value" : "value"}
+            data-testid={`mcp-${prefix}-value-${index}`}
+            aria-label={`${label} ${index + 1} value`}
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-foreground-tertiary focus:border-ring"
           />
           <Button
             size="icon-sm"
             variant="outline"
             title="Remove variable"
-            data-testid={`mcp-env-remove-${index}`}
+            data-testid={`mcp-${prefix}-remove-${index}`}
             onClick={() => onChange(pairs.filter((_, i) => i !== index))}
           >
             <TrashIcon className="size-3.5" />
@@ -564,7 +609,7 @@ function EnvEditor({
         <Button
           size="sm"
           variant="outline"
-          data-testid="mcp-env-add"
+          data-testid={`mcp-${prefix}-add`}
           onClick={() => onChange([...pairs, { key: "", value: "" }])}
         >
           Add variable

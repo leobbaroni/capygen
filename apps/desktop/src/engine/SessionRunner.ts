@@ -29,6 +29,7 @@ import {
   type Harness,
   type HarnessAgent,
   type HarnessSession,
+  type McpServerConfig,
   type SubagentRoute,
   type SubagentRouteRequest,
 } from "@capygen/engine";
@@ -92,6 +93,8 @@ export interface HarnessExtras {
     | null;
   /** The same tool, as an `api`-backend tool definition. */
   extraTools?: readonly ReturnType<typeof delegateTaskTool>[];
+  /** Full main-process-only MCP values captured with this harness lifecycle. */
+  mcpServerConfigs?: readonly McpServerConfig[];
 }
 
 export interface SessionRunnerDeps extends EngineDeps {
@@ -262,6 +265,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
             ? { acquirePool: (servers) => deps.pools!.acquire(servers) }
             : {}),
           ...(extras.extraTools ? { extraTools: extras.extraTools } : {}),
+          mcpServers: extras.mcpServerConfigs ?? [],
           loadHistory: (session, forAgent) => loadApiHistory(store, session, forAgent),
         },
       }));
@@ -618,6 +622,15 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       throw new Error(captured.error);
     }
     const harnessAgent = captured.agent;
+    const backendConfig = (
+      harnessAgent.config as Record<string, unknown> | null | undefined
+    )?.[agent.backend];
+    const mcpServerConfigs = deps.resolveMcpServers?.({
+      backend: agent.backend,
+      projectId: session.projectId,
+      ...(backendConfig !== undefined ? { agentConfig: backendConfig } : {}),
+    }) ?? [];
+    deps.widgets?.captureSession?.(session.id, agent.id, mcpServerConfigs);
     if (agent.backend === "api") {
       const turns = store.turns.list(session.id);
       historyWatermarks.set(key, turns[turns.length - 1]?.id ?? null);
@@ -625,7 +638,9 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // The **same** captured object reaches the factory and `start()`: two
     // independently rebuilt agents is how a child ends up running on something
     // other than what its factory was told (see `routing/delegate.ts`).
-    const harness = makeHarness(harnessAgent, harnessExtras(session, agent, harnessAgent));
+    const extras = harnessExtras(session, agent, harnessAgent);
+    extras.mcpServerConfigs = mcpServerConfigs;
+    const harness = makeHarness(harnessAgent, extras);
     harnesses.set(key, harness);
     runtime.set(key, harnessAgent);
     // [7-P1] `start()` is where a backend actually takes hold of anything — the
@@ -1152,7 +1167,17 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   }
 
   function send(args: EngineSendArgs): void {
+    assertWritableSession(args.sessionId);
     void runTurn(args);
+  }
+
+  function assertWritableSession(sessionId: string): void {
+    const session = store.sessions.get(sessionId);
+    if (session?.origin === "import") {
+      throw new Error(
+        "Imported transcript sessions are read-only. Continue the transcript into a live session before sending a message.",
+      );
+    }
   }
 
   /**
@@ -1170,7 +1195,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   return {
     send,
 
-    dispatch: (args) => roundTable.dispatch(args),
+    dispatch: (args) => {
+      // `RoundTable.dispatch` persists the user's turn before it discovers
+      // that an imported artifact has no agent. Refuse here so the source
+      // transcript remains an immutable reference on every send path.
+      assertWritableSession(args.sessionId);
+      return roundTable.dispatch(args);
+    },
 
     continueChain: (sessionId) => roundTable.continueChain(sessionId),
 

@@ -21,15 +21,6 @@
 import { Link } from "react-router-dom";
 import { ArrivesLaterNote, SectionIntro } from "@/components/settings/primitives";
 
-export function ImportSection() {
-  return (
-    <div data-testid="settings-import">
-      <SectionIntro title="Import sessions" description="Bring an existing Claude Code or Codex transcript in as a session." />
-      <ArrivesLaterNote phase="Phase 7" what="Session import" />
-    </div>
-  );
-}
-
 export function UpdatesSection() {
   return (
     <div data-testid="settings-updates">

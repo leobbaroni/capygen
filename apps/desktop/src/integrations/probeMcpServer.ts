@@ -13,7 +13,6 @@
  * the user is testing one.
  */
 import type { McpServerConfig } from "@capygen/engine";
-import type { McpServerEntry } from "@capygen/shared";
 import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 
 /** How long a test connection may take before it is reported as failed. */
@@ -21,23 +20,11 @@ export const MCP_TEST_TIMEOUT_MS = 20_000;
 
 export function createMcpPoolProbe(
   pools: McpPoolRegistry,
-): (entry: McpServerEntry, projectPath: string | null) => Promise<string[]> {
+): (entry: McpServerConfig, projectPath: string | null) => Promise<string[]> {
   return async (entry, projectPath) => {
-    if (entry.transport === "claudeai-proxy") {
-      // A claude.ai cloud connector is reached through the CLI's own account
-      // session, which capygen has no client for; the caller falls back to
-      // `claude mcp list` for those.
-      throw new Error("a claude.ai connector can only be tested through the Claude CLI");
-    }
     const config: McpServerConfig = {
-      name: entry.name,
-      transport: entry.transport,
-      ...(entry.command ? { command: entry.command } : {}),
-      ...(entry.args ? { args: entry.args } : {}),
-      ...(entry.env ? { env: entry.env } : {}),
-      ...(entry.url ? { url: entry.url } : {}),
-      ...(projectPath ? { cwd: projectPath } : {}),
-      source: "agent",
+      ...entry,
+      ...(projectPath && !entry.cwd ? { cwd: projectPath } : {}),
     };
     const lease = pools.acquire([config]);
     try {

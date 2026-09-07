@@ -220,6 +220,65 @@ export const AgentConfigSchema = z
   .passthrough();
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
+/**
+ * Agent rows cross IPC, so inline MCP credentials can never live in their
+ * passthrough config. Credential-free agent servers remain supported and keep
+ * their highest resolver precedence; authenticated servers belong in the MCP
+ * settings store, whose values are safeStorage references.
+ */
+export function assertNoInlineAgentMcpCredentials(config: AgentConfig | null | undefined): void {
+  const paths = inlineAgentMcpCredentialPaths(config);
+  if (paths.length === 0) return;
+  throw new Error(
+    `Agent-specific MCP credentials cannot be stored in agent config (${paths.join(", ")}). ` +
+      "Add the authenticated server in Settings > MCP servers so capygen encrypts its values with safeStorage.",
+  );
+}
+
+/** Remove unsupported legacy inline values before an Agent crosses IPC. */
+export function redactInlineAgentMcpCredentials(config: AgentConfig | null): AgentConfig | null {
+  if (!config || inlineAgentMcpCredentialPaths(config).length === 0) return config;
+  const next = structuredClone(config) as AgentConfig & Record<string, unknown>;
+  for (const backend of ["claude", "codex", "api"] as const) {
+    const section = recordOf(next[backend]);
+    const servers = recordOf(section?.mcpServers);
+    if (!servers) continue;
+    for (const raw of Object.values(servers)) {
+      const server = recordOf(raw);
+      if (!server) continue;
+      for (const field of ["env", "headers"] as const) {
+        const values = recordOf(server[field]);
+        if (values && Object.keys(values).length) server[`${field === "env" ? "env" : "header"}Keys`] = Object.keys(values).sort();
+        delete server[field];
+      }
+    }
+  }
+  return next;
+}
+
+function inlineAgentMcpCredentialPaths(config: AgentConfig | null | undefined): string[] {
+  const paths: string[] = [];
+  for (const backend of ["claude", "codex", "api"] as const) {
+    const servers = recordOf(recordOf(config?.[backend])?.mcpServers);
+    if (!servers) continue;
+    for (const [name, raw] of Object.entries(servers)) {
+      const server = recordOf(raw);
+      if (!server) continue;
+      for (const field of ["env", "headers"] as const) {
+        const values = recordOf(server[field]);
+        if (values && Object.keys(values).length) paths.push(`${backend}.mcpServers.${name}.${field}`);
+      }
+    }
+  }
+  return paths;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------
@@ -1968,7 +2027,10 @@ export const McpServerEntrySchema = z
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     url: z.string().optional(),
-    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+    /** Secret values stay in the main process; integrations.list exposes names only. */
+    envKeys: z.array(z.string()).optional(),
+    headerKeys: z.array(z.string()).optional(),
     scope: McpServerScopeSchema,
     source: z.string().min(1),
     enabled: z.boolean().default(true),
@@ -1993,7 +2055,9 @@ export const McpServerEntryDraftSchema = z
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     url: z.string().optional(),
+    cwd: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
     source: z.string().min(1),
     enabled: z.boolean().optional(),
     status: McpServerStatusSchema.optional(),
@@ -2013,7 +2077,10 @@ export const McpServerEntryPatchSchema = z
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     url: z.string().optional(),
-    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+    /** Per-key secret mutations: string sets/replaces, null removes, omission preserves. */
+    env: z.record(z.string(), z.string().nullable()).optional(),
+    headers: z.record(z.string(), z.string().nullable()).optional(),
     source: z.string().min(1).optional(),
     enabled: z.boolean().optional(),
     status: McpServerStatusSchema.optional(),

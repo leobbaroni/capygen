@@ -48,7 +48,6 @@ import {
   type TurnInput,
 } from "../harness.js";
 import { McpClientPool, type McpPoolLogger } from "../mcp/client/McpClientPool.js";
-import { loadMcpServers } from "../mcp/client/config.js";
 import { widgetResourceUri, type McpServerConfig } from "../mcp/client/types.js";
 import { mcpToolDefinitions } from "../tools/mcpTools.js";
 import {
@@ -124,7 +123,7 @@ export interface ApiHarnessDeps {
     session: HarnessSession,
     agent: HarnessAgent,
   ) => Promise<ChatMessage[]> | ChatMessage[];
-  /** Explicit MCP server list; otherwise `loadMcpServers` reads the CLIs' files. */
+  /** Explicit lifecycle-captured MCP server list. */
   mcpServers?: readonly McpServerConfig[];
   /** Test seam: a pool with a fake SDK. */
   mcpPool?: McpClientPool;
@@ -817,13 +816,7 @@ export class ApiHarness implements Harness {
       this.pool = this.deps.mcpPool;
       return this.pool;
     }
-    const servers =
-      this.deps.mcpServers ??
-      (await loadMcpServers({
-        ...(this.session?.projectPath ? { projectPath: this.session.projectPath } : {}),
-        ...(this.agent?.config !== undefined ? { agentConfig: this.agent.config } : {}),
-        log: this.log,
-      }));
+    const servers = this.deps.mcpServers ?? [];
     this.mcpServerConfigs = servers;
     if (servers.length === 0) return null;
     if (this.deps.acquirePool) {

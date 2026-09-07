@@ -6,6 +6,8 @@ import {
   AgentDraftSchema,
   AgentPatchSchema,
   AgentSchema,
+  assertNoInlineAgentMcpCredentials,
+  redactInlineAgentMcpCredentials,
   BLOCK_KINDS,
   BlockSchema,
   DEFAULT_SESSION_SETTINGS,
@@ -55,8 +57,22 @@ function fakeTransport(overrides: Partial<IpcTransport> = {}): IpcTransport {
 describe("IPC contract", () => {
   it("declares every channel the shell depends on", () => {
     expect(INVOKE_CHANNEL_NAMES).toEqual([
+      "automations.list", "automations.create", "automations.update", "automations.delete",
+      "automations.runNow", "automations.cancelRun", "automations.listRuns",
+      "inbox.list", "inbox.markRead", "inbox.markAllRead", "usage.report",
       "projects.pick",
       "projects.list",
+      "worktrees.list",
+      "worktrees.create",
+      "worktrees.register",
+      "worktrees.remove",
+      "imports.pick",
+      "imports.cancel",
+      "imports.commit",
+      "imports.get",
+      "imports.entries",
+      "imports.reference",
+      "imports.continue",
       "sessions.create",
       "sessions.list",
       "sessions.get",
@@ -145,6 +161,7 @@ describe("IPC contract", () => {
       "browser.devtools",
     ]);
     expect(EVENT_CHANNEL_NAMES).toEqual([
+      "automations.changed", "automationRun.changed", "inbox.changed",
       "chat.block",
       "chat.turnStatus",
       "session.updated",
@@ -385,6 +402,18 @@ describe("domain schemas", () => {
     expect(config.api).toMatchObject({ provider: "openrouter", model: "z-ai/glm" });
 
     expect(() => AgentConfigSchema.parse({ api: { provider: "bogus", model: "x" } })).toThrow();
+  });
+
+  it("refuses inline agent MCP credentials and redacts unsupported legacy values", () => {
+    const config = AgentConfigSchema.parse({
+      api: { mcpServers: { demo: { command: "node", env: { TOKEN: "secret" } } } },
+    });
+    expect(() => assertNoInlineAgentMcpCredentials(config)).toThrow(/Settings > MCP servers/);
+    const publicConfig = redactInlineAgentMcpCredentials(config);
+    expect(JSON.stringify(publicConfig)).not.toContain("secret");
+    expect(publicConfig).toMatchObject({
+      api: { mcpServers: { demo: { command: "node", envKeys: ["TOKEN"] } } },
+    });
   });
 
   it("validates a harness listing", () => {

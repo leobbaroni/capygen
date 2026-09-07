@@ -44,6 +44,7 @@ import type {
   SkillScope,
   ToolPolicyEntry,
 } from "@capygen/shared";
+import type { McpServerConfig } from "../mcp/client/types.js";
 import {
   nodeFileIo,
   readSkillFrontMatter,
@@ -86,6 +87,12 @@ export interface CodexDefaults {
   sandboxMode?: string;
 }
 
+type InternalMcpEntry = McpServerEntry & {
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  cwd?: string;
+};
+
 export class CodexConfigStore {
   readonly paths: CodexPaths;
   private readonly io: FileIo;
@@ -108,13 +115,18 @@ export class CodexConfigStore {
     const config = this.config();
     const plugins = this.readPlugins(config);
     return {
-      mcpServers: this.readMcpServers(config),
+      mcpServers: this.readMcpServers(config).map(publicMcpEntry),
       plugins,
       skills: this.readSkills(plugins),
       // See the header: Codex has no per-tool permission list.
       tools: [] as ToolPolicyEntry[],
       marketplaces: this.readMarketplaces(config),
     };
+  }
+
+  /** Full values for the main-process runtime resolver; never sent over IPC. */
+  runtimeMcpServers(): McpServerConfig[] {
+    return this.readMcpServers(this.config()).map(runtimeMcpEntry);
   }
 
   /** `config.toml` as a nested object; `{}` when the file is absent. */
@@ -143,10 +155,10 @@ export class CodexConfigStore {
     };
   }
 
-  private readMcpServers(config: Record<string, unknown>): McpServerEntry[] {
+  private readMcpServers(config: Record<string, unknown>): InternalMcpEntry[] {
     const table = asRecord(config.mcp_servers);
     if (!table) return [];
-    const out: McpServerEntry[] = [];
+    const out: InternalMcpEntry[] = [];
     for (const [name, raw] of Object.entries(table)) {
       const record = asRecord(raw);
       if (!record) continue;
@@ -163,6 +175,10 @@ export class CodexConfigStore {
           : {}),
         ...(url ? { url } : {}),
         ...(stringRecord(record.env) ? { env: stringRecord(record.env) as Record<string, string> } : {}),
+        ...(stringRecord(record.http_headers ?? record.headers)
+          ? { headers: stringRecord(record.http_headers ?? record.headers) as Record<string, string> }
+          : {}),
+        ...(str(record.cwd) ? { cwd: str(record.cwd) as string } : {}),
         // Codex has exactly one MCP config file, so every server it declares is
         // user scope; a plugin-provided one is reported live instead
         // (`mcpServerStatus/list` carries `pluginId`), which is where the
@@ -271,7 +287,7 @@ export class CodexConfigStore {
     if (!written) {
       throw new Error(`capygen added "${draft.name}" to ${this.paths.configToml} but could not read it back`);
     }
-    return written;
+    return publicMcpEntry(written);
   }
 
   updateMcpServer(
@@ -288,7 +304,13 @@ export class CodexConfigStore {
       ...(patch.command ?? existing.command ? { command: patch.command ?? existing.command } : {}),
       ...(patch.args ?? existing.args ? { args: patch.args ?? existing.args } : {}),
       ...(patch.url ?? existing.url ? { url: patch.url ?? existing.url } : {}),
-      ...(patch.env ?? existing.env ? { env: patch.env ?? existing.env } : {}),
+      ...(mergeSecretMap(existing.env, patch.env)
+        ? { env: mergeSecretMap(existing.env, patch.env) as Record<string, string> }
+        : {}),
+      ...(mergeSecretMap(existing.headers, patch.headers)
+        ? { headers: mergeSecretMap(existing.headers, patch.headers) as Record<string, string> }
+        : {}),
+      ...(patch.cwd ?? existing.cwd ? { cwd: patch.cwd ?? existing.cwd } : {}),
       source: patch.source ?? existing.source,
       enabled: patch.enabled ?? existing.enabled,
     };
@@ -300,7 +322,7 @@ export class CodexConfigStore {
     });
     const written = this.readMcpServers(this.config()).find((entry) => entry.name === merged.name);
     if (!written) throw new Error(`capygen updated "${name}" but could not read it back`);
-    return written;
+    return publicMcpEntry(written);
   }
 
   removeMcpServer(scope: McpServerScope, name: string): { ok: boolean } {
@@ -425,6 +447,8 @@ export function mcpServerToml(
     values.url = draft.url;
   }
   if (draft.env && Object.keys(draft.env).length > 0) values.env = { ...draft.env };
+  if (draft.headers && Object.keys(draft.headers).length > 0) values.http_headers = { ...draft.headers };
+  if (draft.cwd) values.cwd = draft.cwd;
   // Only written when the server is *off*: Codex's own default is enabled, and
   // an explicit `enabled = true` on every row would be noise in the user's file.
   if (draft.enabled === false) values.enabled = false;
@@ -449,4 +473,41 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
     if (typeof item === "string") out[key] = item;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function publicMcpEntry(entry: InternalMcpEntry): McpServerEntry {
+  const { env, headers, ...rest } = entry;
+  return {
+    ...rest,
+    ...(env && Object.keys(env).length ? { envKeys: Object.keys(env).sort() } : {}),
+    ...(headers && Object.keys(headers).length ? { headerKeys: Object.keys(headers).sort() } : {}),
+  };
+}
+
+function runtimeMcpEntry(entry: InternalMcpEntry): McpServerConfig {
+  return {
+    name: entry.name,
+    transport: entry.transport === "claudeai-proxy" ? "http" : entry.transport,
+    source: "codex-config",
+    ...(entry.command ? { command: entry.command } : {}),
+    ...(entry.args ? { args: [...entry.args] } : {}),
+    ...(entry.url ? { url: entry.url } : {}),
+    ...(entry.cwd ? { cwd: entry.cwd } : {}),
+    ...(entry.env ? { env: { ...entry.env } } : {}),
+    ...(entry.headers ? { headers: { ...entry.headers } } : {}),
+    ...(!entry.enabled ? { disabled: true } : {}),
+  };
+}
+
+function mergeSecretMap(
+  existing: Record<string, string> | undefined,
+  patch: Record<string, string | null> | undefined,
+): Record<string, string> | undefined {
+  if (patch === undefined) return existing ? { ...existing } : undefined;
+  const merged = { ...(existing ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete merged[key];
+    else merged[key] = value;
+  }
+  return Object.keys(merged).length ? merged : undefined;
 }

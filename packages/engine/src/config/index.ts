@@ -16,3 +16,4 @@ export * from "./layering.js";
 export * from "./ClaudeConfigStore.js";
 export * from "./CodexConfigStore.js";
 export * from "./ApiConfigStore.js";
+export * from "./McpServerResolver.js";

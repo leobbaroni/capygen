@@ -12,6 +12,20 @@
  * compile error rather than a runtime "no handler registered".
  */
 import { z } from "zod";
+import { AutomationDraftSchema, AutomationPatchSchema, AutomationSchema, AutomationRunSchema } from "./automations.js";
+import { InboxItemSchema, InboxItemKindSchema } from "./inbox.js";
+import { UsageRangeSchema, UsageReportSchema } from "./usageReport.js";
+import {
+  TranscriptImportEntrySchema,
+  TranscriptImportPreviewSchema,
+  TranscriptImportRecordSchema,
+} from "./imports.js";
+import {
+  WorktreeBranchChoiceSchema,
+  WorktreeCreateResultSchema,
+  WorktreeRemoveResultSchema,
+  WorktreeSchema,
+} from "./worktrees.js";
 import {
   AgentConfigSchema,
   AgentDescribeSchema,
@@ -123,9 +137,72 @@ const ProjectScoped = { projectId: z.string().min(1).optional() } as const;
 // ---------------------------------------------------------------------------
 
 export const INVOKE_CHANNELS = {
+  "automations.list": { input: z.object({ projectId: z.string().optional(), enabled: z.boolean().optional() }), output: z.array(AutomationSchema) },
+  "automations.create": { input: AutomationDraftSchema, output: AutomationSchema },
+  "automations.update": { input: z.object({ id: z.string().min(1), patch: AutomationPatchSchema.omit({ nextRunAt: true, disabledReason: true }) }), output: AutomationSchema },
+  "automations.delete": { input: z.object({ id: z.string().min(1) }), output: z.object({ ok: z.boolean() }) },
+  "automations.runNow": { input: z.object({ id: z.string().min(1) }), output: AutomationRunSchema },
+  "automations.cancelRun": { input: z.object({ runId: z.string().min(1) }), output: z.object({ ok: z.boolean() }) },
+  "automations.listRuns": { input: z.object({ id: z.string().min(1), limit: z.number().int().min(1).max(100).default(50) }), output: z.array(AutomationRunSchema) },
+  "inbox.list": { input: z.object({ sessionId: z.string().optional(), kind: InboxItemKindSchema.optional(), unreadOnly: z.boolean().optional(), unresolvedOnly: z.boolean().optional(), limit: z.number().int().min(1).max(100).default(50), before: z.object({ createdAt: z.number().int().nonnegative(), id: z.string() }).optional() }), output: z.object({ items: z.array(InboxItemSchema), unreadCount: z.number().int().nonnegative() }) },
+  "inbox.markRead": { input: z.object({ id: z.string().min(1), read: z.boolean().default(true) }), output: InboxItemSchema.nullable() },
+  "inbox.markAllRead": { input: z.object({ sessionId: z.string().optional() }), output: z.object({ count: z.number().int().nonnegative() }) },
+  "usage.report": { input: UsageRangeSchema, output: UsageReportSchema },
   /** Native folder picker; resolves to null when the user cancels. */
-  "projects.pick": channel(Empty, ProjectSchema.nullable()),
-  "projects.list": channel(Empty, z.array(ProjectSchema)),
+    "projects.pick": channel(Empty, ProjectSchema.nullable()),
+    "projects.list": channel(Empty, z.array(ProjectSchema)),
+
+    /** Git is authoritative; every operation is scoped by an explicit source project. */
+    "worktrees.list": channel(
+      z.object({ sourceProjectId: z.string().min(1) }).strict(),
+      z.array(WorktreeSchema),
+    ),
+    "worktrees.create": channel(
+      z.object({
+        sourceProjectId: z.string().min(1),
+        branch: WorktreeBranchChoiceSchema,
+      }).strict(),
+      WorktreeCreateResultSchema.nullable(),
+    ),
+    "worktrees.register": channel(
+      z.object({ sourceProjectId: z.string().min(1), path: z.string().min(1).max(32_768) }).strict(),
+      WorktreeCreateResultSchema,
+    ),
+    "worktrees.remove": channel(
+      z.object({ sourceProjectId: z.string().min(1), path: z.string().min(1).max(32_768) }).strict(),
+      WorktreeRemoveResultSchema,
+    ),
+
+    /** File authority comes only from main's native picker; handles belong to its window. */
+  "imports.pick": channel(
+    z.object({ projectId: z.string().min(1) }).strict(),
+    TranscriptImportPreviewSchema.nullable(),
+  ),
+  "imports.cancel": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+    z.object({ ok: z.boolean() }),
+  ),
+  "imports.commit": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+    z.object({ session: SessionSchema, duplicate: z.boolean() }),
+  ),
+  "imports.get": channel(
+    z.object({ sessionId: z.string().min(1) }).strict(),
+    TranscriptImportRecordSchema.nullable(),
+  ),
+  "imports.entries": channel(
+    z.object({ sessionId: z.string().min(1), offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    z.array(TranscriptImportEntrySchema).max(100),
+  ),
+  "imports.reference": channel(
+    z.object({ sessionId: z.string().min(1) }).strict(),
+    z.object({ text: z.string().refine((text) => new TextEncoder().encode(text).byteLength <= 6000), truncated: z.boolean() }),
+  ),
+  "imports.continue": channel(
+    z.object({ sessionId: z.string().min(1), projectId: z.string().min(1), agent: AgentDraftSchema }).strict(),
+    z.object({ session: SessionSchema, agents: z.array(AgentSchema) }),
+  ),
 
   "sessions.create": channel(
     z.object({
@@ -805,6 +882,9 @@ export const INVOKE_CHANNEL_NAMES = Object.keys(INVOKE_CHANNELS) as InvokeChanne
 // ---------------------------------------------------------------------------
 
 export const EVENT_CHANNELS = {
+  "automations.changed": z.object({ automation: AutomationSchema.nullable(), id: z.string() }),
+  "automationRun.changed": AutomationRunSchema,
+  "inbox.changed": z.object({ unreadCount: z.number().int().nonnegative() }),
   /** Upsert by `block.id` — the same block is re-sent as it streams and settles. */
   "chat.block": BlockSchema,
   "chat.turnStatus": z.object({

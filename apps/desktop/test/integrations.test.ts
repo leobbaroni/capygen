@@ -26,7 +26,7 @@ import {
   type SkillEntry,
   type ToolPolicyEntry,
 } from "@capygen/shared";
-import type { CliResult, CliRunner } from "@capygen/engine";
+import type { CliResult, CliRunner, McpServerConfig } from "@capygen/engine";
 import { createIpcContext, type IpcContext } from "../src/ipc/handlers.js";
 import { INTEGRATIONS_CHANNELS } from "../src/ipc/integrations.js";
 import type { WatcherLike } from "../src/integrations/SyncCoordinator.js";
@@ -565,15 +565,15 @@ describe("refusals carry the reason (SPEC §Edge Cases)", () => {
 
 describe("integrations.mcp.test", () => {
   it("uses capygen's own client when it can reach the server", async () => {
-    write(path.join(codexHome, "config.toml"), '[mcp_servers.local]\ncommand = "node"\n');
+    write(path.join(codexHome, "config.toml"), '[mcp_servers.local]\ncommand = "node"\nenv = { TOKEN = "secret" }\n');
     // A probe stands in for the shared MCP pool (`probeMcpServer.ts` wires the
     // real one in `main.ts`); this asserts the plumbing, not the SDK.
-    const probed: string[] = [];
+    const probed: McpServerConfig[] = [];
     const service = ipc.integrations;
     (service as unknown as { deps: { probeMcpServer?: unknown } }).deps.probeMcpServer = async (
-      entry: McpServerEntry,
+      entry: McpServerConfig,
     ): Promise<string[]> => {
-      probed.push(entry.name);
+      probed.push(entry);
       return ["search", "fetch"];
     };
     expect(await call("integrations.mcp.test", { backend: "codex", name: "local" })).toEqual({
@@ -581,7 +581,9 @@ describe("integrations.mcp.test", () => {
       status: "connected",
       tools: ["search", "fetch"],
     });
-    expect(probed).toEqual(["local"]);
+    expect(probed).toMatchObject([{ name: "local", env: { TOKEN: "secret" } }]);
+    const listed = await call("integrations.list", { backend: "codex" });
+    expect(JSON.stringify(listed)).not.toContain("secret");
   });
 
   it("says so, with the status, when there is nothing to reach", async () => {

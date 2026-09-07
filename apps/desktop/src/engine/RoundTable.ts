@@ -40,6 +40,7 @@
  */
 import {
   buildAgentPrompt,
+  IMPORTED_REFERENCE_SPEAKER_LABEL,
   chainStoppedMessage,
   hopAllowed,
   nextHopTargets,
@@ -105,6 +106,11 @@ interface Entry {
   messageFrom: string | null;
   /** The turn `message` came from — kept out of the delta so it is not doubled. */
   sourceTurnId: string;
+}
+
+interface DesktopTranscriptTurn extends TranscriptTurn {
+  /** Frozen persisted label; imported references use a reserved inert marker. */
+  speakerLabel?: string;
 }
 
 /** A hop the cap refused, kept so `chat.continue` can run exactly it. */
@@ -181,7 +187,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
    * still being written has nothing to quote, and the turn being dispatched
    * right now is one of them.
    */
-  function transcriptOf(sessionId: string): TranscriptTurn[] {
+  function transcriptOf(sessionId: string): DesktopTranscriptTurn[] {
     const blocks = store.blocks.listBySession(sessionId);
     const texts = new Map<string, string[]>();
     for (const block of blocks) {
@@ -198,6 +204,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         id: turn.id,
         agentId: turn.agentId,
         role: turn.role,
+        ...(turn.speakerLabel !== undefined ? { speakerLabel: turn.speakerLabel } : {}),
         text: (texts.get(turn.id) ?? []).join("\n").trim(),
       }));
   }
@@ -248,16 +255,40 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
   function promptFor(entry: Entry): string {
     const transcript = transcriptOf(entry.turn.sessionId);
-    return buildAgentPrompt({
+    const sinceTurnId = deltaStart(entry.turn.sessionId, entry.agent, transcript);
+    const excluded = new Set([entry.sourceTurnId, entry.turn.id]);
+    let start = 0;
+    if (sinceTurnId) {
+      const at = transcript.findIndex((turn) => turn.id === sinceTurnId);
+      if (at >= 0) start = at + 1;
+    }
+    const importedReference =
+      entry.agent.backend === "api"
+        ? null
+        : transcript
+            .slice(start)
+            .findLast(
+              (turn) =>
+                turn.speakerLabel === IMPORTED_REFERENCE_SPEAKER_LABEL &&
+                !excluded.has(turn.id),
+            )?.text ?? null;
+    // The ordinary delta path clamps every quoted turn to 1,500 characters.
+    // Remove the marked row and prepend it unchanged as part of this user
+    // message instead, preserving the formatter's separate 6,000-byte bound.
+    const ordinary = transcript.filter(
+      (turn) => turn.speakerLabel !== IMPORTED_REFERENCE_SPEAKER_LABEL,
+    );
+    const prompt = buildAgentPrompt({
       backend: entry.agent.backend,
       agentId: entry.agent.id,
-      transcript,
+      transcript: ordinary,
       speakers: speakerMap(entry.turn.sessionId),
-      sinceTurnId: deltaStart(entry.turn.sessionId, entry.agent, transcript),
-      exclude: [entry.sourceTurnId, entry.turn.id],
+      sinceTurnId,
+      exclude: [...excluded],
       message: entry.message,
       messageFrom: entry.messageFrom,
     });
+    return importedReference ? `${importedReference}\n\n${prompt}` : prompt;
   }
 
   function openEntries(

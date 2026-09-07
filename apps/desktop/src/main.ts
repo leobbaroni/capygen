@@ -78,6 +78,9 @@ import {
 import { createBrowserViewService } from "./workspace/BrowserViewService.js";
 import { ECHO_DELAY_MS, createStubEngine } from "./engine/stub.js";
 import type { EngineDeps } from "./engine/types.js";
+import { createElectronImportWorkerClient } from "./imports/electronUtilityWorker.js";
+import type { ImportWorkerClient } from "./imports/utilityWorker.js";
+import { ImportStagingService } from "./imports/staging.js";
 
 /**
  * dist/ after bundling. esbuild emits CommonJS here (Electron's main entry is
@@ -101,6 +104,8 @@ let widgets: WidgetHostHandlers | null = null;
 let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
 let notifier: Notifier | null = null;
+let importWorker: ImportWorkerClient | null = null;
+let importStaging: ImportStagingService | null = null;
 
 // ---------------------------------------------------------------------------
 // single instance
@@ -248,7 +253,11 @@ function createWindow(): BrowserWindow {
   win.on("resize", persistGeometry);
   win.on("move", persistGeometry);
   win.on("close", persistGeometry);
-  win.on("closed", () => shellWindows.delete(win));
+  const importOwnerId = win.webContents.id;
+  win.on("closed", () => {
+    shellWindows.delete(win);
+    void importStaging?.releaseWindow(importOwnerId);
+  });
 
   // External links open in the user's browser, never inside the shell.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -290,7 +299,9 @@ function broadcast<E extends EventChannel>(event: E, payload: EventInput<E>): vo
   // After the sends, and inside its own try: a toast must never be able to
   // stop an event reaching the UI.
   try {
-    notifier?.handle(event, parsed);
+    if (event !== "chat.turnStatus" || store?.turns.get((parsed as { turnId: string }).turnId)?.role === "agent") {
+      notifier?.handle(event, parsed);
+    }
   } catch (err) {
     log?.warn(`[notify] handler threw for ${event}`, err);
   }
@@ -433,6 +444,62 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
 
   const context = createIpcContext({
     store: activeStore,
+    workspace: {
+      worktrees: {
+        pickDestination: async ({ sourceProjectId, branch }) => {
+          const sender = ipcSender.getStore();
+          const owner = [...shellWindows].find((win) => !win.isDestroyed() && win.webContents.id === sender);
+          if (!owner) throw new Error("the worktree window was closed");
+          const source = activeStore.projects.get(sourceProjectId);
+          if (!source) throw new Error("unknown source project");
+          const result = await dialog.showSaveDialog(owner, {
+            title: `Create worktree for ${branch.name}`,
+            buttonLabel: "Create worktree here",
+            defaultPath: path.join(path.dirname(source.path), path.basename(branch.name)),
+            properties: ["createDirectory", "showOverwriteConfirmation"],
+          });
+          if (owner.isDestroyed()) throw new Error("the worktree window was closed");
+          return result.canceled ? null : result.filePath ?? null;
+        },
+        confirmRemoval: async (risk) => {
+          const sender = ipcSender.getStore();
+          const owner = [...shellWindows].find((win) => !win.isDestroyed() && win.webContents.id === sender);
+          if (!owner) return false;
+          const result = await dialog.showMessageBox(owner, {
+            type: "warning",
+            title: "Remove worktree and its files?",
+            message: `Remove ${risk.path}?`,
+            detail: "This directory contains modified, untracked, or ignored files. Removing it permanently deletes those files. The branch and committed history are kept.",
+            buttons: ["Cancel", "Remove worktree and files"],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          return !owner.isDestroyed() && result.response === 1;
+        },
+      },
+    },
+    imports: {
+      staging: importStaging!,
+      ownerId: () => {
+        const owner = ipcSender.getStore();
+        if (owner === undefined) throw new Error("missing import window");
+        return owner;
+      },
+      isOwnerAlive: (owner) => [...shellWindows].some((win) =>
+        !win.isDestroyed() && win.webContents.id === owner),
+      pickFile: async (owner) => {
+        const win = [...shellWindows].find((candidate) =>
+          !candidate.isDestroyed() && candidate.webContents.id === owner);
+        if (!win) throw new Error("the import window was closed");
+        const picked = await dialog.showOpenDialog(win, {
+          title: "Import a transcript",
+          properties: ["openFile"],
+          filters: [{ name: "Transcripts", extensions: ["jsonl", "json"] }],
+        });
+        return picked.canceled ? null : picked.filePaths[0] ?? null;
+      },
+    },
     broadcast,
     log,
     widgets,
@@ -633,7 +700,7 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
 
 app.on("second-instance", () => revealWindow());
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const userData = app.getPath("userData");
   log = createLogger({ dir: path.join(userData, LOG_DIR_NAME), fileName: LOG_FILE_NAME });
   log.captureConsole();
@@ -670,6 +737,18 @@ app.whenReady().then(() => {
     log.info(`[main] initial project ${project.path}`);
   }
 
+  importWorker = createElectronImportWorkerClient({
+    workerPath: path.join(HERE, "importWorker.cjs"),
+    jobsDirectory: path.join(userData, "imports", "jobs"),
+  });
+  await importWorker.initialize();
+  importStaging = new ImportStagingService({
+    directory: path.join(userData, "imports", "staging"),
+    stage: importWorker.stageTranscript.bind(importWorker),
+    projectExists: (projectId) => Boolean(store?.projects.get(projectId)),
+    log,
+  });
+  await importStaging.initialize();
   ipc = registerIpc(store);
 
   // [Phase 6/C] The notifications switch, made real (SPEC R19/R30). Built
@@ -679,6 +758,13 @@ app.whenReady().then(() => {
   // simply do not toast.
   const activeStore = store;
   notifier = createNotifier({
+    claim: (key) => {
+      const raw = activeStore.settings.getRaw<unknown>("notifications.seen", []);
+      const seen = Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+      if (seen.includes(key)) return false;
+      activeStore.settings.setRaw("notifications.seen", [...seen.slice(-199), key]);
+      return true;
+    },
     settings: () => ipc?.settings.all().notifications ?? DEFAULT_NOTIFICATIONS_OFF,
     isFocused: () => [...shellWindows].some((win) => !win.isDestroyed() && win.isFocused()),
     show: (request) => {
@@ -723,6 +809,7 @@ app.whenReady().then(() => {
   tray.create();
 
   createWindow();
+  ipc.automations.start();
 
   nativeTheme.on("updated", () => {
     for (const win of shellWindows) {
@@ -733,6 +820,13 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (shellWindows.size === 0) createWindow();
   });
+}).catch(async (error: unknown) => {
+  log?.error("[main] startup failed", error);
+  try { await importStaging?.dispose(); } catch { /* preserve the startup error */ }
+  try { await importWorker?.dispose(); } catch { /* preserve the startup error */ }
+  try { store?.close(); store = null; } catch { /* process is terminating */ }
+  dialog.showErrorBox("capygen could not start", "Startup failed. See the capygen log for details.");
+  app.exit(1);
 });
 
 app.on("window-all-closed", () => {
@@ -761,6 +855,13 @@ app.on("will-quit", (event) => {
   shuttingDown = true;
   event.preventDefault();
   void (async () => {
+    try {
+      await importStaging?.dispose();
+    } catch (err) {
+      log?.error("[main] import staging shutdown error", err);
+    }
+    try { await importWorker?.dispose(); }
+    catch (err) { log?.error("[main] import worker shutdown error", err); }
     try {
       await widgets?.dispose();
     } catch (err) {

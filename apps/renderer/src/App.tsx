@@ -12,6 +12,10 @@ import { DevCardsPage } from "@/pages/DevCardsPage";
 import { DevWorkspacePage } from "@/pages/DevWorkspacePage";
 import { DevSettingsPage } from "@/pages/DevSettingsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { TasksPage } from "@/pages/TasksPage";
+import { InboxPage } from "@/pages/InboxPage";
+import { UsagePage } from "@/pages/UsagePage";
+import { AutomationsPage } from "@/pages/AutomationsPage";
 import { useAppStore } from "@/store/appStore";
 
 export function App() {
@@ -27,6 +31,10 @@ export function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<LandingPage />} />
           <Route path="/c/:sessionId" element={<ChatPage />} />
+          <Route path="/tasks" element={<TasksPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
+          <Route path="/usage" element={<UsagePage />} />
+          <Route path="/automations" element={<AutomationsPage />} />
           <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
           <Route path="/settings/:section" element={<SettingsPage />} />
           {/* Fixture page for every card kind (B4 evidence) — dev-only, never

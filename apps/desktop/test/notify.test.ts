@@ -35,6 +35,24 @@ beforeEach(() => {
   focused = false;
 });
 
+it("uses durable claims across notifier recreation without claiming focused events", () => {
+  const claimed = new Set<string>();
+  const claim = vi.fn((key: string) => {
+    if (claimed.has(key)) return false;
+    claimed.add(key);
+    return true;
+  });
+  const build = () => createNotifier({ settings: () => ALL_ON, isFocused: () => focused, claim, show: (request) => shown.push(request) });
+  const event = { sessionId: "s1", turnId: "t1", status: "done" as const };
+  focused = true;
+  build().handle("chat.turnStatus", event);
+  expect(claim).not.toHaveBeenCalled();
+  focused = false;
+  build().handle("chat.turnStatus", event);
+  build().handle("chat.turnStatus", event);
+  expect(shown).toHaveLength(1);
+});
+
 describe("onFinish", () => {
   it("toasts a finished turn, naming the session", () => {
     notifier().handle("chat.turnStatus", { sessionId: "s1", turnId: "t1", status: "done" });

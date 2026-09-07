@@ -10,12 +10,19 @@
  * surface — a fixed strip that stops short of the buttons. Everything below and
  * right of it stays clickable.
  */
-import { Outlet } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Outlet, useLocation } from "react-router-dom";
+import { MenuIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "@/store/appStore";
 import { useApplyGlobalTheme } from "@/lib/theme";
 
 export function AppShell() {
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => setNavigationOpen(false), [location.pathname]);
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
 
@@ -31,7 +38,15 @@ export function AppShell() {
     // sidebar off-screen with it. Panes clip or scroll inside their own box.
     <div className="app-shell relative flex h-dvh overflow-hidden bg-sidebar text-foreground">
       <div className="titlebar-drag" aria-hidden="true" />
-      <Sidebar sessions={sessions} activeSessionId={activeSessionId} />
+      <div className="hidden min-h-0 md:flex"><Sidebar sessions={sessions} activeSessionId={activeSessionId} /></div>
+      <Button variant="ghost" size="sm" aria-label="Open navigation" className="absolute top-1 left-2 z-[42] md:hidden" onClick={() => setNavigationOpen(true)}><MenuIcon className="size-4" /></Button>
+      <Dialog open={navigationOpen} onOpenChange={setNavigationOpen}>
+        <DialogContent aria-label="Navigation" className="h-[85vh] w-[280px] gap-0 overflow-hidden p-0">
+          <DialogTitle className="sr-only">Navigation</DialogTitle>
+          <Button variant="ghost" onClick={() => setNavigationOpen(false)}>Close navigation</Button>
+          <div className="flex min-h-0 flex-1"><Sidebar sessions={sessions} activeSessionId={activeSessionId} /></div>
+        </DialogContent>
+      </Dialog>
       <main className="relative flex min-w-0 flex-1 flex-col bg-background">
         <Outlet />
       </main>

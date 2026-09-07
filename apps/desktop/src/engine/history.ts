@@ -25,7 +25,13 @@
  *    rejects an unsigned `thinking` block on the way back in.
  */
 import type { CapygenStore } from "@capygen/db";
-import type { ChatContent, ChatMessage, HarnessAgent, HarnessSession } from "@capygen/engine";
+import {
+  IMPORTED_REFERENCE_SPEAKER_LABEL,
+  type ChatContent,
+  type ChatMessage,
+  type HarnessAgent,
+  type HarnessSession,
+} from "@capygen/engine";
 import type { Block } from "@capygen/shared";
 
 /** Longest tool result replayed verbatim; the rest is a marked stub (R25). */
@@ -81,6 +87,20 @@ export function loadApiHistory(
     if (turn.status === "streaming") continue;
     const own = (byTurn.get(turn.id) ?? []).slice().sort((a, b) => a.index - b.index);
     if (own.length === 0) continue;
+
+    // A continuation reference is a system-owned, noninteractive transcript
+    // row, but it must reach the provider at user-message priority. Check its
+    // explicit marker before the null-agent fallback below can relabel it as
+    // another speaker. The stored formatter already JSON-quotes untrusted
+    // history and enforces its independent 6,000-byte bound; keep it exact.
+    if (turn.speakerLabel === IMPORTED_REFERENCE_SPEAKER_LABEL) {
+      const text = own
+        .filter((b): b is Extract<Block, { kind: "text" }> => b.kind === "text")
+        .map((b) => b.text)
+        .join("\n");
+      if (text) pushUser([{ type: "text", text }]);
+      continue;
+    }
 
     if (turn.role === "user") {
       const text = own
