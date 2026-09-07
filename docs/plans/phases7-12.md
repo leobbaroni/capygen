@@ -62,6 +62,7 @@ include them in diagnostics, or delete this home during test cleanup. No persona
 
 First read existing `workspace/GitService`, project repositories, composer chips, Diff pane
 and Omnigent P8/P9. Projects already exist; extend them rather than building a second store.
+Detailed acceptance contracts: `phase7-worktrees.md` and `phase7-imports.md` in this directory.
 
 1. Astra contracts: project/worktree relation and explicit source/target project identifiers;
    import provenance, warnings, supported format/version and deduplication key; typed IPC.
@@ -72,7 +73,7 @@ and Omnigent P8/P9. Projects already exist; extend them rather than building a s
    dirty worktree requires a separate explicit destructive-action confirmation.
 3. Opus import parsers: user-selected Claude JSONL and Codex rollout JSONL; bounded streaming,
    clear malformed/truncated-line diagnostics, stable order and source ids, duplicate detection,
-   unknown event preservation as inert data. Imported tool calls never execute, imported
+   unknown event type/count preservation without arbitrary raw payloads. Imported tool calls never execute, imported
    permissions never authorize current work, source paths never become execution cwd implicitly.
    Do not import config, credentials, or raw environment dumps. Preview counts/warnings and
    destination before committing the transaction. Cancellation/failure leaves no partial session.
@@ -84,7 +85,8 @@ and Omnigent P8/P9. Projects already exist; extend them rather than building a s
 
 Import format authority is the installed CLI's emitted sample/schema, recorded in COMPAT.md.
 The historical sessions recovered in this review inform fixtures but must not be checked in raw.
-Resuming an imported backend id is a separate explicit action, not an import side effect.
+Imported sessions are read-only artifacts. Continue as new session uses a fresh backend identity
+and a previewed, bounded historical quotation; native-id resume is outside this import feature.
 
 ## Phase 8: Tasks, Inbox, Usage, Automations
 

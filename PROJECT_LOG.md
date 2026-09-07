@@ -1449,3 +1449,17 @@ Final native Playwright output: `12 skipped`, `43 passed (55.6s)`. The converted
 contributed nine offline passes. The whole-harness Anthropic low-effort capture is type-safe;
 API/provider/test-policy focused tests passed 60 cases after final typecheck. Astra reviewed
 source and inspected `settings-plugins-isolated.png`. Skips remain open live-proof items.
+
+### Phase 7 import trust boundary prepared
+
+Astra and Fable reviewed the current native/API history paths before freezing
+`docs/plans/phase7-imports.md`. Imported sessions will be read-only, with explicit fresh-session
+continuation and no native resume identity. Unknown events retain type/count only; historical
+tools and approvals are inert text. Continuation must preserve an imported-reference speaker
+label and reach every harness as a bounded quotation, never a source system instruction.
+
+Luna's no-model synthetic Claude SDK probe returned three chronological messages from one
+custom-store load, without spawning Claude or reading a backend home. Astra inspected the
+probe and checked Codex's pinned `rust-v0.153.4` history/rollout source. This is preparation,
+not completed import UI or phase acceptance. Opus owns isolated parser files while the separate
+runtime settings implementation remains in progress.
