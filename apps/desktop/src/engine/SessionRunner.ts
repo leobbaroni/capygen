@@ -951,6 +951,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
             cacheReadTokens: usage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens,
             costUsd: usage.costUsd,
+            costKnown: usage.costKnown ?? usage.costUsd > 0,
           });
         }
         break;

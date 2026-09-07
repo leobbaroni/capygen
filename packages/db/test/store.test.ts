@@ -143,6 +143,7 @@ describe("migrations", () => {
       "0003_round_table_agents",
       "0004_workspace_panes",
       "0005_integrations_backend_column",
+      "0008_usage_cost_known",
     ]);
     expect(store.migration.backupFile).toBeNull();
     store.close();
@@ -192,6 +193,7 @@ describe("migrations", () => {
       "0003_round_table_agents",
       "0004_workspace_panes",
       "0005_integrations_backend_column",
+      "0008_usage_cost_known",
     ]);
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),

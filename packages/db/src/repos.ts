@@ -27,6 +27,8 @@ import {
   ToolPolicyEntrySchema,
   TurnSchema,
   UsageEventSchema,
+  UsageRangeSchema,
+  buildUsageReport,
   WorkspaceLayoutSchema,
   deriveMentionName,
   mergeGlobalSettingsPatch,
@@ -76,6 +78,8 @@ import {
   type TurnRole,
   type TurnStatus,
   type UsageEvent,
+  type UsageRange,
+  type UsageReport,
   type WorkspaceLayout,
 } from "@capygen/shared";
 import {
@@ -1069,6 +1073,7 @@ function rowToUsageEvent(row: Row): UsageEvent {
     cacheReadTokens: Number(row.cache_read_tokens),
     cacheCreationTokens: Number(row.cache_creation_tokens),
     costUsd: Number(row.cost_usd),
+    costKnown: intToBool(row.cost_known),
     ts: Number(row.ts),
   });
 }
@@ -1079,14 +1084,16 @@ export class UsageRepo {
   record(event: Omit<UsageEvent, "id" | "ts"> & { id?: string; ts?: number }): UsageEvent {
     const full = UsageEventSchema.parse({
       ...event,
+      costKnown: event.costKnown ?? event.costUsd > 0,
       id: event.id ?? newId("usage"),
       ts: event.ts ?? now(),
     });
     this.db.run(
       `INSERT INTO usage_events
          (id, session_id, agent_id, turn_id, backend, model,
-          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+          cost_usd, cost_known, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       full.id,
       full.sessionId,
       full.agentId,
@@ -1098,6 +1105,7 @@ export class UsageRepo {
       full.cacheReadTokens,
       full.cacheCreationTokens,
       full.costUsd,
+      boolToInt(full.costKnown ?? false),
       full.ts,
     );
     return full;
@@ -1107,6 +1115,29 @@ export class UsageRepo {
     return this.db
       .all<Row>("SELECT * FROM usage_events WHERE session_id = ? ORDER BY ts", sessionId)
       .map(rowToUsageEvent);
+  }
+
+  /** Select the half-open range first, then aggregate only those rows and their
+   *  session titles. `buildUsageReport` owns IANA-zone day boundaries. */
+  report(range: UsageRange): UsageReport {
+    const parsed = UsageRangeSchema.parse(range);
+    const rows = this.db.all<Row>(
+      `WITH ranged AS (
+         SELECT * FROM usage_events WHERE ts >= ? AND ts < ?
+       )
+       SELECT ranged.*, sessions.title AS session_title
+         FROM ranged
+         JOIN sessions ON sessions.id = ranged.session_id
+        ORDER BY ranged.ts, ranged.id`,
+      parsed.from,
+      parsed.to,
+    );
+    const events = rows.map(rowToUsageEvent);
+    const titles = new Map<string, string>();
+    for (const row of rows) {
+      titles.set(String(row.session_id), String(row.session_title));
+    }
+    return buildUsageReport(events, parsed, titles);
   }
 
   /** Totals for one agent across every session — `agents.describe`'s "cost so

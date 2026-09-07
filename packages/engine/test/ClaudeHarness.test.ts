@@ -12,6 +12,8 @@ import {
   deltaUsage,
   parseQuestions,
   readClaudeConfig,
+  readModelUsage,
+  sumUsage,
 } from "../src/claude/ClaudeHarness.js";
 import { cleanEnv } from "../src/env.js";
 import type { EngineEvent, HarnessAgent, HarnessSession } from "../src/harness.js";
@@ -185,6 +187,7 @@ describe("ClaudeHarness — one full turn", () => {
       cacheReadTokens: 37_762,
       cacheCreationTokens: 0,
       costUsd: 0.161,
+      costKnown: true,
     });
     expect(blocks(turn.events, "usage")).toHaveLength(1);
     expect(turn.events.at(-1)).toEqual({ type: "turn", status: "done" });
@@ -897,6 +900,21 @@ describe("pure mappers", () => {
       outputTokens: 2,
       costUsd: 1,
     });
+  });
+
+  it("keeps reported zero-cost knowledge through Claude model deltas and sums", () => {
+    const reported = readModelUsage({
+      free: { inputTokens: 4, outputTokens: 1, costUSD: 0 },
+      missing: { inputTokens: 2, outputTokens: 1 },
+    });
+    expect(reported.free).toMatchObject({ costUsd: 0, costKnown: true });
+    expect(reported.missing).toMatchObject({ costUsd: 0, costKnown: false });
+
+    const delta = deltaUsage({}, reported);
+    expect(delta.free?.costKnown).toBe(true);
+    expect(delta.missing?.costKnown).toBe(false);
+    expect(sumUsage({ free: delta.free! }).costKnown).toBe(true);
+    expect(sumUsage(delta).costKnown).toBe(false);
   });
 
   it("reads only the config keys it knows", () => {

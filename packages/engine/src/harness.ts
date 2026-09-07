@@ -217,11 +217,26 @@ export const EMPTY_USAGE: UsageTotals = {
 };
 
 export function addUsage(a: UsageTotals, b: UsageTotals): UsageTotals {
-  return {
+  const combined: UsageTotals = {
     inputTokens: a.inputTokens + b.inputTokens,
     outputTokens: a.outputTokens + b.outputTokens,
     cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
     cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
     costUsd: a.costUsd + b.costUsd,
   };
+  const aEmpty = usageIsEmpty(a);
+  const bEmpty = usageIsEmpty(b);
+  if (a.costKnown !== undefined || b.costKnown !== undefined) {
+    combined.costKnown = aEmpty
+      ? b.costKnown
+      : bEmpty
+        ? a.costKnown
+        : (a.costKnown ?? a.costUsd > 0) && (b.costKnown ?? b.costUsd > 0);
+  }
+  return combined;
+}
+
+function usageIsEmpty(usage: UsageTotals): boolean {
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens +
+    usage.cacheCreationTokens + usage.costUsd === 0;
 }

@@ -237,6 +237,7 @@ describe("streaming into rows", () => {
         cacheReadTokens: 37_762,
         cacheCreationTokens: 0,
         costUsd: 0.161,
+        costKnown: true,
       },
       byModel: {},
     });
@@ -252,6 +253,7 @@ describe("streaming into rows", () => {
       inputTokens: 4,
       outputTokens: 131,
       cacheReadTokens: 37_762,
+      costKnown: true,
     });
     expect(store.usage.totalsBySession(sessionId).costUsd).toBeCloseTo(0.161, 10);
   });
@@ -269,7 +271,8 @@ describe("streaming into rows", () => {
         outputTokens: 30,
         cacheReadTokens: 100,
         cacheCreationTokens: 0,
-        costUsd: 0.3,
+        costUsd: 0.1,
+        costKnown: false,
       },
       byModel: {
         "claude-sonnet-5": {
@@ -278,13 +281,15 @@ describe("streaming into rows", () => {
           cacheReadTokens: 100,
           cacheCreationTokens: 0,
           costUsd: 0.1,
+          costKnown: true,
         },
         "claude-opus-5": {
           inputTokens: 6,
           outputTokens: 20,
           cacheReadTokens: 0,
           cacheCreationTokens: 0,
-          costUsd: 0.2,
+          costUsd: 0,
+          costKnown: false,
         },
       },
     });
@@ -294,10 +299,14 @@ describe("streaming into rows", () => {
     await vi.waitFor(() => expect(store.usage.listBySession(sessionId)).toHaveLength(2));
     const rows = store.usage.listBySession(sessionId);
     const byModel = Object.fromEntries(rows.map((r) => [r.model, r]));
-    expect(byModel["claude-sonnet-5"]).toMatchObject({ turnId, outputTokens: 10, costUsd: 0.1 });
-    expect(byModel["claude-opus-5"]).toMatchObject({ turnId, outputTokens: 20, costUsd: 0.2 });
+    expect(byModel["claude-sonnet-5"]).toMatchObject({
+      turnId, outputTokens: 10, costUsd: 0.1, costKnown: true,
+    });
+    expect(byModel["claude-opus-5"]).toMatchObject({
+      turnId, outputTokens: 20, costUsd: 0, costKnown: false,
+    });
     // The session total still adds up to what the harness reported.
-    expect(store.usage.totalsBySession(sessionId).costUsd).toBeCloseTo(0.3, 10);
+    expect(store.usage.totalsBySession(sessionId).costUsd).toBeCloseTo(0.1, 10);
   });
 
   it("marks the turn errored and keeps the message when the harness throws", async () => {

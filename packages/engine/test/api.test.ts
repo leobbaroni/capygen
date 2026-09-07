@@ -171,11 +171,36 @@ describe("a plain text turn", () => {
     // 10 in + 5 out + 1000 cache read at the sonnet prices in pricing.ts.
     const cost = (usage as { usage: { costUsd: number } }).usage.costUsd;
     expect(cost).toBeCloseTo((3 * 10 + 15 * 5 + 0.3 * 1_000) / 1_000_000, 12);
+    expect(usage?.type === "usage" ? usage.usage.costKnown : undefined).toBe(true);
     expect(events.at(-1)).toEqual({ type: "turn", status: "done" });
 
     // R24: exactly one request, with the tools the agent was given.
     expect(requests).toHaveLength(1);
     expect(requests[0]?.tools.map((t) => t.name)).toContain("read_file");
+    await harness.dispose();
+  });
+
+  it("marks usage from an unpriced API model as unknown cost", async () => {
+    const model = "provider/model-without-a-price";
+    const response = text("unknown price").map((event) =>
+      event.type === "usage" ? { ...event, model } : event,
+    );
+    const { provider } = scriptedProvider([response]);
+    const harness = new ApiHarness({
+      ...useMcpOff(),
+      createProvider: async () => provider,
+      keys: { getKey: () => "sk-test" },
+    });
+    await harness.start({ ...SESSION, projectPath: root }, agent({
+      model,
+      config: { api: { provider: "anthropic", model } },
+    }));
+
+    const usage = (await runTurn(harness, "turn_unknown")).find((event) => event.type === "usage");
+    expect(usage?.type === "usage" ? usage.usage : null).toMatchObject({
+      costUsd: 0,
+      costKnown: false,
+    });
     await harness.dispose();
   });
 
@@ -856,6 +881,14 @@ describe("config, prompt and pricing", () => {
         cacheCreationTokens: 0,
       }),
     ).toEqual({ costUsd: 0, isEstimate: false });
+    expect(
+      estimateCost("claude-sonnet-5", {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      }),
+    ).toEqual({ costUsd: 0, isEstimate: true });
     // The table is [assumed]; the date it was written is part of the contract.
     expect(PRICES_ASSUMED_ON).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });

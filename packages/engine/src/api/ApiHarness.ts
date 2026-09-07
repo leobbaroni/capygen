@@ -960,13 +960,14 @@ export function readThinking(value: unknown): ThinkingConfig | undefined {
 }
 
 function withCost(model: string, raw: RawUsage): UsageTotals {
-  const { costUsd } = estimateCost(model, raw);
+  const { costUsd, isEstimate } = estimateCost(model, raw);
   return {
     inputTokens: raw.inputTokens,
     outputTokens: raw.outputTokens,
     cacheReadTokens: raw.cacheReadTokens,
     cacheCreationTokens: raw.cacheCreationTokens,
     costUsd,
+    costKnown: isEstimate,
   };
 }
 

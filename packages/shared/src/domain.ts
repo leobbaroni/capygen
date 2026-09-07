@@ -747,6 +747,10 @@ export const UsageTotalsSchema = z.object({
   cacheReadTokens: z.number().int().nonnegative().default(0),
   cacheCreationTokens: z.number().int().nonnegative().default(0),
   costUsd: z.number().nonnegative().default(0),
+  /** Whether `costUsd` is a real/estimated price. False distinguishes an
+   *  unpriced model from a genuinely free zero-cost call. Optional so stored
+   *  blocks and typed fixtures from before migration 0008 remain readable. */
+  costKnown: z.boolean().optional(),
 });
 export type UsageTotals = z.infer<typeof UsageTotalsSchema>;
 
@@ -829,6 +833,8 @@ export const UsageEventSchema = z.object({
   cacheReadTokens: z.number().int().nonnegative().default(0),
   cacheCreationTokens: z.number().int().nonnegative().default(0),
   costUsd: z.number().nonnegative().default(0),
+  /** Persisted explicitly by UsageRepo; optional here for legacy callers. */
+  costKnown: z.boolean().optional(),
   ts: TimestampSchema,
 });
 export type UsageEvent = z.infer<typeof UsageEventSchema>;

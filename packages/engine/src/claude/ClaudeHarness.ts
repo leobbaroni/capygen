@@ -1479,12 +1479,14 @@ export function readModelUsage(raw: unknown): Record<string, UsageTotals> {
   const out: Record<string, UsageTotals> = {};
   for (const [model, value] of Object.entries(raw)) {
     if (!isRecord(value)) continue;
+    const reportedCost = finiteNonnegative(value.costUSD);
     out[model] = {
       inputTokens: num(value.inputTokens),
       outputTokens: num(value.outputTokens),
       cacheReadTokens: num(value.cacheReadInputTokens),
       cacheCreationTokens: num(value.cacheCreationInputTokens),
-      costUsd: num(value.costUSD),
+      costUsd: reportedCost ?? 0,
+      costKnown: reportedCost !== undefined,
     };
   }
   return out;
@@ -1512,6 +1514,7 @@ export function deltaUsage(
         now.cacheCreationTokens - before.cacheCreationTokens,
       ),
       costUsd: Math.max(0, now.costUsd - before.costUsd),
+      costKnown: now.costKnown ?? now.costUsd > 0,
     };
     out[model] = diff;
   }
@@ -1519,8 +1522,9 @@ export function deltaUsage(
 }
 
 export function sumUsage(byModel: Record<string, UsageTotals>): UsageTotals {
+  const entries = Object.values(byModel);
   let total: UsageTotals = { ...EMPTY_USAGE };
-  for (const usage of Object.values(byModel)) {
+  for (const usage of entries) {
     total = {
       inputTokens: total.inputTokens + usage.inputTokens,
       outputTokens: total.outputTokens + usage.outputTokens,
@@ -1529,19 +1533,28 @@ export function sumUsage(byModel: Record<string, UsageTotals>): UsageTotals {
       costUsd: total.costUsd + usage.costUsd,
     };
   }
+  if (entries.length > 0) {
+    total.costKnown = entries.every((usage) => usage.costKnown ?? usage.costUsd > 0);
+  }
   return total;
 }
 
 /** Fallback for results with no `modelUsage` (local slash commands). */
 function readResultUsage(message: SdkMessageLike): UsageTotals {
   const usage = isRecord(message.usage) ? message.usage : {};
+  const reportedCost = finiteNonnegative(message.total_cost_usd);
   return {
     inputTokens: num(usage.input_tokens),
     outputTokens: num(usage.output_tokens),
     cacheReadTokens: num(usage.cache_read_input_tokens),
     cacheCreationTokens: num(usage.cache_creation_input_tokens),
-    costUsd: num(message.total_cost_usd),
+    costUsd: reportedCost ?? 0,
+    costKnown: reportedCost !== undefined,
   };
+}
+
+function finiteNonnegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 interface ClaudeAgentConfig {

@@ -25,7 +25,7 @@ import {
   countDiff,
   readCodexConfig,
 } from "../src/codex/CodexHarness.js";
-import { readCodexUsage, estimateCodexCost } from "../src/codex/pricing.js";
+import { codexUsageWithCost, readCodexUsage, estimateCodexCost } from "../src/codex/pricing.js";
 import { resolveBundledCodex, resolveCodexBinary } from "../src/codex/binary.js";
 import type {
   EngineEvent,
@@ -711,6 +711,7 @@ describe("CodexHarness — usage, errors and slash commands", () => {
       outputTokens: 2_000,
     });
     expect(usage.usage.costUsd).toBeGreaterThan(0);
+    expect(usage.usage.costKnown).toBe(true);
     expect(usage.byModel).toEqual({ "gpt-5.5": usage.usage });
     await harness.dispose();
   });
@@ -1004,6 +1005,14 @@ describe("CodexHarness — pure helpers", () => {
         costUsd: 0,
       }),
     ).toBe(0);
+    expect(codexUsageWithCost("a-model-nobody-priced", {
+      inputTokens: 100,
+      outputTokens: 10,
+    })).toMatchObject({ costUsd: 0, costKnown: false });
+    expect(codexUsageWithCost("gpt-5.5", {
+      inputTokens: 0,
+      outputTokens: 0,
+    })).toMatchObject({ costUsd: 0, costKnown: true });
   });
 });
 

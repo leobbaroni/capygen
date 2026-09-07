@@ -111,7 +111,11 @@ export function codexUsageWithCost(
   breakdown: CodexTokenUsageBreakdown | undefined,
 ): UsageTotals {
   const usage = readCodexUsage(breakdown);
-  return { ...usage, costUsd: estimateCodexCost(model, usage) };
+  return {
+    ...usage,
+    costUsd: estimateCodexCost(model, usage),
+    costKnown: priceFor(model) !== null,
+  };
 }
 
 function num(value: unknown): number {
