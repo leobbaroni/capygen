@@ -11,6 +11,7 @@
 import "./zodRuntime.js";
 import { z } from "zod";
 import { LocalPolicyAttributionSchema } from "./localPolicies.js";
+import { CrewTargetSchema, CrewTaskKindSchema, CrewDifficultySchema, CrewIdSchema } from "./customMode.js";
 
 /** Milliseconds since the epoch. Every timestamp in capygen is this. */
 export const TimestampSchema = z.number().int().nonnegative();
@@ -795,6 +796,13 @@ export const SubagentBlockSchema = z.object({
    *  backend/model via capygen's own delegation, rather than the parent
    *  backend running it natively on its own model. */
   delegated: z.boolean().optional(),
+  crewRoute: z.object({
+    ruleId: CrewIdSchema.nullable(),
+    rosterId: CrewIdSchema,
+    taskKind: CrewTaskKindSchema,
+    difficulty: CrewDifficultySchema,
+    target: CrewTargetSchema,
+  }).strict().optional(),
 });
 
 export const ErrorBlockSchema = z.object({

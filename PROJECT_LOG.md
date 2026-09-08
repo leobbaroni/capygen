@@ -2543,3 +2543,14 @@ not exposed until atomic Apply and runtime enforcement are wired. Phase 9C remai
 Evidence: custom-crew-verified.log, custom-mode-migration-green.log under e2e-out.
 
 Combined follow-up: 4 test files passed, 95 tests passed (5.23s), including store regressions; e2e-out/custom-foundation-check.log.
+
+## Phase 9C strict delegation boundary — 2026-09-08
+
+Custom delegate runner now requires classification and refuses model overrides, resolves the
+policy worker, delivers effort/provider/instructions to the same child object used by factory
+and start, and emits structured route evidence. Existing ordinary delegation behavior remains.
+Claude SDK MCP and API/Codex tool adapters accept structured classification. Transcript cards
+show route evidence on expansion. Luna reviewed root engine changes; Astra reviewed Luna UI
+and corrected incomplete test fixtures. Native typecheck and 94 focused tests passed across
+routing/custom delegation and transcript cards (5.43s), custom-delegation-final.log.
+Desktop activation, atomic Apply, authoring and debate queue integration are still pending.

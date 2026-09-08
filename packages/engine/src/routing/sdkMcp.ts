@@ -100,12 +100,16 @@ export async function createDelegateMcpServer(
           .string()
           .optional()
           .describe("Optional model override; capygen's routing policy already chose one."),
+        taskKind: z.enum(["design", "research", "development", "text", "decision", "general"]).optional(),
+        difficulty: z.enum(["easy", "medium", "hard"]).optional(),
       } as unknown as Record<string, unknown>,
       async (args: Record<string, unknown>) => {
         const result = await deps.run({
           description: typeof args.description === "string" ? args.description : "",
           prompt: typeof args.prompt === "string" ? args.prompt : "",
           ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
+          ...(typeof args.taskKind === "string" ? { taskKind: args.taskKind } : {}),
+          ...(typeof args.difficulty === "string" ? { difficulty: args.difficulty } : {}),
         });
         // `result.text` is already clamped by `createDelegateRunner`
         // (`DEFAULT_DELEGATE_RESULT_CHARS`) — a delegated answer becomes a

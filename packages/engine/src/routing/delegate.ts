@@ -42,7 +42,9 @@ import {
   type PermissionMode,
   type TurnStatus,
   type UsageTotals,
+  type CustomModeDocument,
 } from "@capygen/shared";
+import { resolveCrewTask } from "./customCrew.js";
 import type { ModelCatalogue } from "../config/layering.js";
 import { EMPTY_USAGE, addUsage, type BlockPatch, type EngineEvent, type Harness, type HarnessAgent, type HarnessSession } from "../harness.js";
 import { clampText, type JsonSchemaObject, type ToolDefinition } from "../tools/types.js";
@@ -73,6 +75,8 @@ export const DELEGATE_TASK_SCHEMA: JsonSchemaObject = {
         "Optional model override. Leave this out unless the user asked for a specific model — " +
         "capygen's routing policy already chose one.",
     },
+    taskKind: { type: "string", enum: ["design", "research", "development", "text", "decision", "general"], description: "Required by Custom Mode routing." },
+    difficulty: { type: "string", enum: ["easy", "medium", "hard"], description: "Required by Custom Mode routing." },
   },
   required: ["description", "prompt"],
   additionalProperties: false,
@@ -83,6 +87,8 @@ export interface DelegateRequest {
   prompt: string;
   /** Overrides the routed model; the routed backend is never overridable. */
   model?: string | undefined;
+  taskKind?: string | undefined;
+  difficulty?: string | undefined;
   /**
    * The calling tool's own cancellation signal (`ToolContext.signal`).
    *
@@ -118,6 +124,8 @@ export interface DelegateRunnerDeps {
   parent: HarnessAgent;
   /** Where sub-agents run; `null` ⇒ nothing to delegate, answer fail-open. */
   target: () => { backend: Backend; model: string } | null;
+  /** Presence selects strict custom routing; missing policy refuses instead of falling back. */
+  customCrew?: () => CustomModeDocument | null;
   /** Build (not start) a harness for the routed backend. Handed the **same**
    *  resolved agent that `start()` will receive — see `resolveChild`. */
   makeHarness: (target: { backend: Backend; model: string }, agent: HarnessAgent) => Harness;
@@ -222,7 +230,16 @@ export function createDelegateRunner(
   let counter = 0;
 
   return async function delegate(req: DelegateRequest): Promise<DelegateResult> {
-    const routed = safely(() => deps.target(), log);
+    let crewRoute: ReturnType<typeof resolveCrewTask> | undefined;
+    if (deps.customCrew) {
+      const crew = safely(() => deps.customCrew!(), log);
+      if (!crew || req.model !== undefined) {
+        return { ok: false, text: "Custom delegation requires its configured crew and does not accept model overrides." };
+      }
+      crewRoute = resolveCrewTask(crew, req);
+      if (!crewRoute.ok) return { ok: false, text: crewRoute.reason };
+    }
+    const routed = crewRoute?.ok ? crewRoute.member.target : safely(() => deps.target(), log);
     if (!routed) {
       return {
         ok: false,
@@ -298,16 +315,24 @@ export function createDelegateRunner(
         ok: false,
         text:
           `capygen did not start a ${routed.backend} sub-agent: ${verdict.reason ?? ""} ` +
-          "Fix the routing rule or that backend's default model in Settings, or do the work " +
-          "yourself.",
+          (crewRoute?.ok
+            ? "Review the Custom Mode assignment before delegating again."
+            : "Fix the routing rule or that backend's default model in Settings, or do the work yourself."),
       };
     }
 
-    const childConfig = target
+    const inheritedChildConfig = target
       ? target.config
       : ((deps.parent.config as Record<string, Record<string, unknown>> | null | undefined)?.[
           routed.backend
         ] ?? {});
+    const childConfig = crewRoute?.ok ? {
+      ...inheritedChildConfig,
+      ...(routed.backend === "claude"
+        ? { effort: crewRoute.member.target.effort }
+        : { reasoningEffort: crewRoute.member.target.effort }),
+      ...(crewRoute.member.target.provider ? { provider: crewRoute.member.target.provider } : {}),
+    } : inheritedChildConfig;
     const childAgent: HarnessAgent = {
       agentId: `${deps.parent.agentId}#sub${index}`,
       name: req.description || "sub-agent",
@@ -318,6 +343,7 @@ export function createDelegateRunner(
       ...(target?.permissionMode ? { permissionMode: target.permissionMode } : {}),
       resumeSessionId: null,
       config: { [routed.backend]: childConfig } as HarnessAgent["config"],
+      ...(crewRoute?.ok ? { promptAddition: crewRoute.member.instructions } : {}),
     };
 
     // Cancelled before anything was built: constructing a child here would
@@ -353,6 +379,7 @@ export function createDelegateRunner(
         description: req.description,
         status,
         delegated: true,
+        ...(crewRoute?.ok ? { crewRoute: crewRoute.evidence } : {}),
         ...(costUsd !== undefined ? { costUsd } : {}),
       },
     });
@@ -601,6 +628,8 @@ export function delegateTaskTool(
         description,
         prompt,
         ...(typeof input.model === "string" && input.model ? { model: input.model } : {}),
+        ...(typeof input.taskKind === "string" ? { taskKind: input.taskKind } : {}),
+        ...(typeof input.difficulty === "string" ? { difficulty: input.difficulty } : {}),
         // The caller's cancellation travels with the request: a tool call that
         // is abandoned must not leave a sub-agent running behind it.
         ...(ctx.signal ? { signal: ctx.signal } : {}),

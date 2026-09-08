@@ -61,9 +61,17 @@ export function SubagentCard({ block }: { block: SubagentBlock }) {
         <Badge variant={STATUS_VARIANT[block.status]}>{block.status}</Badge>
         <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
-      {block.description ? (
+      {block.description || block.crewRoute ? (
         <CollapsibleContent className="mt-1 ml-2 border-l border-border-weak py-1 pl-3 text-sm text-muted-foreground">
-          {block.description}
+          {block.description ? <div>{block.description}</div> : null}
+          {block.crewRoute ? (
+            <div data-testid="block-subagent-crew-route" className="mt-1 space-y-0.5">
+              <div>Rule: {block.crewRoute.ruleId ?? "default"}</div>
+              <div>Roster: {block.crewRoute.rosterId}</div>
+              <div>Classified: {block.crewRoute.taskKind} · {block.crewRoute.difficulty}</div>
+              <div>Target: {block.crewRoute.target.backend} · {block.crewRoute.target.model} · {block.crewRoute.target.effort}{block.crewRoute.target.provider ? ` · ${block.crewRoute.target.provider}` : ""}</div>
+            </div>
+          ) : null}
         </CollapsibleContent>
       ) : null}
     </Collapsible>
