@@ -256,7 +256,7 @@ describe("delegate_task (SPEC R12, cross-backend)", () => {
     expect(keys.every((k) => k.startsWith("delegate:agent_a:1"))).toBe(true);
   });
 
-  it("fails open when there is no route", async () => {
+  it("fails open when there is no target at all and the call names no backend", async () => {
     const run = createDelegateRunner({
       session: SESSION,
       parent: AGENT,
@@ -267,7 +267,202 @@ describe("delegate_task (SPEC R12, cross-backend)", () => {
     });
     const result = await run({ description: "d", prompt: "p" });
     expect(result.ok).toBe(false);
-    expect(result.text).toMatch(/no sub-agent routing rule/);
+    expect(result.text).toMatch(/could not work out where to run/);
+  });
+
+  /** What a machine with both native backends offers, as the desktop builds it. */
+  const CAPABILITIES = [
+    { backend: "claude" as const, model: "claude-opus-4-5", efforts: ["low", "medium", "high"] },
+    { backend: "codex" as const, model: "gpt-5.5", efforts: ["low", "high"] },
+  ];
+
+  it("runs an explicitly requested backend and model with no routing rule behind it", async () => {
+    // The default target is the agent's own backend/model — what
+    // `delegationTarget` now answers for an agent with no rule — and the call
+    // moves off it by naming one. No stored routing settings are involved.
+    const sub = new ScriptedHarness("codex", textScript("done"));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "claude", model: "claude-opus-4-5" }),
+      capabilities: () => CAPABILITIES,
+      makeHarness: () => sub,
+    });
+
+    const result = await run({
+      description: "d",
+      prompt: "p",
+      backend: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(result).toMatchObject({ ok: true, backend: "codex", model: "gpt-5.5" });
+    expect(sub.started?.agent.backend).toBe("codex");
+    expect(sub.started?.agent.model).toBe("gpt-5.5");
+  });
+
+  it("drops the routed model when the call moves to another backend", async () => {
+    // A model id belongs to exactly one backend, so the Claude route's model
+    // must not travel onto Codex; the target's own default answers instead.
+    const sub = new ScriptedHarness("codex", textScript("done"));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "claude", model: "claude-opus-4-5" }),
+      capabilities: () => CAPABILITIES,
+      resolveTarget: (backend) => ({
+        config: {},
+        model: backend === "codex" ? "gpt-5.5" : "claude-opus-4-5",
+      }),
+      makeHarness: () => sub,
+    });
+
+    const result = await run({ description: "d", prompt: "p", backend: "codex" });
+    expect(result).toMatchObject({ ok: true, backend: "codex", model: "gpt-5.5" });
+  });
+
+  it("refuses a backend this installation cannot run, and names the ones it can", async () => {
+    const make = vi.fn(() => new ScriptedHarness("api", textScript("never")));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "claude", model: "claude-opus-4-5" }),
+      capabilities: () => CAPABILITIES,
+      makeHarness: make,
+    });
+
+    const result = await run({ description: "d", prompt: "p", backend: "api" });
+
+    expect(result.ok).toBe(false);
+    expect(result.text).toMatch(/cannot run a api sub-agent/);
+    expect(result.text).toMatch(/claude, codex/);
+    // Refused, not silently run somewhere else: nothing was built or billed.
+    expect(make).not.toHaveBeenCalled();
+  });
+
+  it("refuses a model that backend does not offer rather than substituting one", async () => {
+    const make = vi.fn(() => new ScriptedHarness("codex", textScript("never")));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "claude", model: "claude-opus-4-5" }),
+      capabilities: () => CAPABILITIES,
+      makeHarness: make,
+    });
+
+    const result = await run({
+      description: "d",
+      prompt: "p",
+      backend: "codex",
+      model: "gpt-9-imagined",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.text).toMatch(/does not offer the model gpt-9-imagined/);
+    expect(result.text).toContain("gpt-5.5");
+    expect(make).not.toHaveBeenCalled();
+  });
+
+  it("carries an accepted effort onto the child, and refuses one the model does not take", async () => {
+    const sub = new ScriptedHarness("codex", textScript("done"));
+    const deps = {
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex" as const, model: "gpt-5.5" }),
+      capabilities: () => CAPABILITIES,
+      makeHarness: () => sub,
+    };
+
+    const ok = await createDelegateRunner(deps)({
+      description: "d",
+      prompt: "p",
+      effort: "high",
+    });
+    expect(ok.ok).toBe(true);
+    expect(sub.started?.agent.config).toEqual({ codex: { reasoningEffort: "high" } });
+
+    const refused = await createDelegateRunner(deps)({
+      description: "d",
+      prompt: "p",
+      effort: "ludicrous",
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toMatch(/does not accept the reasoning effort "ludicrous"/);
+    expect(refused.text).toMatch(/low, high/);
+
+    // An effort the catalogue cannot confirm is refused rather than forwarded:
+    // the picker only ever offers efforts it knows, and a backend that silently
+    // ignores an unknown one would report a run nobody configured.
+    const sub2 = new ScriptedHarness("codex", textScript("done"));
+    const unverifiable = await createDelegateRunner({
+      ...deps,
+      capabilities: () => [{ backend: "codex" as const, model: "gpt-5.5" }],
+      makeHarness: () => sub2,
+    })({ description: "d", prompt: "p", effort: "high" });
+    expect(unverifiable.ok).toBe(false);
+    expect(unverifiable.text).toMatch(/cannot verify the supported reasoning effort/);
+    expect(sub2.started).toBeNull();
+  });
+
+  it("leaves the child's config alone when no effort is asked for", async () => {
+    const sub = new ScriptedHarness("codex", textScript("done"));
+    const run = createDelegateRunner({
+      session: SESSION,
+      parent: AGENT,
+      target: () => ({ backend: "codex", model: "gpt-5.5" }),
+      capabilities: () => CAPABILITIES,
+      resolveTarget: () => ({ config: { reasoningEffort: "low" } }),
+      makeHarness: () => sub,
+    });
+    await run({ description: "d", prompt: "p" });
+    expect(sub.started?.agent.config).toEqual({ codex: { reasoningEffort: "low" } });
+  });
+
+  it("hands the requested backend and effort through both tool adapters", async () => {
+    const seen: unknown[] = [];
+    const record = async (req: unknown) => {
+      seen.push(req);
+      return { ok: true, text: "ok" };
+    };
+
+    await delegateTaskTool(record).run(
+      { description: "d", prompt: "p", backend: "codex", model: "gpt-5.5", effort: "high" },
+      { maxOutputChars: 1000 } as never,
+    );
+    // An unknown backend id is refused outright: running the task on the
+    // routed default would answer a request the caller never made.
+    const refused = await delegateTaskTool(record).run(
+      { description: "d", prompt: "p", backend: "sideways" },
+      { maxOutputChars: 1000 } as never,
+    );
+    expect(refused).toMatchObject({ isError: true });
+    expect(refused.content).toMatch(/backend it does not have/);
+
+    const handlers: ((args: Record<string, unknown>) => Promise<unknown>)[] = [];
+    await createDelegateMcpServer({
+      run: record,
+      loadSdk: async () => ({
+        createSdkMcpServer: (options) => options,
+        tool: (_name, _description, _schema, handler) => {
+          handlers.push(handler as (args: Record<string, unknown>) => Promise<unknown>);
+          return {};
+        },
+      }),
+    });
+    await handlers[0]!({ description: "d", prompt: "p", backend: "claude", effort: "low" });
+    const mcpRefused = (await handlers[0]!({
+      description: "d",
+      prompt: "p",
+      backend: "sideways",
+    })) as { isError?: boolean; content: { text: string }[] };
+
+    // Two calls reached the runner: the two valid ones. Neither adapter turned
+    // an unknown backend into a run on the routed default.
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ backend: "codex", model: "gpt-5.5", effort: "high" });
+    expect(seen[1]).toMatchObject({ backend: "claude", effort: "low" });
+    expect(mcpRefused.isError).toBe(true);
+    expect(mcpRefused.content[0]!.text).toMatch(/backend it does not have/);
   });
 
   it("fails open when the routed backend cannot be started", async () => {

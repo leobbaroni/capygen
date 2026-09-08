@@ -21,10 +21,15 @@
  * already carries every field the dialog collects); switching back to solo
  * clears it, since a solo session has exactly one agent anyway (ADR-0002).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CrownIcon, Folder, UsersIcon, XIcon } from "lucide-react";
-import { DEFAULT_HEADING, type AgentDraft, type SessionMode } from "@capygen/shared";
+import { builtinSlashCommandsFor, DEFAULT_HEADING, type AgentDraft, type InputImageAttachment, type SessionMode } from "@capygen/shared";
+import { loadRoundTableRoster, saveRoundTableRoster, loadRoundTableSettings } from "@/lib/sessionPreferences";
+import { withAgentEffort } from "@/lib/agentDisplay";
+import { ipc } from "@/lib/ipc";
+import { CustomModeEditor } from "@/components/CustomModeEditor";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { AddAgentDialog } from "@/components/AddAgentDialog";
 import { Composer, type AgentChoice } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
@@ -80,12 +85,44 @@ export function LandingPage() {
   // agent (ADR-0002), so a leftover multi-agent draft would just be ignored
   // by `handleSubmit` anyway; clearing it keeps the "N agents" chip honest.
   const [mode, setMode] = useState<SessionMode>("solo");
-  const [draftAgents, setDraftAgents] = useState<AgentDraft[]>([]);
+  const [draftAgents, setDraftAgents] = useState<AgentDraft[]>(loadRoundTableRoster);
+  useEffect(() => { saveRoundTableRoster(draftAgents); }, [draftAgents]);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [customSessionId, setCustomSessionId] = useState<string | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customReady, setCustomReady] = useState(false);
+  const creatingCustom = useRef(false);
+  const [setupError, setSetupError] = useState("");
+
+  async function ensureProject() {
+    if (project) return project;
+    // A click may beat bootstrap's project list after a restart. Resolve the
+    // existing registry before treating an empty renderer snapshot as no folder.
+    const known = await ipc().invoke("projects.list", {});
+    const selected = useAppStore.getState().selectedProjectId;
+    const target = known.find((item) => item.id === selected) ?? known[0]
+      ?? await ipc().invoke("projects.default", {});
+    useAppStore.setState((state) => ({ projects: [target, ...known.filter((item) => item.id !== target.id), ...state.projects.filter((item) => item.id !== target.id && !known.some((entry) => entry.id === item.id))], selectedProjectId: target.id }));
+    return target;
+  }
+
+  async function configureCustom() {
+    if (creatingCustom.current) return;
+    if (customSessionId) { setCustomOpen(true); return; }
+    creatingCustom.current = true;
+    setSetupError("");
+    try {
+      const target = await ensureProject();
+      const session = await startSession(target.id, "Custom crew", "solo", leadAgent ? [{ name: "Lead", backend: leadAgent.backend, model: leadAgent.model, role: "lead", config: withAgentEffort(null, leadAgent.backend, leadAgent.effort ?? "") }] : []);
+      setCustomSessionId(session.id);
+      setCustomOpen(true);
+    } catch (reason) { setSetupError(String(reason)); }
+    finally { creatingCustom.current = false; }
+  }
 
   function changeMode(next: SessionMode): void {
     setMode(next);
-    if (next === "solo") setDraftAgents([]);
+    if (next === "custom") void configureCustom();
   }
 
   /** Appends a drafted agent; a fresh "make lead" demotes any earlier draft
@@ -101,38 +138,42 @@ export function LandingPage() {
     setDraftAgents((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function handleSubmit(text: string): Promise<void> {
-    // No project yet: ask for one first. The picker is the shell's native
-    // dialog, so nothing is created until the user actually chooses a folder.
-    let target = project;
-    if (!target) {
-      target = await pickProject();
-      if (!target) return;
+  async function handleSubmit(text: string, images: InputImageAttachment[] = []): Promise<void> {
+    // Resolve the selected/recent project, then the optional home default.
+    if (mode === "custom") {
+      if (!customReady || !customSessionId) { await configureCustom(); throw new Error("Review and apply your custom crew before sending."); }
+      await useAppStore.getState().openSession(customSessionId);
+      navigate(`/c/${customSessionId}`);
+      await send(text, images);
+      return;
     }
+    const target = await ensureProject();
     const harnessName = harnesses.find((h) => h.backend === leadAgent?.backend)?.label ?? "Agent";
     // The drafted round-table roster wins whole over the harness picker's
     // single choice — `sessions.create`'s `AgentDraftSchema` already carries
     // every field `AddAgentDialog` collects (description, sub-agent routing,
     // colour), so there is nothing left for `leadAgent` to add on top of it.
     const agentsForSession: AgentDraft[] =
-      draftAgents.length > 0
+      mode === "round-table" && draftAgents.length > 0
         ? draftAgents
         : leadAgent
-          ? [{ name: harnessName, backend: leadAgent.backend, model: leadAgent.model, role: "lead", config: null }]
+          ? [{ name: harnessName, backend: leadAgent.backend, model: leadAgent.model, role: "lead", config: withAgentEffort(null, leadAgent.backend, leadAgent.effort ?? "") }]
           : [];
     const session = await startSession(target.id, text.slice(0, 60), mode, agentsForSession);
+    const defaults = mode === "round-table" ? loadRoundTableSettings() : null;
+    if (defaults) await useAppStore.getState().updateSessionSettings(session.id, defaults);
     navigate(`/c/${session.id}`);
-    await send(text);
+    await send(text, images);
   }
 
   return (
     <div
-      className="relative flex flex-1 items-center justify-center"
+      className="relative flex min-h-0 flex-1 overflow-y-auto"
       data-testid="landing"
     >
       {/* Padding lives inside the 840px cap, so the composer renders at
           840 − 80 = 760px max. */}
-      <div className="flex w-full max-w-[840px] flex-col items-center gap-6 px-10 pt-8 pb-16 select-none">
+      <div className="m-auto flex w-full max-w-[840px] flex-col items-center gap-4 px-5 pt-12 pb-8">
         <div className="flex w-full flex-col items-center justify-center gap-3.5">
           {/* The 72px pixel drawing at an exact 2x scale, per the mascot brief. */}
           <Mascot state={mascotState} size={144} />
@@ -153,7 +194,7 @@ export function LandingPage() {
           onSubmit={handleSubmit}
           disabled={!bridgeAvailable}
           testId="landing-composer"
-          commands={commands}
+          commands={leadAgent && mode !== "custom" ? commands.filter((command) => command.source === "builtin" && builtinSlashCommandsFor(leadAgent.backend).some((allowed) => allowed.name === command.name)) : []}
           harnesses={harnesses}
           agent={leadAgent}
           onPickAgent={chooseAgent}
@@ -177,7 +218,7 @@ export function LandingPage() {
               >
                 <Folder className="ui-icon" />
                 <span className="max-w-40 truncate">
-                  {project ? project.name : "Choose a folder"}
+                  {project ? project.name : "Home folder"}
                 </span>
               </button>
               <WorktreeChip projectId={project?.id ?? null} onSelect={(next) => useAppStore.setState((state) => ({
@@ -185,7 +226,8 @@ export function LandingPage() {
                 selectedProjectId: next.id,
               }))} />
 
-              <ModePicker mode={mode} onChange={changeMode} testId="landing-mode-picker" />
+              <ModePicker mode={mode} onChange={changeMode} allowCustom testId="landing-mode-picker" />
+              {mode === "custom" && <button type="button" className="rounded-full px-2 py-1 text-sm text-primary" onClick={() => void configureCustom()}>{customReady ? "Edit crew" : "Configure crew"}</button>}
 
               {mode === "round-table" ? (
                 <>
@@ -240,6 +282,13 @@ export function LandingPage() {
           onAdd={addDraftAgent}
         />
 
+        <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+          <DialogContent aria-label="Custom mode" className="max-w-3xl overflow-y-auto">
+            <div className="flex items-center justify-between"><DialogTitle>Custom mode</DialogTitle><button type="button" onClick={() => setCustomOpen(false)} aria-label="Close custom mode">×</button></div>
+            {customSessionId && <CustomModeEditor sessionId={customSessionId} onApplied={() => { setCustomReady(true); setCustomOpen(false); }} />}
+          </DialogContent>
+        </Dialog>
+        {setupError && <p role="alert" className="text-sm text-destructive">{setupError}</p>}
         {error ? (
           <p className="text-sm text-destructive" data-testid="landing-error">
             {error}

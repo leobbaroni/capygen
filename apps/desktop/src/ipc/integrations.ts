@@ -12,6 +12,7 @@ import type { IntegrationsService } from "../integrations/IntegrationsService.js
 
 export const INTEGRATIONS_CHANNELS = [
   "integrations.list",
+  "integrations.openFolder",
   "integrations.mcp.add",
   "integrations.mcp.update",
   "integrations.mcp.remove",
@@ -39,6 +40,7 @@ export function createIntegrationsHandlers(
 ): IntegrationsHandlers {
   return {
     "integrations.list": (args) => integrations.list(args),
+    "integrations.openFolder": (args) => integrations.openFolder(args),
     "integrations.mcp.add": (args) => integrations.mcpAdd(args),
     "integrations.mcp.update": (args) => integrations.mcpUpdate(args),
     "integrations.mcp.remove": (args) => integrations.mcpRemove(args),

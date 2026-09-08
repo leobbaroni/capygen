@@ -40,6 +40,7 @@
  * | `item/tool/requestUserInput` | `question` |
  * | `mcpServer/elicitation/request` | `elicitation` block + `elicitation` event |
  */
+import { RequestContext } from "../contextSnapshot.js";
 import {
   newId,
   type Backend,
@@ -442,8 +443,12 @@ export class CodexHarness implements Harness {
       resume: true,
       interrupt: true,
       slashCommands: true,
+      imageInput: true,
     };
   }
+
+  private readonly requestContext = new RequestContext();
+  contextSnapshot() { return this.requestContext.snapshot(); }
 
   listCommands(): SlashCommand[] {
     return this.commands;
@@ -510,7 +515,7 @@ export class CodexHarness implements Harness {
       else ctx.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    void this.dispatch(turn, input.text).catch((err: unknown) => {
+    void this.dispatch(turn, input).catch((err: unknown) => {
       const message = describe(err);
       this.emitBlock(`error:${turn.turnId}`, { kind: "error", message });
       this.settle(turn, "error", message);
@@ -519,13 +524,23 @@ export class CodexHarness implements Harness {
     return out;
   }
 
-  private async dispatch(turn: ActiveTurn, text: string): Promise<void> {
+  private async dispatch(turn: ActiveTurn, input: TurnInput): Promise<void> {
+    const text = input.text;
     await this.ensureThread();
     const threadId = this.threadId;
     if (!threadId) throw new Error("codex thread was not started");
 
+    const images = input.images ?? [];
     const trimmed = text.trim();
     if (trimmed.startsWith("/")) {
+      // A built-in (`/compact`, `/review`) is capygen's own command and never
+      // reaches the model, so an image sent with one would be silently lost.
+      if (images.length > 0) {
+        throw new Error(
+          "A capygen command (/compact, /review) takes no image attachments. " +
+            "Send the picture with an ordinary message instead.",
+        );
+      }
       const handled = await this.runBuiltin(turn, threadId, trimmed);
       if (handled) return;
     }
@@ -534,7 +549,13 @@ export class CodexHarness implements Harness {
       CODEX_METHODS.turnStart,
       {
         threadId,
-        input: this.turnInput(trimmed || text),
+        input: [
+          ...this.turnInput(trimmed || text),
+          // `localImage` is the app-server's own input variant (pinned binding
+          // `v2/UserInput.ts`): Codex reads the file itself, so no base64
+          // crosses the JSON-RPC pipe (and none reaches a protocol log).
+          ...images.map((image) => ({ type: "localImage" as const, path: image.path })),
+        ],
         ...(this.effort() ? { effort: this.effort() } : {}),
       },
       TURN_START_TIMEOUT_MS,
@@ -640,18 +661,18 @@ export class CodexHarness implements Harness {
   }
 
   private statusText(): string {
-    const usage = this.threadUsage;
+    const usage = this.requestContext.snapshot();
     const lines = [
       `thread   ${this.threadId ?? "-"}`,
       `model    ${this.resolvedModel ?? "-"}`,
       `cwd      ${this.session?.projectPath ?? "-"}`,
       `approval ${this.approvalPolicy}   sandbox ${this.sandbox}`,
     ];
-    if (usage) {
-      const total = usage.totalTokens ?? 0;
-      const window = this.contextWindow;
+    if (usage.inputTokens !== null) {
+      const total = usage.inputTokens;
+      const window = usage.capacityTokens;
       lines.push(
-        `tokens   ${total} used${window ? ` of ${window} (${Math.round((total / window) * 100)}%)` : ""}`,
+        `latest request input   ${total} tokens${window ? ` of ${window} (${Math.round((total / window) * 100)}%)` : ""}`,
       );
     }
     return lines.join("\n");
@@ -1017,6 +1038,8 @@ export class CodexHarness implements Harness {
         if (!tokenUsage) return;
         this.threadUsage = tokenUsage.total ?? this.threadUsage;
         this.contextWindow = tokenUsage.modelContextWindow ?? this.contextWindow;
+        this.requestContext.capacity(tokenUsage.modelContextWindow);
+        this.requestContext.input(tokenUsage.last?.inputTokens);
         if (this.active) this.active.usage = tokenUsage.last ?? this.active.usage;
         return;
       }

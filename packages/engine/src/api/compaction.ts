@@ -35,3 +35,27 @@ export function compactionPrefix(messages: ChatMessage[], system: string, tools:
   if (!prefix) throw new Error("An older conversation group is too large to summarize safely. Start a new conversation with the needed context.");
   return prefix;
 }
+
+/**
+ * A copy of the history with every image block replaced by a one-line marker.
+ *
+ * Compaction serialises the prefix as *text* for the summarizing model; a
+ * base64 picture in there would blow the token estimate up, cost real money and
+ * put a megabyte of base64 into a request body (and any log of it) for no
+ * benefit — the summary is prose. Blocks are replaced 1:1, never removed, so
+ * message and block indices still line up with the real history.
+ */
+export function redactImagesForSummary(messages: readonly ChatMessage[]): ChatMessage[] {
+  return messages.map((message) =>
+    message.content.some((block) => block.type === "image")
+      ? {
+          ...message,
+          content: message.content.map((block) =>
+            block.type === "image"
+              ? { type: "text" as const, text: `[image attachment (${block.mediaType})]` }
+              : block,
+          ),
+        }
+      : message,
+  );
+}

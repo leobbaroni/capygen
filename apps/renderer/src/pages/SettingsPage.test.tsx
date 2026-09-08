@@ -45,6 +45,7 @@ beforeEach(() => {
         });
       case "secrets.has":
         return Promise.resolve({ has: false, source: "none" });
+      case "harness.list":
       case "sessions.list":
         return Promise.resolve([]);
       default:

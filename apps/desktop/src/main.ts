@@ -80,6 +80,11 @@ import {
   createWidgetHost,
   type WidgetHostHandlers,
 } from "./ipc/widgets.js";
+import {
+  ATTACHMENT_SCHEME,
+  ATTACHMENT_SCHEME_PRIVILEGES,
+  AttachmentStore,
+} from "./ipc/attachments.js";
 import { createBrowserViewService } from "./workspace/BrowserViewService.js";
 import { ECHO_DELAY_MS, createStubEngine } from "./engine/stub.js";
 import type { EngineDeps } from "./engine/types.js";
@@ -124,6 +129,8 @@ let updates: UpdateService | null = null;
 let updateTimer: ReturnType<typeof setInterval> | null = null;
 let launchUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 let widgets: WidgetHostHandlers | null = null;
+/** The image attachment store; built with the IPC context (it needs userData). */
+let attachments: AttachmentStore | null = null;
 let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
 let notifier: Notifier | null = null;
@@ -184,7 +191,7 @@ const configHomes = applyConfigHomes(process.env);
  * before `app.whenReady()`; `protocol.handle` is installed once the store is
  * open (`registerIpc`).
  */
-registerExtensionScheme([WIDGET_SCHEME_PRIVILEGES]);
+registerExtensionScheme([WIDGET_SCHEME_PRIVILEGES, ATTACHMENT_SCHEME_PRIVILEGES]);
 
 // ---------------------------------------------------------------------------
 // windows
@@ -375,6 +382,11 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
 
   // The widget host owns one bridge per project directory; it never
   // reads a resource for a session whose project we cannot name.
+  attachments = new AttachmentStore(path.join(app.getPath("userData"), "attachments"), {
+    info: (...a) => log.info(...(a as [string])),
+    warn: (...a) => log.warn(...(a as [string])),
+  });
+
   widgets = createWidgetHost({
     pools: mcpPools,
     log: { info: (...a) => log.info(...(a as [string])), warn: (...a) => log.warn(...(a as [string])) },
@@ -410,6 +422,20 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
       log.info(`[widget] saved ${result.filePath} (${data.length} bytes)`);
       return true;
     },
+  });
+
+  // Images the user attached, served read-only from the app's own store. The
+  // handler never takes a path from the URL — see `AttachmentStore.serve`.
+  protocol.handle(ATTACHMENT_SCHEME, (request) => {
+    const served = attachments?.serve(request.url) ?? null;
+    if (!served) return new Response("attachment not found", { status: 404 });
+    return new Response(fs.readFileSync(served.path), {
+      headers: {
+        "content-type": served.mediaType,
+        "content-security-policy": "default-src 'none'; sandbox",
+        "cache-control": "no-store",
+      },
+    });
   });
 
   protocol.handle(WIDGET_SCHEME, (request) => {
@@ -636,6 +662,7 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     broadcast,
     log,
     widgets,
+    attachments,
     pools: mcpPools,
     browser: browserViews,
     localPolicies: policyRuntime!.ipcDeps,

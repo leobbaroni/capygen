@@ -65,10 +65,21 @@ export type CodexSandboxModeWire = "read-only" | "workspace-write" | "danger-ful
 /** `v2/ApprovalsReviewer.ts`. capygen always asks for `"user"` (spike §2). */
 export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 
-/** `v2/UserInput.ts` — the two variants capygen sends. */
+/**
+ * `v2/UserInput.ts` — the three variants capygen sends.
+ *
+ * `localImage` is the app-server's own attachment variant, spelled exactly as
+ * the pinned binding does (`docs/spikes/codex-app-server-schema/v0.153.4-ts/
+ * v2/UserInput.ts`: `{"type":"localImage", detail?, path}`); Codex opens the
+ * file itself, so the bytes never cross the JSON-RPC pipe. The sibling `image`
+ * variant takes a URL and is deliberately unused — a stored file is what
+ * capygen already has, and keeping base64 out of the protocol keeps it out of
+ * the protocol log.
+ */
 export type CodexUserInput =
   | { type: "text"; text: string; text_elements: unknown[] }
-  | { type: "skill"; name: string; path: string };
+  | { type: "skill"; name: string; path: string }
+  | { type: "localImage"; path: string };
 
 export interface CodexThreadStartParams {
   model?: string;

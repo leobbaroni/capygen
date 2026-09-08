@@ -96,7 +96,7 @@ function blockOf(row: LiveBlockRow, index: number): Block {
       return { ...base, kind: "tool_call", name: row.name ?? "tool",
         status: row.status ?? "success" } as unknown as Block;
     case "diff": return { ...base, kind: "diff", path: "", patch: "" } as unknown as Block;
-    case "permission": case "question": case "elicitation": case "widget": case "usage":
+    case "permission": case "question": case "elicitation": case "widget": case "usage": case "image":
       return { ...base, kind: row.kind } as unknown as Block;
     case "error": return { ...base, kind: "error", message: text } as unknown as Block;
     case "subagent":

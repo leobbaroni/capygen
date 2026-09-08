@@ -52,6 +52,18 @@ beforeEach(() => {
 });
 
 describe("SkillsSection", () => {
+  it("opens the selected canonical backend folder and hides unsupported API actions", async () => {
+    const user = userEvent.setup();
+    render(<SkillsSection />);
+    await user.click(screen.getByRole("button", { name: "Open folder" }));
+    expect(invoke).toHaveBeenCalledWith("integrations.openFolder", { backend: "claude", kind: "skills" });
+    await user.click(screen.getByTestId("skills-tab-codex"));
+    await user.click(screen.getByRole("button", { name: "Open folder" }));
+    expect(invoke).toHaveBeenCalledWith("integrations.openFolder", { backend: "codex", kind: "skills" });
+    await user.click(screen.getByTestId("skills-tab-api"));
+    expect(screen.queryByRole("button", { name: "Open folder" })).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("skill-create-button")).toHaveLength(2);
+  });
   it("lists skills with scope and plugin badges", async () => {
     render(<SkillsSection />);
     const graphify = await screen.findByTestId("skill-row-graphify");
@@ -113,14 +125,14 @@ describe("SkillsSection", () => {
     );
   });
 
-  it("switching to a backend with no skills shows the empty state", async () => {
+  it("API agents show the canonical native sources they share", async () => {
     const user = userEvent.setup();
     render(<SkillsSection />);
     await screen.findByTestId("skill-row-graphify");
 
     await user.click(screen.getByTestId("skills-tab-api"));
 
-    expect(await screen.findByTestId("skills-panel-api")).toHaveTextContent(/no skills/i);
+    expect(await screen.findByTestId("skills-panel-api")).toHaveTextContent(/API agents read shared instructions/i);
   });
 
   // -------------------------------------------------------------------------

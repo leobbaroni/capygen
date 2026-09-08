@@ -23,6 +23,13 @@ export interface ToolSchema {
 
 export type ChatContent =
   | { type: "text"; text: string }
+  /**
+   * A picture the user attached, base64-encoded from the app's attachment
+   * store. Anthropic takes it as an `image` block, OpenAI as an `input_image`
+   * with a `data:` URL — both adapters translate it below. It only ever appears
+   * on a `user` message.
+   */
+  | { type: "image"; mediaType: "image/png" | "image/jpeg" | "image/webp"; data: string }
   | { type: "thinking"; thinking: string; signature?: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; toolUseId: string; content: string; isError?: boolean };

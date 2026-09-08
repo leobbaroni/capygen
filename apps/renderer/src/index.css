@@ -300,3 +300,8 @@ html:not(.dark) .conversations-sidebar {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent;
 }
+
+/* Default dark surfaces share the reference app-shell canvas. */
+.dark:not([data-theme]) .app-shell > main {
+  background: transparent;
+}

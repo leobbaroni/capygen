@@ -15,6 +15,7 @@ const PREFIXES = {
   task: "tsk",
   devServer: "srv",
   terminal: "term",
+  attachment: "att",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

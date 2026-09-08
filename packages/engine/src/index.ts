@@ -10,6 +10,7 @@
  * rules) rather than fail loudly.
  */
 export * from "./harness.js";
+export * from "./vision.js";
 export * from "./catalogue/index.js";
 export * from "./policy/index.js";
 export * from "./asyncQueue.js";

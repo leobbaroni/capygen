@@ -52,6 +52,7 @@ beforeEach(() => {
     // session runner's business, tested in `sessionRunner.test.ts`.
     makeEngine: createStubEngine,
     pickDirectory: async () => picked,
+    defaultDirectory: () => path.join(dir, "default home"),
     appInfo: () => ({
       name: "capygen",
       version: "0.1.0",
@@ -81,6 +82,14 @@ async function newSession(): Promise<{ sessionId: string }> {
 }
 
 describe("projects", () => {
+  it("starts with an idempotent default folder without opening a picker or creating files", async () => {
+    picked = null;
+    const first = await call("projects.default", {}) as { id: string; path: string };
+    expect(first.path).toBe(path.join(dir, "default home"));
+    expect(await call("projects.default", {})).toEqual(first);
+    expect(fs.existsSync(first.path)).toBe(false);
+    expect(await call("projects.list", {})).toHaveLength(1);
+  });
   it("returns null when the picker is cancelled and stores nothing", async () => {
     picked = null;
     expect(await call("projects.pick", {})).toBeNull();
@@ -387,7 +396,7 @@ describe("tool outputs and usage (B4)", () => {
 
 describe("settings, commands, version", () => {
   it("returns the defaults, patches, and persists", async () => {
-    expect(await call("settings.get", {})).toMatchObject({ theme: "system", hopCap: 3 });
+    expect(await call("settings.get", {})).toMatchObject({ theme: "dark", hopCap: 3 });
     expect(await call("settings.set", { theme: "dark" })).toMatchObject({ theme: "dark" });
     expect(await call("settings.get", {})).toMatchObject({ theme: "dark", hopCap: 3 });
   });

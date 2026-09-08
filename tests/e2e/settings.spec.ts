@@ -94,7 +94,6 @@ const EXPECTED_SECTION_IDS = [
   "git",
   "shortcuts",
   "import",
-  "integrations",
   "account",
   "harnesses",
   "mcp",

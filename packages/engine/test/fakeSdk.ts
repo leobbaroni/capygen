@@ -21,6 +21,8 @@ export interface FakeSdk {
   calls: { options: ClaudeOptions }[];
   /** Prompt texts the harness pushed into the streaming input. */
   prompts: string[];
+  /** The same messages unflattened — what an image-carrying turn is read from. */
+  messages: SDKUserMessage[];
   /** Messages pushed here are delivered to the harness in order. */
   out: AsyncQueue<SDKMessage>;
   interrupts: number;
@@ -42,6 +44,7 @@ export function makeFakeSdk(): FakeSdk {
   const fake: FakeSdk = {
     calls: [],
     prompts: [],
+    messages: [],
     out: new AsyncQueue<SDKMessage>(),
     interrupts: 0,
     supportedCommands: null,
@@ -60,6 +63,7 @@ export function makeFakeSdk(): FakeSdk {
           return;
         }
         for await (const message of prompt) {
+          fake.messages.push(message);
           fake.prompts.push(userText(message));
         }
       })();

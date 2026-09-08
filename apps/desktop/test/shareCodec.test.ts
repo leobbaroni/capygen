@@ -57,6 +57,17 @@ const everyKind = (): ShareProjectionInput["blocks"] => [
 ];
 
 describe("live block projection", () => {
+  it("discloses omitted image contents without sharing attachment identifiers or names", () => {
+    const bundle = projectShareBundle(input({ blocks: [{ turnRole: "user", block: base(0, "image", {
+      attachmentId: "att_private", name: "private-screenshot.png", mediaType: "image/png", size: 200,
+    }) }] }));
+    expect(bundle.entries[0]).toMatchObject({ kind: "notice", text: expect.stringContaining("Image contents are not included") });
+    const json = encodeShareJson(bundle).text;
+    expect(json).not.toContain("att_private");
+    expect(json).not.toContain("private-screenshot.png");
+    expect(() => ShareBundleSchema.parse(bundle)).not.toThrow();
+  });
+
   it("produces a schema-valid bundle of messages and safe activity labels only", () => {
     const bundle = projectShareBundle(input({ blocks: everyKind() }));
     expect(() => ShareBundleSchema.parse(bundle)).not.toThrow();

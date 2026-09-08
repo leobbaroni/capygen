@@ -75,9 +75,20 @@ export function readOnlyReason(entry: McpServerEntry): string | null {
 
 export function McpSection() {
   const [tab, setTab] = useState<Backend>("claude");
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  async function openFolder(): Promise<void> {
+    if (tab === "api") return;
+    setOpening(true); setFolderError(null);
+    try { await ipc().invoke("integrations.openFolder", { backend: tab, kind: "mcp" }); }
+    catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
+    finally { setOpening(false); }
+  }
   return (
     <div data-testid="settings-mcp">
       <SectionIntro title="MCP servers" description="Model Context Protocol servers each backend can reach." />
+      {tab !== "api" ? <Button variant="outline" size="sm" disabled={opening} onClick={() => void openFolder()} className="mb-3">Open folder</Button> : null}
+      {folderError ? <RowError message={folderError} /> : null}
       <div className="mb-4 flex gap-1 border-b border-border-weak" role="tablist" aria-label="Backend">
         {BACKENDS.map((b) => (
           <button

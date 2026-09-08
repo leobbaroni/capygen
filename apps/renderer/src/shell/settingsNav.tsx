@@ -12,7 +12,6 @@
  */
 import {
   ArchiveIcon,
-  BlocksIcon,
   BotIcon,
   CableIcon,
   DownloadIcon,
@@ -66,7 +65,6 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { id: "git", label: "Git", icon: GitBranchIcon },
       { id: "shortcuts", label: "Keyboard shortcuts", icon: KeyboardIcon },
       { id: "import", label: "Import sessions", icon: DownloadIcon },
-      { id: "integrations", label: "Integrations", icon: BlocksIcon },
       { id: "account", label: "Account", icon: UserCogIcon },
     ],
   },

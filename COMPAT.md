@@ -64,6 +64,7 @@ is a dependency **only** so its vendored binary ships with the app — its own
 | `thread/start` `{cwd, model, approvalPolicy, sandbox, approvalsReviewer}` | `v2/ThreadStartParams.ts` | `CodexHarness.startThread` | **`approvalsReviewer: "user"` is passed explicitly** — this machine's `~/.codex/config.toml` says `auto_review`, under which capygen would never see an approval card |
 | `thread/resume` `{threadId, …, excludeTurns: true}` | verified 2026-09-05 (spike `appserver-c-resume`) | resume after a restart | without `excludeTurns` the server sends a `deprecationNotice`; a refused resume falls back to `thread/start` + an error block |
 | `turn/start` `{threadId, input: UserInput[], effort?}` → `{turn:{id}}` | `v2/UserInput.ts` | `CodexHarness.dispatch` | answers when the turn is *accepted*, not finished; a `{type:"skill"}` part is how `/skill` reaches the protocol |
+| `UserInput` variant `{type:"localImage", path}` for an attached image | `v2/UserInput.ts` (`text \| image \| localImage \| audio \| localAudio \| skill \| mention`) | `CodexHarness.dispatch` image attachments | Codex opens the file itself, so no base64 crosses the pipe; the camelCase spelling is the binding's, and a rename would make every attached picture a protocol error rather than a silent drop |
 | `turn/interrupt` `{threadId, turnId}` | spike §5 | `chat.interrupt` | the harness still ends the turn after `interruptGraceMs` (5 s) |
 | `thread/compact/start`, `review/start`, `thread/settings/update` | `CODEX_METHODS` in `codex/protocol.ts` | `/compact`, `/review`, `/model` | slash commands are **not** a protocol concept (spike §2): each built-in maps onto one of these, everything else is prompt text. After `thread/settings/update` the harness re-emits `session` with the new `model`, which `SessionRunner` persists onto the agent row |
 | `skills/list` `{cwds:[…]}`, `model/list`, `mcpServerStatus/list` | spike §2 (`appserver-e`) | slash menu (R14), model picker, Settings ▸ MCP (R28) | discovery only — a failure logs and leaves the built-ins, it never fails a turn |
@@ -771,3 +772,46 @@ launch IPC awaits the native spawn event and reports asynchronous launch errors.
 Detected absolute and packaged CLI paths are retained for sign-in. Every setup step
 still goes through the exact-command native confirmation gate; quick setup sequences
 those steps and waits for detection before advancing.
+
+### UX repair — shared skills, context and session defaults (2026-09-08)
+
+- `integrations.openFolder` accepts only a native backend and a fixed category;
+  main resolves canonical directories. It does not accept arbitrary caller paths.
+- App-owned `list_skills` / `read_skill` tools read enabled Claude/Codex skill
+  instructions from canonical files, including enabled plugin skills. Tool schemas
+  remain stable across turns. Listing is paginated; reading returns bounded JSON
+  pages with a source directory, content revision and next offset. These tools do
+  not install a plugin or emulate unavailable native executables.
+- Claude receives the readers through the existing SDK `createSdkMcpServer` / `tool`
+  API; Codex receives them through `thread/start.dynamicTools`, covered by the
+  persisted tool-signature resume check; API agents use their local tool runtime.
+- `agents.context` reports actual latest-request input, nullable known capacity,
+  timestamp and source per roster agent and active/recent app-delegated child.
+  Native Codex uses `tokenUsage.last.inputTokens` (cached input is already included),
+  never its lifetime total. Claude uses parent request `message.usage` plus cache
+  read/creation input; SDK `modelUsage.contextWindow` supplies capacity only.
+  API usage is normalized first, then cache input is included once. Unreported
+  measurements stay unknown. Context snapshots are in-memory UI metadata.
+- `projects.default` registers the OS home directory as a project without opening
+  a picker or creating files. Selected projects still take precedence.
+- Round-table UI preferences retain roster identity/model/effort and hop/parallel
+  defaults locally; arbitrary agent config, environment and credentials are excluded.
+
+
+### UX repair — durable image input (2026-09-08)
+
+`chat.send.attachments` accepts bounded PNG/JPEG/WebP base64 only on the renderer-to-main
+hop (4 pictures, 5 MiB each, 10 MiB total). Main verifies media signatures and writes
+app-owned attachment files; persisted image blocks contain identities and display metadata,
+not bytes. Claude SDK user messages carry Anthropic image content; Codex uses the pinned
+`localImage` variant above; API adapters emit Anthropic `image` or OpenAI `input_image`.
+The local `capygen-attachment:` scheme serves validated filenames for transcript images.
+
+App-delegated workers receive the current turn's pictures on compatible harnesses. A
+text-only/unverified worker can still run its text task; both its prompt and result
+explicitly disclose that pictures were not forwarded. This does not copy parent permissions.
+API history replay is bounded by count and bytes and deduplicates identical images; omitted
+pictures get notices. Summary requests contain image markers rather than encoded bytes.
+Text-only sharing includes an omission notice and does not export the pictures or local IDs.
+Custom Mode capability discovery awaits the same harness lister as the model picker, so a
+fresh process cannot freeze the editor on an empty startup snapshot.

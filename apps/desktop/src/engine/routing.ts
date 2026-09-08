@@ -15,12 +15,13 @@
 import type { CapygenStore } from "@capygen/db";
 import {
   DELEGATE_TASK_TOOL,
+  backendLabel,
   buildRoundTablePrompt,
   resolveRoute,
   type RoundTableAgent,
   type RoutingDecision,
 } from "@capygen/engine";
-import type { Agent, Backend, Session } from "@capygen/shared";
+import type { Agent, Backend, CrewCapability, Session } from "@capygen/shared";
 
 /** `Agent` narrowed to what the round table needs (order preserved). */
 export function toRoundTableAgent(agent: Agent): RoundTableAgent {
@@ -89,33 +90,112 @@ export function resolveSubagentRoute(
 }
 
 /**
- * The cross-backend route this agent needs `delegate_task` for, or `null` when
- * it has none — either because there is no rule, because the rule keeps it on
- * its own backend (the `PreToolUse` hook handles that), or because its backend
- * cannot be handed a tool at all.
+ * The **default** target for this agent's `delegate_task` calls, or `null` when
+ * the agent cannot be handed the tool at all.
+ *
+ * This used to answer `null` for everything except a stored cross-backend rule,
+ * which meant the tool existed only for the handful of sessions whose user had
+ * been through the routing settings — and those settings no longer have a UI.
+ * The tool is universal now: an agent with no rule delegates to **its own
+ * backend and model**, which is a real, runnable target and the one a reader
+ * expects "run this sub-task for me" to use. A rule, per-agent or per-session,
+ * still wins and still points the default wherever it says — including at
+ * another backend, which is the case no `PreToolUse` hook can enforce.
+ *
+ * `null` is reserved for "there is nothing to delegate *from*": an unknown
+ * session or agent, or a backend capygen cannot hand a tool to.
  */
 export function delegationTarget(
   store: CapygenStore,
   sessionId: string,
   agentId: string,
 ): { backend: Backend; model: string } | null {
-  const decision = resolveSubagentRoute(store, sessionId, agentId);
-  if (!decision || decision.sameBackend) return null;
-  const agent = store.sessions.agent(agentId);
+  let agent;
+  try {
+    agent = store.sessions.agent(agentId);
+  } catch {
+    return null;
+  }
   if (!agent || !canDelegateFrom(agent.backend)) return null;
-  return { backend: decision.backend, model: decision.model };
+  const decision = resolveSubagentRoute(store, sessionId, agentId);
+  // A same-backend rule names a model the hook also rewrites native spawns to;
+  // a delegated child follows the same rule rather than contradicting it.
+  if (decision && decision.model) return { backend: decision.backend, model: decision.model };
+  if (decision) return { backend: decision.backend, model: "" };
+  return { backend: agent.backend, model: agent.model };
+}
+
+/**
+ * How many model ids one backend contributes to the prompt addition. The list
+ * is session-stable prompt text (R24), so it is bounded rather than however
+ * long today's catalogue happens to be.
+ */
+const MAX_ADVERTISED_MODELS = 8;
+
+/**
+ * The `delegate_task` paragraph, built from what this installation can actually
+ * run.
+ *
+ * Two rules it does not break: it never names a backend or a model id that is
+ * not in `capabilities` (an invented id is a refused call at best and a wrong
+ * charge at worst), and it says nothing about *which* backend the caller is on
+ * — the tool reaches every backend from every backend, so a Codex-only caveat
+ * would be false.
+ */
+function delegationParagraph(
+  target: { backend: Backend; model: string },
+  capabilities: readonly CrewCapability[],
+): string {
+  const lines: string[] = [];
+  lines.push(
+    `Sub-agents: capygen gives you the ${DELEGATE_TASK_TOOL} tool. It runs one task as a fresh ` +
+      "agent in this same project directory and returns that agent's final text. The sub-agent " +
+      "does not see this conversation, so put everything it needs in the prompt.",
+  );
+  lines.push(
+    `Left alone, ${DELEGATE_TASK_TOOL} runs on ${backendLabel(target.backend)}` +
+      `${target.model ? ` (${target.model})` : ""}. capygen runs the sub-agent itself, so the ` +
+      "call may instead name a backend, a model and an effort — including a backend other than " +
+      "your own, which your own sub-agent tool cannot reach.",
+  );
+  const byBackend = new Map<Backend, string[]>();
+  for (const entry of capabilities) {
+    const models = byBackend.get(entry.backend) ?? [];
+    if (!models.includes(entry.model)) models.push(entry.model);
+    byBackend.set(entry.backend, models);
+  }
+  if (byBackend.size > 0) {
+    const offered = [...byBackend.entries()].map(([backend, models]) => {
+      const shown = models.slice(0, MAX_ADVERTISED_MODELS);
+      const rest = models.length - shown.length;
+      return `${backend}: ${shown.join(", ")}${rest > 0 ? `, and ${rest} more` : ""}`;
+    });
+    lines.push(
+      `This installation can run — ${offered.join("; ")}. Use those ids exactly; capygen refuses ` +
+        "a backend or model it cannot run rather than substituting another one.",
+    );
+  } else {
+    lines.push(
+      "Name a backend or model only when the user asked for a specific one, and only with an id " +
+        "you have actually been told exists; capygen refuses anything else rather than guessing.",
+    );
+  }
+  return lines.join("\n");
 }
 
 /**
  * The session-stable prompt addition for one agent, or `undefined` when there
- * is nothing to say (a solo session with no routing override) — see
- * `buildRoundTablePrompt`, and note that `undefined` keeps such a session's
- * backend prompt byte-identical to Phase 2's.
+ * is nothing to say.
+ *
+ * `capabilities` is what this installation can run (`crewCapabilities`), and is
+ * advertised verbatim so the model asks for ids that exist. Omitting it keeps
+ * the paragraph, minus the list.
  */
 export function promptAdditionFor(
   store: CapygenStore,
   sessionId: string,
   agentId: string,
+  capabilities: readonly CrewCapability[] = [],
 ): string | undefined {
   const session = store.sessions.get(sessionId);
   if (!session) return undefined;
@@ -136,6 +216,10 @@ export function promptAdditionFor(
     ].filter(Boolean).join("\n\n");
   }
   const target = delegationTarget(store, sessionId, agentId);
+  // `buildRoundTablePrompt`'s own delegation notice describes the narrow
+  // cross-backend case ("your own sub-agent tool cannot reach it"), which is no
+  // longer what the tool is. The roster half is still its job; the tool
+  // paragraph is written here, once, for every backend.
   const prompt = buildRoundTablePrompt({
     self,
     agents,
@@ -144,7 +228,8 @@ export function promptAdditionFor(
     // A solo session's dispatcher plans no peer hop, so the hand-off
     // paragraph would describe something that cannot happen (ADR-0002).
     mode: session.mode,
-    ...(target ? { delegation: { ...target, toolName: DELEGATE_TASK_TOOL } } : {}),
   });
-  return prompt ?? undefined;
+  const delegation = target ? delegationParagraph(target, capabilities) : null;
+  const parts = [prompt, delegation].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }

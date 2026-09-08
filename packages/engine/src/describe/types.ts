@@ -53,6 +53,7 @@ const CAPABILITY_LABELS: Record<keyof HarnessCapabilities, string> = {
   resume: "Resumable across restarts",
   interrupt: "Interruptible mid-turn",
   slashCommands: "Has its own slash commands",
+  imageInput: "Reads images you attach",
 };
 
 export function capabilityLabels(caps: HarnessCapabilities): string[] {

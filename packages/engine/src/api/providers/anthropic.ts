@@ -93,6 +93,12 @@ export function anthropicMessages(messages: readonly ChatMessage[]): unknown[] {
         case "text":
           if (block.text.length > 0) content.push({ type: "text", text: block.text });
           break;
+        case "image":
+          content.push({
+            type: "image",
+            source: { type: "base64", media_type: block.mediaType, data: block.data },
+          });
+          break;
         case "thinking":
           if (block.signature) {
             content.push({

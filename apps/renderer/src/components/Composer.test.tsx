@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, SlashCommand } from "@capygen/shared";
 import { Composer } from "./Composer";
 
@@ -265,7 +265,7 @@ describe("the harness/model picker (SPEC item 5)", () => {
 
   it("names the model it will actually use, never just a backend", () => {
     renderComposer({ harnesses: HARNESSES, agent: { backend: "codex", model: "gpt-5.5" } });
-    expect(screen.getByTestId("composer-agent-picker")).toHaveTextContent("Codex · gpt-5.5");
+    expect(screen.getByTestId("composer-agent-picker")).toHaveTextContent("Codex · GPT-5.5");
     // With nothing chosen it says so rather than naming a backend the session
     // would not actually run on.
     renderComposer({ harnesses: HARNESSES, testId: "composer2" });
@@ -415,4 +415,120 @@ describe("@mention autocomplete (SPEC item B2.2)", () => {
 
     expect(screen.queryByTestId("mention-menu")).not.toBeInTheDocument();
   });
+});
+
+/** The smallest real PNG: an 8-byte signature is all `sniffImageMediaType` reads. */
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+const PNG_BASE64 = Buffer.from(PNG_BYTES).toString("base64");
+function pngFile(name: string): File {
+  return new File([PNG_BYTES], name, { type: "image/png" });
+}
+// jsdom has no object URLs; the chip preview only needs a string.
+let created = 0;
+let revoked: string[] = [];
+beforeAll(() => {
+  Object.defineProperty(URL, "createObjectURL", {
+    value: () => `blob:preview-${(created += 1)}`,
+    writable: true,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    value: (url: string) => revoked.push(url),
+    writable: true,
+  });
+});
+beforeEach(() => {
+  created = 0;
+  revoked = [];
+});
+
+describe("Composer completion and text attachments", () => {
+  it("Tab completes the highlighted slash command without sending", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer({ commands: COMMANDS });
+    await user.type(screen.getByTestId("composer-input"), "/co{ArrowDown}{Tab}");
+    expect(screen.getByTestId("composer-input")).toHaveValue("/context ");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("clicking a skill inserts it into the draft without sending", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer({ commands: [{ name: "/review", source: "skill", description: "Review changes" }] });
+    await user.type(screen.getByTestId("composer-input"), "/rev");
+    await user.click(screen.getByTestId("slash-menu-item"));
+    expect(screen.getByTestId("composer-input")).toHaveValue("/review ");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("composer-draft-highlight")).toHaveTextContent("/review");
+    expect(screen.queryByLabelText("Dictation language")).not.toBeInTheDocument();
+  });
+  it("enables text attachment selection and sends the selected file contents", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    expect(screen.getByTestId("composer-attach")).toBeEnabled();
+    await user.upload(screen.getByTestId("composer-file-input"), new File(["const answer = 42;"], "answer.ts", { type: "text/plain" }));
+    await screen.findByRole("button", { name: "Remove answer.ts" });
+    await user.click(screen.getByTestId("composer-send"));
+    expect(onSubmit).toHaveBeenCalledWith(expect.stringContaining('"content": "const answer = 42;"'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.stringContaining('"name": "answer.ts"'));
+  });
+  it("refuses an unsupported binary visibly without creating a misleading attachment", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    await user.upload(screen.getByTestId("composer-file-input"), new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "spec.pdf", { type: "application/pdf" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("binary attachments are not supported");
+    expect(screen.queryByRole("button", { name: "Remove spec.pdf" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("composer-send")).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("refuses a file whose bytes are not the image type it claims", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    await user.upload(screen.getByTestId("composer-file-input"), new File([new Uint8Array([0, 1, 2])], "image.png", { type: "image/png" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("not a valid image/png file");
+    expect(screen.queryByRole("button", { name: "Remove image.png" })).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("attaches a real PNG and sends it as an image, not as text", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    await user.upload(screen.getByTestId("composer-file-input"), pngFile("shot.png"));
+    await screen.findByRole("button", { name: "Remove shot.png" });
+    await user.type(screen.getByTestId("composer-input"), "what is this?");
+    await user.click(screen.getByTestId("composer-send"));
+    expect(onSubmit).toHaveBeenCalledWith("what is this?", [
+      { name: "shot.png", mediaType: "image/png", size: PNG_BYTES.length, data: PNG_BASE64 },
+    ]);
+    // The picture is an attachment, never prose: nothing base64-shaped is in the text.
+    expect(String(onSubmit.mock.calls[0]![0])).not.toContain(PNG_BASE64);
+  });
+  it("frees the previews it made when another file in the same batch is refused", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    await user.upload(screen.getByTestId("composer-file-input"), [
+      pngFile("good.png"),
+      new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "spec.pdf", { type: "application/pdf" }),
+    ]);
+    expect(await screen.findByRole("alert")).toHaveTextContent("binary attachments are not supported");
+    // Nothing half-attached, and no object URL left behind for the picture that
+    // did load before its sibling was refused.
+    expect(screen.queryByRole("button", { name: "Remove good.png" })).not.toBeInTheDocument();
+    expect(revoked).toHaveLength(created);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("releases an attached preview when the composer unmounts", async () => {
+    const user = userEvent.setup(); const view = render(<Composer onSubmit={vi.fn()} testId="composer" />);
+    await user.upload(screen.getByTestId("composer-file-input"), pngFile("keep.png"));
+    await screen.findByRole("button", { name: "Remove keep.png" });
+    expect(revoked).toHaveLength(0);
+    view.unmount();
+    expect(revoked).toHaveLength(created);
+  });
+  it("can send an image with no message text at all", async () => {
+    const user = userEvent.setup(); const { onSubmit } = renderComposer();
+    await user.upload(screen.getByTestId("composer-file-input"), pngFile("only.png"));
+    await screen.findByRole("button", { name: "Remove only.png" });
+    expect(screen.getByTestId("composer-send")).toBeEnabled();
+    await user.click(screen.getByTestId("composer-send"));
+    expect(onSubmit).toHaveBeenCalledWith("", [expect.objectContaining({ name: "only.png" })]);
+  });
+});
+
+it("uses catalogue labels and offers API effort independently of model commands", async () => {
+  const user = userEvent.setup(); const onPickAgent = vi.fn();
+  renderComposer({ agent: { backend: "api", model: "provider/model-id" }, canPickModel: false, onPickAgent,
+    harnesses: [{ backend: "api", available: true, models: [{ id: "provider/model-id", label: "Actual model name", efforts: ["low", "high"] }], defaultModel: "provider/model-id" }] as never });
+  expect(screen.getByTestId("composer-agent-picker")).toHaveTextContent("Actual model name");
+  await user.selectOptions(screen.getByLabelText("Model effort"), "high");
+  expect(onPickAgent).toHaveBeenCalledWith({ backend: "api", model: "provider/model-id", effort: "high" });
 });

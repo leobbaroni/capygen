@@ -8,6 +8,7 @@
  */
 import { newId, type Block, type Turn, type TurnStatus } from "@capygen/shared";
 import type { EngineDeps } from "./types.js";
+import type { StoredImage } from "../ipc/attachments.js";
 
 /** Store the block and push the stored value (never the caller's draft). */
 export function emitBlock(deps: EngineDeps, block: Block): Block {
@@ -35,16 +36,45 @@ export function textBlock(
   };
 }
 
+/** One attached picture, as the transcript records it (see `ImageBlockSchema`). */
+export function imageBlock(
+  sessionId: string,
+  turnId: string,
+  index: number,
+  image: StoredImage,
+): Block {
+  const ts = Date.now();
+  return {
+    id: newId("block"),
+    turnId,
+    sessionId,
+    kind: "image",
+    index,
+    attachmentId: image.attachmentId,
+    name: image.name,
+    mediaType: image.mediaType,
+    size: image.size,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+}
+
 /**
  * [B1] The user's turn: stored complete, its text emitted as one block, and its
  * `mentions` recorded so the transcript keeps *who the message was addressed
  * to* rather than re-deriving it from the text later (ADR-0002).
+ *
+ * Attached images follow the text as their own blocks. They are recorded even
+ * when no agent in the session can read them: the transcript's job is to show
+ * what the user sent, and the agent that could not use the picture says so in
+ * its own turn.
  */
 export function recordUserTurn(
   deps: EngineDeps,
   sessionId: string,
   text: string,
   mentions: readonly string[] = [],
+  images: readonly StoredImage[] = [],
 ): Turn {
   const turn = deps.store.turns.create({
     sessionId,
@@ -52,7 +82,11 @@ export function recordUserTurn(
     status: "done",
     mentions: [...mentions],
   });
-  emitBlock(deps, textBlock(sessionId, turn.id, 0, text));
+  // An empty text block would render as a blank bubble above the picture, so a
+  // message that is only images gets no text block at all.
+  let index = 0;
+  if (text.length > 0) emitBlock(deps, textBlock(sessionId, turn.id, index++, text));
+  for (const image of images) emitBlock(deps, imageBlock(sessionId, turn.id, index++, image));
   deps.broadcast("chat.turnStatus", { sessionId, turnId: turn.id, status: "done" });
   return turn;
 }

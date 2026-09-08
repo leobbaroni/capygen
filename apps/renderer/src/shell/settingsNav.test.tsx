@@ -13,7 +13,6 @@ const EXPECTED_IDS = [
   "git",
   "shortcuts",
   "import",
-  "integrations",
   "account",
   "harnesses",
   "mcp",

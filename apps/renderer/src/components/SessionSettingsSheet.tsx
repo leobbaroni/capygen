@@ -6,12 +6,12 @@
  * `sessions.updateSettings` (`SessionSettingsPatchSchema`, merge-patched so
  * editing one field never resets another).
  */
-import type { Backend, SessionSettings, SessionSettingsPatch } from "@capygen/shared";
+import type { SessionSettings, SessionSettingsPatch } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
-import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SessionMcpPanel, type SessionMcpPanelProps } from "./SessionMcpPanel";
 
-const BACKENDS: Backend[] = ["claude", "codex", "api"];
+
 
 export interface SessionSettingsSheetProps {
   open: boolean;
@@ -39,30 +39,11 @@ export function SessionSettingsSheet({
   onCustomMode,
 }: SessionSettingsSheetProps) {
   if (!open) return null;
-  const routingBackend = settings.routing?.subagents?.backend ?? "";
-  const routingModel = settings.routing?.subagents?.model ?? "";
-
-  function setRouting(next: { backend?: string; model?: string }): void {
-    const backend = next.backend !== undefined ? next.backend : routingBackend;
-    const model = next.model !== undefined ? next.model : routingModel;
-    onChange({
-      routing: {
-        ...settings.routing,
-        subagents: {
-          ...(backend ? { backend: backend as Backend } : {}),
-          ...(model ? { model } : {}),
-        },
-      },
-    });
-  }
-
   return (
-    <div
-      data-testid="session-settings-sheet"
-      className="absolute top-full right-0 z-30 mt-1 w-72 rounded-lg border border-border bg-popover p-3 text-sm text-popover-foreground shadow-menu"
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent data-testid="session-settings-sheet" aria-label="Session settings" className="max-w-md overflow-y-auto text-sm">
       <div className="flex items-center justify-between pb-2">
-        <span className="font-medium text-foreground">Session settings</span>
+        <DialogTitle>Session settings</DialogTitle>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -78,7 +59,7 @@ export function SessionSettingsSheet({
       <label className="flex items-center justify-between gap-2 py-1.5">
         <span className="text-muted-foreground">
           Hop cap
-          <span className="block text-xs">Agent-to-agent chain limit (SPEC R11)</span>
+          <span className="block text-xs">Maximum consecutive agent handoffs</span>
         </span>
         <input
           type="number"
@@ -104,39 +85,14 @@ export function SessionSettingsSheet({
         />
       </label>
 
-      <div className="border-t border-border-weak pt-2">
-        <p className="pb-1 text-muted-foreground">Sub-agent routing default</p>
-        <div className="flex items-center gap-1.5">
-          <select
-            value={routingBackend}
-            aria-label="Sub-agent routing backend"
-            data-testid="session-settings-routing-backend"
-            onChange={(e) => setRouting({ backend: e.target.value })}
-            className="h-7 flex-1 rounded-md border border-border-weak bg-background px-1.5 text-xs outline-none"
-          >
-            <option value="">Inherit per agent</option>
-            {BACKENDS.map((b) => (
-              <option key={b} value={b}>
-                {BACKEND_LABEL[b]}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            aria-label="Sub-agent routing model"
-            placeholder="model (optional)"
-            value={routingModel}
-            data-testid="session-settings-routing-model"
-            onChange={(e) => setRouting({ model: e.target.value })}
-            className="h-7 flex-1 rounded-md border border-border-weak bg-background px-1.5 text-xs outline-none"
-          />
-        </div>
+      <div>
         {mcp ? (
           <div className="mt-3 border-t border-border-weak pt-3">
             <SessionMcpPanel {...mcp} />
           </div>
         ) : null}
       </div>
-    </div>
+    </DialogContent>
+    </Dialog>
   );
 }

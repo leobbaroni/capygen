@@ -134,11 +134,14 @@ export function createStubEngine(
      * `streaming` — so the handler tests still exercise the real row and
      * broadcast sequence without a backend.
      */
-    dispatch({ sessionId, text, agentId }) {
-      if (roundTable) return roundTable.dispatch({ sessionId, text, agentId });
+    dispatch({ sessionId, text, agentId, images }) {
+      if (roundTable) return roundTable.dispatch({ sessionId, text, agentId, ...(images ? { images } : {}) });
       const session = deps.store.sessions.get(sessionId);
       if (!session) throw new Error(`unknown session: ${sessionId}`);
-      const userTurn = recordUserTurn(deps, sessionId, text);
+      // The echo double cannot look at a picture, but the transcript still
+      // records what the user attached — an image the user sent must never
+      // vanish just because the offline engine is answering.
+      const userTurn = recordUserTurn(deps, sessionId, text, [], images ?? []);
       const target = agentId ?? session.leadAgentId;
       const agentTurn = openAgentTurn(deps, {
         sessionId,

@@ -207,7 +207,7 @@ describe("transcript import IPC service", () => {
     try {
       const source = h.store.imports.commit({ projectId: h.projectId, snapshot: snapshot() }).session;
       const dispatch = vi.spyOn(context.engine, "dispatch");
-      expect(() => context.handlers["chat.send"]({ sessionId: source.id, text: "Do not execute", agentId: null })).toThrow(/read-only/);
+      expect(() => context.handlers["chat.send"]({ sessionId: source.id, text: "Do not execute", agentId: null, attachments: [] })).toThrow(/read-only/);
       expect(dispatch).not.toHaveBeenCalled();
       const continued = await context.handlers["imports.continue"]({
         sessionId: source.id,

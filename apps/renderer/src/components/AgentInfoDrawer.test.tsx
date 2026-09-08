@@ -71,7 +71,7 @@ describe("AgentInfoDrawer (SPEC R13)", () => {
   });
 });
 
-describe("sub-agent routing is reachable after creation (SPEC R12)", () => {
+describe("agent configuration", () => {
   it("saves a bounded API context capacity and preserves API config", async () => {
     const user = userEvent.setup(); const updateAgent = vi.fn().mockResolvedValue(agent({}));
     useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent });
@@ -80,49 +80,16 @@ describe("sub-agent routing is reachable after creation (SPEC R12)", () => {
     await user.clear(screen.getByTestId("agent-info-api-capacity-input")); await user.type(screen.getByTestId("agent-info-api-capacity-input"), "8192"); await user.click(screen.getByRole("button", { name: "Save capacity" }));
     expect(updateAgent).toHaveBeenCalledWith("a-alice", { config: { api: { provider: "openai", contextWindowTokens: 8192 } } });
   });
-  it("saves a rule the agent was created without", async () => {
-    const user = userEvent.setup();
-    const updateAgent = vi.fn().mockResolvedValue(agent({}));
-    useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent });
-    render(<AgentInfoDrawer agent={agent({})} onBack={vi.fn()} />);
-
-    await waitFor(() => expect(screen.getByTestId("agent-info-routing")).toBeInTheDocument());
-    expect(screen.getByTestId("agent-info-routing-effect")).toHaveTextContent("inherit");
-
-    await user.selectOptions(screen.getByTestId("agent-info-routing-backend"), "codex");
-    await user.type(screen.getByTestId("agent-info-routing-model"), "gpt-5.5");
-    await user.click(screen.getByTestId("agent-info-routing-save"));
-
-    expect(updateAgent).toHaveBeenCalledWith("a-alice", {
-      subagentRouting: { backend: "codex", model: "gpt-5.5" },
-    });
-  });
-
-  it.each([
-    ["claude", "claude-haiku-4-5"],
-    ["api", "claude-sonnet-4-5"],
-  ] as const)("lets a Codex agent route to %s", async (target, targetModel) => {
-    const user = userEvent.setup();
-    const updateAgent = vi.fn().mockResolvedValue(agent({}));
-    useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent });
-    render(
-      <AgentInfoDrawer
-        agent={agent({
-          backend: "codex",
-          model: "gpt-5.5",
-        })}
-        onBack={vi.fn()}
-      />,
-    );
-
-    await waitFor(() => expect(screen.getByTestId("agent-info-routing")).toBeInTheDocument());
-    await user.selectOptions(screen.getByTestId("agent-info-routing-backend"), target);
-    await user.clear(screen.getByTestId("agent-info-routing-model"));
-    await user.type(screen.getByTestId("agent-info-routing-model"), targetModel);
-    await user.click(screen.getByTestId("agent-info-routing-save"));
-    expect(updateAgent).toHaveBeenCalledWith("a-alice", {
-      subagentRouting: { backend: target, model: targetModel },
-    });
-    expect(screen.getByTestId("agent-info-routing-effect")).toHaveTextContent("Sub-agents run on");
+  it.each(["claude", "codex", "api"] as const)("saves supported %s effort and preserves other config", async (backend) => {
+    const user = userEvent.setup(); const updateAgent = vi.fn().mockResolvedValue(agent({}));
+    useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent,
+      harnesses: [{ backend, available: true, models: [{ id: "real-model", label: "Catalogue model", efforts: ["low", "high"] }], defaultModel: "real-model" }] as never });
+    render(<AgentInfoDrawer agent={agent({ backend, model: "real-model", config: { [backend]: { marker: "keep" } } })} onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("Agent effort")).toBeInTheDocument());
+    expect(screen.getByText("Catalogue model")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-info-routing")).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Agent effort"), "high");
+    await user.click(screen.getByRole("button", { name: "Save effort" }));
+    expect(updateAgent).toHaveBeenCalledWith("a-alice", { config: { [backend]: { marker: "keep", [backend === "claude" ? "effort" : "reasoningEffort"]: "high" } } });
   });
 });

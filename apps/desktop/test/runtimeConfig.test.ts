@@ -28,7 +28,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openStore, type CapygenStore } from "@capygen/db";
-import { AsyncQueue } from "@capygen/engine";
+import { AsyncQueue, DELEGATE_TASK_SCHEMA, DELEGATE_TASK_TOOL } from "@capygen/engine";
 import type {
   EngineEvent,
   Harness,
@@ -47,7 +47,13 @@ import {
   type SlashCommand,
 } from "@capygen/shared";
 import { createIpcContext, type IpcContext } from "../src/ipc/handlers.js";
-import { createSessionRunner, backendSessionKey } from "../src/engine/SessionRunner.js";
+import {
+  backendSessionKey,
+  backendSessionToolsKey,
+  createSessionRunner,
+  dynamicToolSignature,
+} from "../src/engine/SessionRunner.js";
+import { createSharedSkillTools } from "../src/engine/sharedSkills.js";
 
 /** One backend's section of a captured agent's effective config. */
 function section(agent: HarnessAgent, backend: Backend): Record<string, unknown> {
@@ -568,6 +574,17 @@ describe("the backend resume id is typed to the backend that issued it", () => {
     const { sessionId, agentId } = await newSession("codex", "gpt-5-codex");
     store.settings.setRaw(backendSessionKey(agentId), "codex_thread_1");
     store.settings.setRaw(`engine.backendSession.backend.${agentId}`, "codex");
+    // A Codex thread also has to match the tool set it was started with, and
+    // every Codex agent now declares `delegate_task` plus the shared skill
+    // readers. Built from the shipping definitions, so a schema change moves
+    // this expectation with the runner instead of silently passing.
+    store.settings.setRaw(
+      backendSessionToolsKey(agentId),
+      dynamicToolSignature([
+        { name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA },
+        ...createSharedSkillTools(() => []).map(({ name, parameters }) => ({ name, parameters })),
+      ]),
+    );
 
     await call("chat.send", { sessionId, text: "hi" });
     await live(agentId);
@@ -575,12 +592,26 @@ describe("the backend resume id is typed to the backend that issued it", () => {
   });
 
   it("trusts an untagged handle from an older build", async () => {
+    // Claude, not Codex: only Codex fixes its tool set at thread start, and a
+    // Codex handle from a build that declared no tools cannot be resumed now
+    // that `delegate_task` is universal (the next case).
+    const { sessionId, agentId } = await newSession("claude", "claude-opus-4-5");
+    store.settings.setRaw(backendSessionKey(agentId), "claude_sess_old");
+
+    await call("chat.send", { sessionId, text: "hi" });
+    await live(agentId);
+    expect(started.at(-1)!.agent.resumeSessionId).toBe("claude_sess_old");
+  });
+
+  it("replaces a Codex thread that predates the universal delegate_task", async () => {
     const { sessionId, agentId } = await newSession("codex", "gpt-5-codex");
     store.settings.setRaw(backendSessionKey(agentId), "codex_thread_old");
 
     await call("chat.send", { sessionId, text: "hi" });
     await live(agentId);
-    expect(started.at(-1)!.agent.resumeSessionId).toBe("codex_thread_old");
+    // A thread cannot be re-declared, so it is replaced rather than resumed —
+    // once, and with the notice the runner already writes.
+    expect(started.at(-1)!.agent.resumeSessionId).toBeNull();
   });
 });
 

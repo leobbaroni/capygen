@@ -16,7 +16,7 @@ import { TasksPage } from "@/pages/TasksPage";
 import { InboxPage } from "@/pages/InboxPage";
 import { UsagePage } from "@/pages/UsagePage";
 import { AutomationsPage } from "@/pages/AutomationsPage";
-import { ExtensionsPage } from "@/pages/ExtensionsPage";
+import { ToolsPage } from "@/pages/ToolsPage";
 import { ExtensionPage } from "@/pages/ExtensionPage";
 import { ExtensionNavigationEvents } from "@/shell/ExtensionNavigation";
 import { HostsPage } from "@/pages/HostsPage";
@@ -41,7 +41,10 @@ export function App() {
           <Route path="/inbox" element={<InboxPage />} />
           <Route path="/usage" element={<UsagePage />} />
           <Route path="/automations" element={<AutomationsPage />} />
-          <Route path="/extensions" element={<ExtensionsPage />} />
+          <Route path="/tools" element={<ToolsPage />} />
+          <Route path="/tools/:category" element={<ToolsPage />} />
+          <Route path="/extensions" element={<Navigate to="/tools" replace />} />
+          <Route path="/settings/integrations" element={<Navigate to="/tools" replace />} />
           <Route path="/extensions/page/:extensionId/:pageId" element={<ExtensionPage />} />
           <Route path="/hosts" element={<HostsPage />} />
           <Route path="/approve" element={<ApprovePage />} />

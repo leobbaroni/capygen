@@ -37,9 +37,25 @@ acceptance remains open after fixture fixes; the preceding full run had 2831 pas
 two failures since fixed in focused checks, seven skipped and a worker RPC timeout.
 Artifacts: https://github.com/leobbaroni/capygen/actions/runs/34199812626/artifacts/10045522661
 
-Current execution is Astra low for hard/medium work while Opus is unavailable, with Luna low
-on easy tasks and lighter reviews/new crucial tests. Root alone stages and commits. No full
-phase acceptance should be inferred from focused checks.
+Current execution is Astra low leading, Claude Opus medium for hard/medium work when
+available (Astra low fallback), and Luna low for easy tasks. Reviews and tests focus on
+new crucial behavior. Root alone stages and commits. No full phase acceptance should be
+inferred from focused checks.
+
+The user's 2026-09-08 findings take priority over later phases; the live repair checklist
+is `docs/plans/2026-09-08-ux-repair.md`. The prerequisite repair is pushed at `a789044`.
+The current repair tree replaces the Extensions navigation with canonical Tools editors,
+adds shared read-only skill access across harnesses, fixes dark layout and settings
+scrolling, remembers round-table preferences, exposes per-agent request context, and
+makes explicit cross-backend delegation available without a routing settings panel.
+Changing Codex dynamic tool declarations intentionally replaces an existing native thread
+once, with the existing bounded continuity reference; it does not silently reuse a thread
+whose tool definitions are stale. Image input and Custom-at-start apply/send now pass native checks. Pictures survive reload;
+Custom awaits catalogue readiness and resolves the existing project before home fallback.
+Targeted checks and the Windows build passed; these are not a later-phase full gate.
+The native Custom fixture now lives outside the user-profile ancestry, because Claude can
+load ancestor project instructions despite isolated config variables. No user config files
+were written, and test provider traffic stayed on loopback.
 
 ## Phase 9 acceptance — 2026-09-08
 

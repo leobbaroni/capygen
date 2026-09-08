@@ -502,6 +502,16 @@ manually. Extension packages are operator-registered local roots with strict man
 identity checks. Backend, host, and UI focused checks passed; native extension verification and the
 full phase gate remain pending.
 
+### Composer attachments
+
+Attach accepts UTF-8 text/code files up to 64 KiB each, 256 KiB total and 8 files, plus PNG, JPEG,
+and WebP images up to 5 MiB each, 10 MiB total and 4 images. Images stay in app data and are sent
+as real image input only to compatible backends and app-delegated workers; unsupported or unverified
+model input is reported explicitly. Other binary files and PDFs are not supported. Text-only sharing
+emits an omission notice and excludes picture contents. API replay keeps recent images within bounded
+count and total size, with notes for older or unavailable images; it does not claim the entire image
+history is retained.
+
 ### Windows packaging
 
 On native Windows x64, run `corepack pnpm build:win` to build and stage the runtime, or
@@ -509,3 +519,16 @@ On native Windows x64, run `corepack pnpm build:win` to build and stage the runt
 `capygen-<version>-setup.exe`, `capygen-<version>-portable.exe`, `latest.yml`, and
 `artifact-audit.json`. Current artifacts are about 268 MiB each and unsigned. There is no verified
 published release or live updater acceptance yet.
+
+### Repair build: tools and session setup
+
+Use **Tools** in the sidebar for skills, plugins, MCP servers and tool permissions.
+These editors use the harness configuration files; **Open folder** reveals the
+native backend's directory. Account provides direct Claude/Codex sign-in and refresh.
+Every setup/sign-in command still requires the native command confirmation.
+
+The start screen offers Solo, Round-table and Custom. Custom opens the crew editor
+before sending the task. A folder choice is optional; the home folder is the default.
+Round-table roster and hop/parallel choices are reused. Context details in chat show
+separate latest-request windows, including app-delegated workers; unknown limits
+remain labelled unknown. Model effort choices come from the runtime catalogue.

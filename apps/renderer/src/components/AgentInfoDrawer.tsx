@@ -7,21 +7,19 @@
  * simplified to capygen's `AgentDescribe` shape rather than porting its
  * full MCP-server/policy-editing surface, which capygen does not have yet).
  *
- * It is also the one place a live agent's **sub-agent routing** rule (SPEC
- * R12) can be read and changed — see `RoutingSection` at the bottom of this
- * file for why that matters and for the one case where a rule cannot apply.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeftIcon } from "lucide-react";
-import { AgentConfigSchema, type Agent, type AgentDescribe, type Backend } from "@capygen/shared";
+import { AgentConfigSchema, type Agent, type AgentDescribe } from "@capygen/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatCostUsd, formatCount } from "@/components/blocks/blockFormat";
-import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { BACKEND_LABEL, modelDisplayName, supportedEfforts, agentEffort, withAgentEffort } from "@/lib/agentDisplay";
 import { useAppStore } from "@/store/appStore";
 
 export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () => void }) {
+  const harnesses = useAppStore((s) => s.harnesses);
   const describeAgent = useAppStore((s) => s.describeAgent);
   const [info, setInfo] = useState<AgentDescribe | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +67,7 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
       <div className="min-h-0 flex-1 overflow-y-auto p-3 text-sm">
         <div className="flex flex-wrap items-center gap-1.5 pb-3">
           <Badge variant="outline">{BACKEND_LABEL[agent.backend]}</Badge>
-          <Badge variant="outline">{agent.model}</Badge>
+          <Badge variant="outline">{modelDisplayName(harnesses, agent.backend, agent.model)}</Badge>
           {agent.role === "lead" ? <Badge variant="warning">Lead</Badge> : null}
         </div>
 
@@ -83,7 +81,7 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
         {info ? (
           <div className="flex flex-col gap-4">
             {agent.backend === "api" ? <ApiCapacitySection agent={agent} /> : null}
-            <RoutingSection agent={agent} />
+            <EffortSection agent={agent} />
             {/* Two different things, both of which R13 asks for: the note the
                 user wrote when they added this agent, and the usage
                 description the backend's own facts produce. Folding them into
@@ -211,106 +209,25 @@ function ApiCapacitySection({ agent }: { agent: Agent }) {
   </Section>;
 }
 
-/**
- * The agent's own sub-agent routing rule (SPEC R12), editable here.
- *
- * The rule was previously write-once, in the Add-agent dialog: nothing in the
- * app read `agent.subagentRouting` back, so a session's lead — created by
- * `sessions.create` from the landing's harness picker, which never asks for one
- * — could never be given a routing rule at all, and a rule set at creation
- * could never be seen or changed.
- *
- * The runtime validates the selected target and supplies the stable delegation
- * tools at the host boundary for each backend. This panel therefore describes
- * the effective target without making a config-file-only claim.
- */
-function RoutingSection({ agent }: { agent: Agent }) {
-  const updateAgent = useAppStore((s) => s.updateAgent);
-  const [backend, setBackend] = useState<Backend | "">(agent.subagentRouting?.backend ?? "");
-  const [model, setModel] = useState(agent.subagentRouting?.model ?? "");
+function EffortSection({ agent }: { agent: Agent }) {
+  const harnesses = useAppStore((state) => state.harnesses);
+  const updateAgent = useAppStore((state) => state.updateAgent);
+  const custom = useAppStore((state) => state.sessions.some((session) => session.id === agent.sessionId && session.mode === "custom"));
+  const existing = agentEffort(agent);
+  const [effort, setEffort] = useState(existing);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  // The row can be replaced under us (`agents.updated` after a save, or an
-  // edit from another surface); the fields follow the row, not the mount.
-  useEffect(() => {
-    setBackend(agent.subagentRouting?.backend ?? "");
-    setModel(agent.subagentRouting?.model ?? "");
-    setSaveError(null);
-  }, [agent.id, agent.subagentRouting?.backend, agent.subagentRouting?.model]);
-
-  const dirty =
-    backend !== (agent.subagentRouting?.backend ?? "") ||
-    model.trim() !== (agent.subagentRouting?.model ?? "");
-
-  async function save(): Promise<void> {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      await updateAgent(agent.id, {
-        subagentRouting: {
-          ...(backend ? { backend } : {}),
-          ...(model.trim() ? { model: model.trim() } : {}),
-        },
-      });
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Could not save the routing rule.");
-    } finally {
-      setSaving(false);
-    }
+  const [error, setError] = useState("");
+  useEffect(() => { setEffort(existing); setError(""); }, [agent.id, existing]);
+  const efforts = supportedEfforts(harnesses, agent.backend, agent.model);
+  if (!efforts.length && !existing) return null;
+  async function save() {
+    if (custom || saving || effort && !efforts.includes(effort)) return;
+    setSaving(true); setError("");
+    try { await updateAgent(agent.id, { config: withAgentEffort(agent.config, agent.backend, effort) }); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
   }
-
-  return (
-    <Section title="Sub-agent routing">
-      <div className="flex flex-col gap-1.5" data-testid="agent-info-routing">
-        <div className="flex gap-1.5">
-          <select
-            aria-label="Sub-agent backend"
-            data-testid="agent-info-routing-backend"
-            value={backend}
-            onChange={(e) => setBackend(e.target.value as Backend | "")}
-            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
-          >
-            <option value="">Inherit ({BACKEND_LABEL[agent.backend]})</option>
-            <option value="claude">
-              {BACKEND_LABEL.claude}
-            </option>
-            <option value="codex">{BACKEND_LABEL.codex}</option>
-            <option value="api">
-              {BACKEND_LABEL.api}
-            </option>
-          </select>
-          <input
-            type="text"
-            aria-label="Sub-agent model"
-            data-testid="agent-info-routing-model"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="model (optional)"
-            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
-          />
-        </div>
-        <p className="text-xs text-muted-foreground" data-testid="agent-info-routing-effect">
-          {backend || model.trim()
-              ? `Sub-agents run on ${BACKEND_LABEL[(backend || agent.backend) as Backend]}${
-                  model.trim() ? ` / ${model.trim()}` : ""
-                }.`
-              : "Sub-agents inherit this agent's own backend and model."}
-        </p>
-        {saveError ? <p className="text-xs text-destructive">{saveError}</p> : null}
-        <Button
-          variant="outline"
-          size="sm"
-          className="self-start"
-          data-testid="agent-info-routing-save"
-          disabled={!dirty || saving}
-          onClick={() => void save()}
-        >
-          {saving ? "Saving…" : "Save routing"}
-        </Button>
-      </div>
-    </Section>
-  );
+  return <Section title="Model effort"><div className="space-y-2"><select aria-label="Agent effort" value={effort} disabled={custom || saving || !efforts.length} onChange={(event) => setEffort(event.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"><option value="">Backend default</option>{existing && !efforts.includes(existing) && <option value={existing} disabled>{existing} (not currently offered)</option>}{efforts.map((value) => <option key={value} value={value}>{value}</option>)}</select>{custom ? <p className="text-xs text-muted-foreground">Edit this agent’s effort through Custom mode.</p> : <Button size="sm" variant="outline" disabled={saving || effort === existing || !efforts.length} onClick={() => void save()}>{saving ? "Saving…" : "Save effort"}</Button>}{error && <p role="alert" className="text-xs text-destructive">{error}</p>}</div></Section>;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {

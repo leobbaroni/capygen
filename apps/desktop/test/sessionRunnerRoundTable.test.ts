@@ -461,7 +461,14 @@ describe("what an agent is actually sent (SPEC R23)", () => {
     })) as { session: { id: string } };
     await call("chat.send", { sessionId: created.session.id, text: "hi" });
     await idle(created.session.id);
-    expect(started[0]?.agent.promptAddition).toBeUndefined();
+    // The roster half is still absent — a round table of one is nothing to
+    // describe. What a solo agent does get is the one paragraph that is now
+    // true of every agent: `delegate_task` exists, and it defaults to this
+    // agent's own backend and model.
+    const addition = started[0]?.agent.promptAddition ?? "";
+    expect(addition).toContain("delegate_task");
+    expect(addition).not.toContain("@");
+    expect(addition).not.toContain("round table");
   });
 });
 
@@ -518,7 +525,7 @@ describe("parallelAgents (SPEC R11)", () => {
 });
 
 describe("sub-agent routing wiring (SPEC R12)", () => {
-  it("gives a same-backend rule to the Claude hook and nothing else", async () => {
+  it("gives a same-backend rule to the Claude hook, and the tool to everyone", async () => {
     const table = await roundTable();
     await call("agents.update", {
       agentId: table.alice,
@@ -529,7 +536,10 @@ describe("sub-agent routing wiring (SPEC R12)", () => {
 
     const wiring = started.find((s) => s.agent.agentId === table.alice)!;
     expect(wiring.extras.routeSubagent).toBeTypeOf("function");
-    expect(wiring.extras.mcpServers).toBeUndefined();
+    // `delegate_task` is universal now, so a Claude agent has the in-process
+    // MCP server whatever the rule says; `extraTools` stays an `api`-only
+    // mechanism.
+    expect(wiring.extras.mcpServers).toBeTypeOf("function");
     expect(wiring.extras.extraTools).toBeUndefined();
     expect(
       wiring.extras.routeSubagent!({
@@ -589,7 +599,7 @@ describe("sub-agent routing wiring (SPEC R12)", () => {
     // Codex gets its own mechanism.
     expect(wiring.extras.mcpServers).toBeUndefined();
     expect(wiring.extras.extraTools).toBeUndefined();
-    expect(wiring.extras.dynamicTools?.map((tool) => tool.name)).toEqual(["delegate_task"]);
+    expect(wiring.extras.dynamicTools?.map((tool) => tool.name)).toContain("delegate_task");
     expect(wiring.extras.storeDynamicToolOutput).toBeTypeOf("function");
     // And it is told about the tool in the same session-stable prompt addition
     // every other delegating backend gets.
@@ -653,8 +663,13 @@ describe("solo mode is load-bearing, not just drawn (ADR-0002)", () => {
 
     const start = started.find((x) => x.agent.agentId === table.alice)!;
     // A roster line describing a hand-off the dispatcher will not perform is
-    // worse than no line at all (and costs cached prefix tokens, R24).
-    expect(start.agent.promptAddition).toBeUndefined();
+    // worse than no line at all (and costs cached prefix tokens, R24). The
+    // `delegate_task` paragraph is not a hand-off: it names no peer and plans
+    // no hop.
+    const addition = start.agent.promptAddition ?? "";
+    expect(addition).not.toContain("@codex");
+    expect(addition).not.toContain("round table");
+    expect(addition).toContain("delegate_task");
   });
 });
 

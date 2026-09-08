@@ -2,6 +2,9 @@
 
 One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contract.
 
+Active UX repair queue: [`docs/plans/2026-09-08-ux-repair.md`](docs/plans/2026-09-08-ux-repair.md).
+Later parity phases remain paused while this queue is pending; this link does not tick any phase.
+
 ## Current State
 
 - Phases 1–8 are accepted; latest checkpoint `f80500c` on `main`.

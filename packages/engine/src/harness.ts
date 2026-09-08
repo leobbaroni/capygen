@@ -144,12 +144,37 @@ export interface HarnessAgent {
   promptAddition?: string;
 }
 
+/**
+ * One image the user attached, already stored on disk by the app's attachment
+ * store. A path rather than bytes on purpose: the file is the durable record
+ * (it survives a restart and a resumed backend session), and keeping base64 out
+ * of this contract keeps it out of IPC payloads and out of every log line that
+ * prints a turn.
+ */
+export interface TurnImage {
+  /** Absolute path inside the app's attachment store. */
+  path: string;
+  mediaType: "image/png" | "image/jpeg" | "image/webp";
+  /** The user's own file name, for the backends that label an attachment. */
+  name: string;
+  size: number;
+}
+
 /** One user (or agent-to-agent) message being handed to the backend. */
 export interface TurnInput {
   /** The turn row this send fills in; carried through for logging only. */
   turnId: string;
   /** Sent verbatim — slash commands are ordinary prompt text (spike §3). */
   text: string;
+  /**
+   * Pictures to send *with* this message, as real image input for the backend
+   * (Claude `image` content, Codex `localImage`, API `input_image`) — never
+   * flattened into the text. A harness whose model cannot read images must fail
+   * the turn with an explicit error rather than dropping them: the caller has
+   * already gated on `modelAcceptsImages`, so arriving here with images the
+   * backend cannot use is a bug, not a soft condition.
+   */
+  images?: readonly TurnImage[];
 }
 
 export interface TurnContext {
@@ -166,6 +191,8 @@ export interface HarnessCapabilities {
   resume: boolean;
   interrupt: boolean;
   slashCommands: boolean;
+  /** Accepts `TurnInput.images`. Absent means "no" (older/fake harnesses). */
+  imageInput?: boolean;
 }
 
 export interface PermissionAnswer {
@@ -187,6 +214,7 @@ export interface Harness {
   interrupt(): Promise<boolean>;
   /** Cached from the backend's own listing; empty until it reports one. */
   listCommands(): SlashCommand[];
+  contextSnapshot?(): import("@capygen/shared").ContextSnapshot;
   capabilities(): HarnessCapabilities;
   /** Resolve a pending `permission` event. False when the id is unknown. */
   answerPermission(requestId: string, answer: PermissionAnswer): boolean;

@@ -33,7 +33,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
     <div
       role="presentation"
       data-slot="dialog-overlay"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 [-webkit-app-region:no-drag] flex items-center justify-center bg-black/40 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onOpenChange(false);
       }}
@@ -51,7 +51,7 @@ export function DialogContent({ className, children, ...props }: HTMLAttributes<
       data-slot="dialog-content"
       onMouseDown={(e) => e.stopPropagation()}
       className={cn(
-        "flex max-h-[85vh] w-full max-w-lg flex-col gap-4 rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-dialog",
+        "[-webkit-app-region:no-drag] flex max-h-[85vh] w-full max-w-lg flex-col gap-4 rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-dialog",
         className,
       )}
       {...props}

@@ -1,3 +1,4 @@
+import { createSharedSkillsMcpServer } from "./sharedSkillsMcp.js";
 /**
  * The session runner — one harness per (session, agent), and the only place that
  * turns `EngineEvent`s into rows and renderer events.
@@ -42,7 +43,7 @@ import {
   toClaudeMcpServers,
   toCodexMcpServers,
 } from "@capygen/engine";
-import type { AgentToolCatalogue } from "@capygen/shared";
+import { UNKNOWN_CONTEXT, type AgentToolCatalogue, type AgentContextSnapshot } from "@capygen/shared";
 import {
   newId,
   validateCrewAvailability,
@@ -59,6 +60,7 @@ import {
   type TurnStatus,
 } from "@capygen/shared";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { buildImportReference } from "@capygen/engine";
 import { loadApiHistory } from "./history.js";
 import { emitBlock, errorBlock, finishTurn } from "./persist.js";
@@ -308,6 +310,8 @@ interface BlockSlot {
 }
 
 interface ActiveTurn {
+  /** Current user/chain pictures, forwarded as image input to app-delegated workers. */
+  images?: EngineSendArgs["images"];
   sessionId: string;
   turnId: string;
   harness: Harness;
@@ -506,7 +510,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
             : {}),
           ...(extras.extraTools ? { extraTools: extras.extraTools } : {}),
           mcpServers: extras.mcpServerConfigs ?? [],
-          loadHistory: (session, forAgent) => loadApiHistory(store, session, forAgent),
+          loadHistory: (session, forAgent) =>
+            loadApiHistory(store, session, forAgent, (block) => {
+              const file = deps.attachments?.resolve(block.attachmentId, block.mediaType) ?? null;
+              return file ? readFileSync(file) : null;
+            }),
         },
       }));
 
@@ -573,6 +581,9 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * disposed (`createDelegateRunner`'s `onHarness` contract).
    */
   const delegated = new Map<string, Set<Harness>>();
+  const childContextIdentity = new WeakMap<Harness, Pick<AgentContextSnapshot, "agentId" | "backend" | "model" | "displayName" | "parentAgentId">>();
+  const finishedChildContexts = new Map<string, { sessionId: string; snapshot: AgentContextSnapshot }>();
+  let contextChildSequence = 0;
 
   /** Ephemeral ids for delegated children, so each capture is distinct. */
   let delegationSequence = 0;
@@ -602,6 +613,21 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * `delegationTarget` again on every call, so a routing rule the user edits in
    * Settings takes effect on the next spawn without restarting the backend.
    */
+  function withSharedSkills(extras: HarnessExtras, session: Session, backend: Backend): HarnessExtras {
+    const tools = deps.sharedSkillTools?.(session.projectId) ?? [];
+    if (!tools.length) return extras;
+    if (backend === "codex") extras.dynamicTools = [...(extras.dynamicTools ?? []), ...tools];
+    if (backend === "api") extras.extraTools = [...(extras.extraTools ?? []), ...tools];
+    if (backend === "claude") {
+      const original = extras.mcpServers;
+      extras.mcpServers = async () => ({
+        ...(await original?.() ?? {}),
+        ...await createSharedSkillsMcpServer({ tools, projectPath: store.projects.get(session.projectId)?.path ?? process.cwd(), log }),
+      });
+    }
+    return extras;
+  }
+
   function harnessExtras(
     session: Session,
     agent: Agent,
@@ -609,7 +635,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   ): HarnessExtras {
     const extras: HarnessExtras = session.mode === "custom" ? { disableNativeSubagents: true } : {};
     const custom = session.mode === "custom";
-    if (custom && agent.id !== session.leadAgentId) return extras;
+    if (custom && agent.id !== session.leadAgentId) return withSharedSkills(extras, session, agent.backend);
 
     if (agent.backend === "claude" && !custom) {
       // Same-backend routes only: `createSubagentRouter` returns nothing for a
@@ -626,12 +652,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     }
 
     const target = delegationTarget(store, session.id, agent.id);
-    if (!target && !custom) return extras;
+    if (!target && !custom) return withSharedSkills(extras, session, agent.backend);
 
     const project = store.projects.get(session.projectId);
     const run = createDelegateRunner({
       session: { sessionId: session.id, projectPath: project?.path ?? process.cwd() },
       parent: harnessAgent,
+      images: () => active.get(agentKey(session.id, agent.id))?.images ?? [],
       // Re-read per call, not captured: see the comment above.
       target: () => delegationTarget(store, session.id, agent.id),
       ...(custom ? { customCrew: () => {
@@ -649,8 +676,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         // grants and permission mode do not reach it, and neither does the
         // parent's *permission to run* — a session reassigned to a viewer must
         // not keep spawning children through a turn that started earlier.
-        const childExtras: HarnessExtras = custom ? { disableNativeSubagents: true } : {};
-        if (!deps.policy) return makeHarness(child, childExtras);
+        const childExtras: HarnessExtras = withSharedSkills(custom ? { disableNativeSubagents: true } : {}, session, child.backend);
+        const buildChild = () => {
+          const built = makeHarness(child, childExtras);
+          childContextIdentity.set(built, { agentId: `${agent.id}#context-${++contextChildSequence}`, parentAgentId: agent.id, displayName: child.name, backend: child.backend, model: child.model });
+          return built;
+        };
+        if (!deps.policy) return buildChild();
 
         const childConfig = (child.config as Record<string, unknown> | null | undefined)?.[
           child.backend
@@ -664,7 +696,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           ...(typeof childConfig?.approvalPolicy === "string"
             ? { codexApprovalPolicy: childConfig.approvalPolicy }
             : {}),
-          declaresDynamicTools: false,
+          declaresDynamicTools: child.backend === "codex" && Boolean(childExtras.dynamicTools?.length),
         };
         const childAgentId = `${agent.id}#delegate-${(delegationSequence += 1)}`;
         // Checked **before** the capture and before the child's backend is
@@ -687,7 +719,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           originTurnId: () => active.get(agentKey(session.id, agent.id))?.turnId ?? null,
         });
         try {
-          const built = makeHarness(child, childExtras);
+          const built = buildChild();
           // Remembered against the harness itself, so `onHarness` can end the
           // right lifecycle whenever this child is disposed — success, error,
           // timeout or Stop.
@@ -728,6 +760,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         };
       },
       ...(deps.catalogue ? { catalogue: deps.catalogue } : {}),
+      ...(deps.crewCapabilities ? { capabilities: deps.crewCapabilities } : {}),
       // The sub-agent's blocks, cards and usage land in the *parent's* turn,
       // which is the turn the user is looking at. They carry `delegatedFrom`
       // (set by `createDelegateRunner`) so the transcript can attribute them
@@ -747,6 +780,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         }
         set.add(child);
         return () => {
+          const identity = childContextIdentity.get(child);
+          if (identity) {
+            finishedChildContexts.set(identity.agentId, { sessionId: session.id, snapshot: { ...identity, ...(child.contextSnapshot?.() ?? UNKNOWN_CONTEXT) } });
+            while (finishedChildContexts.size > 64) finishedChildContexts.delete(finishedChildContexts.keys().next().value!);
+          }
           set.delete(child);
           if (set.size === 0) delegated.delete(session.id);
           // The child is gone: its capture ends with it, so no grant it made
@@ -804,7 +842,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       custom ? `[engine] ${agent.mentionName} uses classified Custom Mode delegation` :
         `[engine] ${agent.mentionName} delegates sub-agents to ${target!.backend}/${target!.model || "(backend default)"}`,
     );
-    return extras;
+    return withSharedSkills(extras, session, agent.backend);
   }
 
   /**
@@ -1106,7 +1144,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       ...(typeof config?.approvalPolicy === "string"
         ? { codexApprovalPolicy: config.approvalPolicy }
         : {}),
-      declaresDynamicTools: declaresTools,
+      declaresDynamicTools: declaresTools || (agent.backend === "codex" && Boolean(deps.sharedSkillTools?.(session.projectId).length)),
     };
   }
 
@@ -1147,7 +1185,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // [B1] Session-stable, built once here and never again for this harness
     // (SPEC R23/R24): the round-table roster and, when routing crosses
     // backends, the `delegate_task` notice.
-    const promptAddition = promptAdditionFor(store, session.id, agent.id);
+    const skillTools = deps.sharedSkillTools?.(session.projectId) ?? [];
+    const promptAddition = [promptAdditionFor(store, session.id, agent.id, deps.crewCapabilities?.() ?? []), skillTools.length ? "Use list_skills to discover enabled skill instructions shared from the canonical backend files, then read_skill by id. Follow referenced instructions using available tools and their normal permissions. A skill does not grant missing plugin capabilities." : ""].filter(Boolean).join("\n\n") || undefined;
     // The tool set has to be known *before* the resume id is chosen: a Codex
     // thread cannot be re-declared, so whether this agent can reuse its stored
     // thread depends on what that thread was started with. The set itself is
@@ -1157,8 +1196,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       agent.backend === "codex" && (session.mode === "custom" ? agent.id === session.leadAgentId : delegationTarget(store, session.id, agent.id) !== null);
     const captured = effectiveHarnessAgent(agent, {
       ...(promptAddition ? { promptAddition } : {}),
-      ...(declaresTools
-        ? { dynamicTools: [{ name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA }, ...(session.mode === "custom" ? [{ name: CREW_DEBATE_TOOL, parameters: CREW_DEBATE_SCHEMA }] : [])] }
+      ...(agent.backend === "codex" && (declaresTools || skillTools.length)
+        ? { dynamicTools: [
+          ...(declaresTools ? [{ name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA }, ...(session.mode === "custom" ? [{ name: CREW_DEBATE_TOOL, parameters: CREW_DEBATE_SCHEMA }] : [])] : []),
+          ...skillTools.map(({ name, parameters }) => ({ name, parameters })),
+        ] }
         : {}),
     });
     if ("error" in captured) {
@@ -1223,7 +1265,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         ...(typeof codexConfig?.approvalPolicy === "string"
           ? { codexApprovalPolicy: codexConfig.approvalPolicy }
           : {}),
-        declaresDynamicTools: declaresTools,
+        declaresDynamicTools: declaresTools || (agent.backend === "codex" && Boolean(deps.sharedSkillTools?.(session.projectId).length)),
       });
       extras.authorizeLocal = deps.policy.authorizeFor({
         sessionId: session.id,
@@ -1749,6 +1791,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         sessionId: session.id,
         turnId: args.turnId,
         harness,
+        images: args.images,
         blocks: new Map(),
         widgetOwner: new Map(),
         widgetOpening: new Set(),
@@ -1794,9 +1837,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       }
       // Once, on the first send of the replacement thread: the quotation goes
       // ahead of the user's own message, which is passed through unchanged.
+      if (args.images?.length && !harness.capabilities().imageInput) {
+        // The dispatcher already gated on the model; this is the backstop for a
+        // harness that cannot carry an image at all. Failing here is the point:
+        // sending the text alone would ask about a picture nothing was shown.
+        throw new Error(
+          `${agent.displayName} runs on a harness that cannot send image attachments.`,
+        );
+      }
       events = harness.send({
         turnId: args.turnId,
         text: built.continuity ? `${built.continuity}\n\n${args.text}` : args.text,
+        ...(args.images?.length ? { images: args.images } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2074,7 +2126,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       const wanted = agentId ?? store.sessions.get(sessionId)?.leadAgentId ?? null;
       if (wanted) {
         const harness = harnesses.get(agentKey(sessionId, wanted));
-        if (harness) return harness.listCommands();
+        return harness?.listCommands() ?? [];
       }
       const prefix = `${sessionId}:`;
       for (const [key, harness] of harnesses) {
@@ -2090,6 +2142,22 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
      * how a turn ends up frozen at `streaming` in SQLite, so `will-quit` can
      * await this before closing the database.
      */
+    agentContexts(sessionId: string) {
+      const roster = store.sessions.agents(sessionId).map((agent) => {
+        const key = agentKey(sessionId, agent.id);
+        const captured = runtime.get(key);
+        return {
+          agentId: agent.id, backend: captured?.backend ?? agent.backend, model: captured?.model ?? agent.model,
+          ...(harnesses.get(key)?.contextSnapshot?.() ?? UNKNOWN_CONTEXT),
+        };
+      });
+      const children = [...(delegated.get(sessionId) ?? [])].flatMap((child) => {
+        const identity = childContextIdentity.get(child);
+        return identity ? [{ ...identity, ...(child.contextSnapshot?.() ?? UNKNOWN_CONTEXT) }] : [];
+      });
+      return [...roster, ...children, ...[...finishedChildContexts.values()].filter((entry) => entry.sessionId === sessionId).slice(-16).map((entry) => entry.snapshot)];
+    },
+
     async dispose() {
       // Set before anything is torn down: a start that resolves from here on
       // sends nothing and writes nothing, so no turn can land in a store the
@@ -2127,6 +2195,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       consuming.clear();
       historyWatermarks.clear();
       delegated.clear();
+      finishedChildContexts.clear();
     },
   };
 }

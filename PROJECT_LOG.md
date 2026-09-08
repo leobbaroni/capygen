@@ -2724,3 +2724,110 @@ for each step. No actual install or login was performed during verification.
 Validation (native Windows): 49 focused prerequisite tests passed; desktop and
 renderer typechecks passed at task completion. Luna reviewed the launch/gate diff:
 no high/medium findings; visible console and mandatory confirmation preserved.
+
+Opus 5 (medium) — universal cross-backend sub-agent routing. `packages/engine/src/routing/delegate.ts`
+gained optional `backend`/`effort` on `DelegateRequest`, the JSON schema and both tool adapters, plus a
+`capabilities` dep (CrewCapability rows) that refuses a *model-named* backend/model/effort this
+installation cannot run; a routed or configured target keeps the old `resolveTarget`/`validate` path.
+`sdkMcp.ts` mirrors the schema for Claude. `apps/desktop/src/engine/routing.ts`: `delegationTarget` now
+defaults to the agent's own backend/model (tool available with no routing settings), and
+`promptAdditionFor` writes its own generic delegate paragraph (optional 4th `capabilities` argument
+advertises only real ids). Custom Mode still refuses backend/model/effort overrides. Validation
+(native Windows): routing, customDelegate, runtimeConfig, sessionRunnerRoundTable,
+sessionRunnerCodexDelegation, customCrewRuntime, runtimeApiDelegationCapture green. The broader
+worker run reported a settingsHub expectation still using the old system-theme default; root
+updated it for the requested dark default and all 12 settingsHub tests passed. This was not a
+new full phase acceptance gate.
+
+Opus 5 (medium) — directed follow-ups on the same routing files: an explicit `backend` that is not a
+backend is now a refused tool result in both adapters (`UNKNOWN_BACKEND_TEXT`) instead of falling back
+to the routed default, and an explicit `effort` the catalogue cannot confirm (pair absent, or no effort
+metadata) is refused with "cannot verify the supported reasoning effort" rather than forwarded. Custom
+Mode unchanged. `runtimeConfig`'s Codex resume test restored to Codex, with the expected signature built
+from the shipping `DELEGATE_TASK_SCHEMA` + `createSharedSkillTools` definitions. Validation (native
+Windows, targeted): routing, customDelegate, runtimeConfig, sessionRunnerCodexDelegation,
+customCrewRuntime — 84 tests green; engine and desktop typechecks green.
+
+### 2026-09-08 — UX repair integration checkpoint (not phase acceptance)
+
+Canonical Tools navigation, native folder buttons, shared paginated skill readers and
+cross-backend delegation replace the old Extensions/routing presentation. Settings content
+was incorrectly marked as a titlebar drag region; removing that marker also removes the
+reserved titlebar padding, restores scrolling/clicks, and makes adaptive rows usable at
+900px. Native screenshots confirm the dark landing/sidebar canvas and settings controls.
+The session settings dialog is bounded and scrollable. Account login stays behind the
+native exact-command gate. Inbox shows unread items only and ignores obsolete reloads.
+
+Custom mode is selectable before sending; round-table roster/effort and hop/parallel
+preferences persist without arbitrary config or credentials. Skill/plugin picks insert
+into the draft, Tab selects, and recognized tokens are styled in draft/history. Model
+names/efforts follow the harness catalogue. Context uses the latest request, distinguishes
+unknown capacities, and shows app-delegated child windows independently of their parent.
+Unit fixture setup now isolates native backend homes and clears ambient API credentials.
+
+Focused Windows evidence (separate runs; no cumulative/full-suite claim):
+```text
+Composer + AddAgentDialog + AgentInfoDrawer: 50 passed
+Account + Inbox: 6 passed
+SettingsPage + IPC + user text token rendering: 50 passed
+Session preferences + settings navigation: 7 passed
+ContextMeter + Composer: 34 passed
+Shared skills runtime + enabled commands + SkillsSection: 13 passed
+Enabled commands, including duplicate names across scopes: 2 passed
+Context runtime: 2 passed; harness context sources: 3 passed
+Native ux-repair.spec.ts: 1 passed (8.1s), four screenshots
+```
+
+The native UX check covers default theme, canonical Tools navigation, Custom editor opening,
+actual text-file contents, optional folder, modal bounds, and settings scrolling/control
+widths. Image input and Custom-at-start apply/send are still pending final integration.
+No paid prompts, real config writes, installs, release tags or phase acceptance occurred.
+
+Image attachments now work end to end: the composer picks PNG/JPEG/WebP files, `chat.send` carries them as bounded base64 (≤4, ≤5 MiB each, ≤10 MiB per message), the main process sniffs the magic bytes and stores them under `<userData>/attachments/`, and each one becomes a durable `image` block served to the renderer over the `capygen-attachment://` scheme. Every backend receives a real picture — Claude an Anthropic `image` content block, Codex a `{type:"localImage", path}` input item (pinned `v2/UserInput.ts`), the API loop an `input_image`/`image` block per provider — and an `api` agent's replayed history re-sends the last four. A model that cannot read images fails its turn with the reason, a blind chain hop is told the pictures exist rather than being handed a silently text-only message, and every other binary (PDFs included) is refused visibly. Compaction and the logs never carry base64. New fixture tests: shared sniffing/bounds, engine per-backend input, desktop store/restart/chain/api-replay, composer picker. No paid model calls, no installs, no user-config writes.
+
+Image follow-ups: an `api` agent no longer pays twice for the same picture — `ApiHarness` skips an attachment whose bytes are already in the live context (the replayed user turn, or a repeat from a chain hop) and re-sends it once compaction has taken it out; `loadApiHistory` now bounds the replay by four images *and* 10 MiB across the whole history and carries the same stored file, or byte-identical content, once, saying where the other copy is. A model capygen has no record for is now described as unverified for image input rather than as unable to read images (`imageSupport`), while a known text-only id still says so plainly. The composer frees the object URLs it created when another file in the same batch is refused and when it unmounts, and a mixed batch is all-or-nothing. Tests: engine 11, desktop 12, composer 38.
+
+
+Final integration review resolved the delegated-image fallback: unrelated text subtasks
+continue on text-only/unverified workers, with an explicit omission notice to both worker
+and parent inside the existing output cap. Supported workers receive current pictures;
+the next text-only turn does not receive stale descriptors. Five focused engine/desktop
+checks passed. Claude's final review found no high/medium findings in this path, the
+Custom catalogue readiness fix, or attachment-store path validation.
+
+Windows typecheck and build passed (`e2e-out/ux-repair-final-build.log`). The native
+attachment/layout test passed in 5.4s, including actual UTF-8 content and PNG decoding
+before send, in history, and after reload. Root inspected `ux-repair-attachments.png`.
+The Custom-at-start regression exposed a cold catalogue after restart; the editor now
+awaits the shared lister. Desktop typecheck and rebuild passed; native retry is pending.
+No unchanged full suite was repeated and no later phase was accepted by these checks.
+
+
+Final native evidence: `ux-repair.spec.ts` passed (5.4s); Custom's isolated retry passed
+(7.8s test, 8.5s total), logged in `e2e-out/ux-repair-custom-start-isolated-final.log`.
+The latter proves review/apply before any task call, saved crew/history after restart,
+correct project identity and one low-effort first task. Native SDK title generation is a
+separate bounded auxiliary request, not another task or authoring call.
+
+Isolation finding: Windows user-temp paths are descendants of the personal profile, and
+Claude project-memory discovery can load ancestor `.claude/CLAUDE.md` even with isolated
+backend config variables. The fixture now uses an owned `%SystemRoot%/Temp` directory,
+asserts its resolved project before send, and checks every captured request for a personal
+instruction-path marker without retaining prompt text. Earlier prompt previews and failure
+artifacts were removed; all provider requests were local fixture traffic and no personal
+configuration was written. Landing also resolves the stored project registry before home
+fallback, fixing the independent startup race.
+
+Final delta checks: renderer and desktop typechecks/builds passed after the startup fixes;
+engine/desktop delegated-image checks passed (5 tests); image/context replay, history and
+composer follow-up checks passed (69 tests). The final cross-model review reports no
+high/medium findings. Phase 10 microphone, Phase 11 dedicated live benchmarks, and Phase 12
+private-feed/release acceptance remain open. No release/tag or full phase acceptance.
+
+Final isolation guard uses a generic instruction-path check (no personal content marker):
+`e2e-out/ux-repair-custom-start-final-guard.log`:
+```text
+Running 1 test using 1 worker
+ok custom draft generation, reviewed Apply and restart preserve the working transcript (8.4s)
+1 passed (9.2s)
+```

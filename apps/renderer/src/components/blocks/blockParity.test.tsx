@@ -48,11 +48,21 @@ const TESTID: Record<BlockKind, string> = {
   usage: "block-usage",
   widget: "block-widget",
   elicitation: "block-elicitation",
+  image: "block-image",
 };
 
 /** One representative block per kind, as a backend would emit it. */
 const FIXTURES: Record<BlockKind, Block> = {
   text: { ...base, id: "b-text", kind: "text", text: "hello world" },
+  image: {
+    ...base,
+    id: "b-image",
+    kind: "image",
+    attachmentId: "att_1",
+    name: "screenshot.png",
+    mediaType: "image/png",
+    size: 2048,
+  },
   thinking: { ...base, id: "b-think", kind: "thinking", text: "let me think" },
   tool_call: {
     ...base,

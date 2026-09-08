@@ -62,6 +62,7 @@ describe("IPC contract", () => {
       "inbox.list", "inbox.markRead", "inbox.markAllRead", "usage.report",
       "projects.pick",
       "projects.list",
+      "projects.default",
       "worktrees.list",
       "worktrees.create",
       "worktrees.register",
@@ -105,6 +106,7 @@ describe("IPC contract", () => {
       "agents.remove",
       "agents.setLead",
       "agents.describe",
+      "agents.context",
       "agents.catalogue",
       "agents.runtime",
       "turns.list",
@@ -131,6 +133,7 @@ describe("IPC contract", () => {
       "settings.reset",
       "app.version",
       "integrations.list",
+      "integrations.openFolder",
       "integrations.mcp.add",
       "integrations.mcp.update",
       "integrations.mcp.remove",
@@ -247,6 +250,9 @@ describe("defineIpc", () => {
       sessionId: "ses_1",
       text: "hi",
       agentId: null,
+      // A message with no pictures sends an empty attachment list, never
+      // `undefined` — the main process reads `args.attachments` directly.
+      attachments: [],
     });
   });
 
@@ -343,6 +349,15 @@ describe("domain schemas", () => {
     };
     const samples: Record<(typeof BLOCK_KINDS)[number], unknown> = {
       text: { ...base, id: newId("block"), kind: "text", text: "hello" },
+      image: {
+        ...base,
+        id: newId("block"),
+        kind: "image",
+        attachmentId: newId("attachment"),
+        name: "screenshot.png",
+        mediaType: "image/png",
+        size: 1234,
+      },
       thinking: { ...base, id: newId("block"), kind: "thinking", text: "hmm" },
       tool_call: {
         ...base,

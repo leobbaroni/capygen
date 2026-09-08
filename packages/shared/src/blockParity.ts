@@ -45,6 +45,12 @@ export interface BackendBlockParity {
  *   (`packages/engine/src/mcp/client/McpClientPool.ts`), so a server is told
  *   capygen cannot be elicited and never sends `elicitation/create`.
  */
+/** The one kind that is input rather than output; shared by all three rows. */
+const IMAGE_IS_USER_INPUT =
+  "the `image` kind records a picture the *user* attached (chat.send's `attachments`); " +
+  "no backend produces one — harnesses only consume images, as Claude `image` content, " +
+  "Codex `localImage` input and API `input_image`";
+
 export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>> = {
   claude: {
     applicable: [
@@ -60,6 +66,7 @@ export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>>
       "widget",
     ],
     inapplicable: {
+      image: IMAGE_IS_USER_INPUT,
       elicitation:
         "the Claude Agent SDK relays an MCP elicitation as a canUseTool permission prompt, " +
         "so it arrives as a permission block, never as its own request",
@@ -82,7 +89,7 @@ export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>>
       "widget",
       "elicitation",
     ],
-    inapplicable: {},
+    inapplicable: { image: IMAGE_IS_USER_INPUT },
   },
   api: {
     applicable: [
@@ -97,6 +104,7 @@ export const BACKEND_BLOCK_PARITY: Readonly<Record<Backend, BackendBlockParity>>
       "widget",
     ],
     inapplicable: {
+      image: IMAGE_IS_USER_INPUT,
       subagent: "capygen's own tool runtime has no Task tool yet (Phase 4)",
       elicitation:
         "no built-in tool raises one, and McpClientPool connects with capabilities:{} so a " +

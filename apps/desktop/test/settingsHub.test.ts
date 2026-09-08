@@ -224,11 +224,11 @@ describe("projection onto the flat Settings row (R30 layering)", () => {
 describe("OS switches", () => {
   it("asks for each one on every write, and once on start-up", async () => {
     ipc.settings.applyOnStart();
-    expect(platform.themes).toEqual(["system"]);
+    expect(platform.themes).toEqual(["dark"]);
     expect(platform.startWithWindows).toEqual([false]);
 
     await call("settings.patch", { patch: { appearance: { theme: "dark" }, startWithWindows: true } });
-    expect(platform.themes).toEqual(["system", "dark"]);
+    expect(platform.themes).toEqual(["dark", "dark"]);
     expect(platform.startWithWindows).toEqual([false, true]);
     expect(platform.closeToTray).toEqual([true, true]);
     expect(platform.notifications).toHaveLength(2);

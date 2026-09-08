@@ -25,6 +25,7 @@
  *    the history is the transcript, replayed through `deps.loadHistory` (the
  *    desktop reads it from SQLite — the harness never touches the database).
  */
+import { RequestContext } from "../contextSnapshot.js";
 import {
   newId,
   type Backend,
@@ -47,6 +48,7 @@ import {
   type TurnContext,
   type TurnInput,
 } from "../harness.js";
+import { encodeTurnImages } from "../images.js";
 import { McpClientPool, type McpPoolLogger } from "../mcp/client/McpClientPool.js";
 import { widgetResourceUri, type McpServerConfig } from "../mcp/client/types.js";
 import { mcpToolDefinitions } from "../tools/mcpTools.js";
@@ -79,7 +81,7 @@ import {
 } from "../catalogue/types.js";
 import { resolveApiKey, type KeyProvider } from "./keys.js";
 import { estimateCost } from "./pricing.js";
-import { COMPACTION_SYSTEM, SUMMARY_PREFIX, compactionPrefix } from "./compaction.js";
+import { COMPACTION_SYSTEM, SUMMARY_PREFIX, compactionPrefix, redactImagesForSummary } from "./compaction.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
   createProvider as defaultCreateProvider,
@@ -260,6 +262,7 @@ export class ApiHarness implements Harness {
     this.session = session;
     this.agent = agent;
     this.config = resolveConfig(agent, this.deps);
+    this.requestContext.capacity(this.config.contextWindowTokens);
     this.system = this.deps.authoringSystemPrompt ?? buildSystemPrompt({
       cwd: session.projectPath,
       platform: process.platform,
@@ -293,8 +296,12 @@ export class ApiHarness implements Harness {
       // The API has no command list of its own; the composer's built-ins (R14)
       // are added by the renderer, not by a harness.
       slashCommands: false,
+      imageInput: true,
     };
   }
+
+  private readonly requestContext = new RequestContext();
+  contextSnapshot() { return this.requestContext.snapshot(); }
 
   listCommands(): SlashCommand[] {
     return [];
@@ -355,7 +362,7 @@ export class ApiHarness implements Harness {
       else ctx.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    void this.runTurn(turn, input.text).catch((err: unknown) => {
+    void this.runTurn(turn, input).catch((err: unknown) => {
       if (turn.settled || this.active !== turn) return;
       this.emitUsage(turn);
       if (turn.interrupted) {
@@ -370,11 +377,48 @@ export class ApiHarness implements Harness {
     return out;
   }
 
-  private async runTurn(turn: ActiveTurn, text: string): Promise<void> {
+  private async runTurn(turn: ActiveTurn, input: TurnInput): Promise<void> {
     const config = this.config;
     if (!config) throw new Error("ApiHarness.start() was never called");
 
-    this.messages.push({ role: "user", content: [{ type: "text", text }] });
+    const text = input.text;
+    // Read before the message is pushed: an unreadable attachment must fail the
+    // turn with nothing recorded, not leave a half-message in the history that
+    // the next turn would replay as if the picture had been sent.
+    const images = await encodeTurnImages(input.images);
+    // A picture already *in this context* is not sent twice.
+    //
+    // Two paths lead here with the same image: a history replay that already
+    // carries the user turn this send is for (`loadHistory` reads the stored
+    // rows, which include the picture), and a chain that hands the same
+    // attachment to a later hop. Either way the model can already see it, and
+    // a second copy is billed on this request and every one after it.
+    //
+    // The check reads `this.messages`, which is the live context — so an image
+    // that compaction has since replaced with a summary is genuinely gone and
+    // *is* re-sent.
+    const inContext = new Set<string>();
+    for (const message of this.messages) {
+      for (const block of message.content) if (block.type === "image") inContext.add(block.data);
+    }
+    const fresh = images.filter((image) => !inContext.has(image.data));
+    if (fresh.length < images.length) {
+      this.log.info(
+        `[api] ${images.length - fresh.length} attached image(s) are already in this ` +
+          "conversation and were not sent again",
+      );
+    }
+    this.messages.push({
+      role: "user",
+      content: [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...fresh.map((image) => ({
+          type: "image" as const,
+          mediaType: image.mediaType,
+          data: image.data,
+        })),
+      ],
+    });
 
     const provider = await this.ensureProvider(config);
     const tools = await this.ensureTools();
@@ -437,12 +481,14 @@ export class ApiHarness implements Harness {
 
   /** One bounded, billed summary request; the primary system/tool prefix stays unchanged. */
   private async compactHistory(turn: ActiveTurn, provider: Provider, config: ResolvedConfig): Promise<void> {
-    const prefix = compactionPrefix(this.messages, this.system, this.toolSchemas, config.contextWindowTokens, this.deps.compactionThreshold, config.maxTokens);
+    // Images are summarised as a marker, never as base64 (see the helper).
+    const forSummary = redactImagesForSummary(this.messages);
+    const prefix = compactionPrefix(forSummary, this.system, this.toolSchemas, config.contextWindowTokens, this.deps.compactionThreshold, config.maxTokens);
     if (!prefix || turn.interrupted) return;
     let deltas = ""; const settled: string[] = []; let complete = false;
     const request: ProviderRequest = {
       model: config.model, system: COMPACTION_SYSTEM, tools: [],
-      messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify(this.messages.slice(0, prefix)) }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify(forSummary.slice(0, prefix)) }] }],
       maxTokens: 1024, reasoningEffort: config.reasoningEffort, signal: turn.abort.signal,
     };
     for await (const event of provider.stream(request)) {
@@ -461,7 +507,7 @@ export class ApiHarness implements Harness {
     const summary = (settled.length ? settled.join("\n") : deltas).trim();
     if (!complete || !summary || turn.interrupted || turn.abort.signal.aborted) throw new Error("Context summary did not finish; earlier history was retained.");
     const replacement: ChatMessage = { role: "user", content: [{ type: "text", text: SUMMARY_PREFIX + summary }] };
-    if (JSON.stringify(replacement).length >= JSON.stringify(this.messages.slice(0, prefix)).length) throw new Error("Context summary did not reduce the history; earlier history was retained.");
+    if (JSON.stringify(replacement).length >= JSON.stringify(forSummary.slice(0, prefix)).length) throw new Error("Context summary did not reduce the history; earlier history was retained.");
     this.messages = [replacement, ...this.messages.slice(prefix)];
     this.emitBlock(`compaction:${turn.turnId}`, { kind: "text", text: `[Earlier API context summarized from ${prefix} messages; the saved transcript remains unchanged.]` });
   }
@@ -496,6 +542,7 @@ export class ApiHarness implements Harness {
           break;
         }
         case "usage": {
+          this.requestContext.api(event.usage);
           turn.usage = addRawUsage(turn.usage, event.usage);
           const previous = turn.byModel.get(event.model) ?? { ...ZERO_USAGE };
           turn.byModel.set(event.model, addRawUsage(previous, event.usage));

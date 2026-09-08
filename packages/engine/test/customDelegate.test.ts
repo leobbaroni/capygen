@@ -42,6 +42,27 @@ describe("custom crew delegation", () => {
     expect(make).not.toHaveBeenCalled();
   });
 
+  it("refuses a backend or effort override, the same way it refuses a model", async () => {
+    // The universal tool lets an ordinary agent pick its own backend, model and
+    // effort. Custom Mode is classified routing: the policy chooses, and a call
+    // that tries to steer is refused rather than quietly ignored.
+    const make = vi.fn(() => new Child());
+    const run = createDelegateRunner({ session, parent, target: () => null, customCrew: () => crew, makeHarness: make });
+    const classified = { description: "x", prompt: "p", taskKind: "design", difficulty: "hard" } as const;
+
+    const backend = await run({ ...classified, backend: "claude" });
+    expect(backend.ok).toBe(false);
+    expect(backend.text).toMatch(/does not accept backend, model or effort overrides/);
+    const effort = await run({ ...classified, effort: "high" });
+    expect(effort.ok).toBe(false);
+    expect(effort.text).toMatch(/does not accept backend, model or effort overrides/);
+
+    // And the classified route still runs, with the policy's own effort.
+    const allowed = await run(classified);
+    expect(allowed.ok).toBe(true);
+    expect(make).toHaveBeenCalledTimes(1);
+  });
+
   it("uses first matching rule and carries exact target config and evidence", async () => {
     const child = new Child(); const events: EngineEvent[] = [];
     const make = vi.fn((_target: { backend: HarnessAgent["backend"]; model: string }, _agent: HarnessAgent) => child);

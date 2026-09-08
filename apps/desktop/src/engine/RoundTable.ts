@@ -47,7 +47,11 @@ import {
   nextHopTargets,
   resolveTargets,
   speakerLabel,
+  imageSupport,
+  imageUnsupportedMessage,
+  modelAcceptsImages,
   type RoundTableAgent,
+  type TurnImage,
   type SpeakerInfo,
   type TranscriptTurn,
 } from "@capygen/engine";
@@ -55,6 +59,7 @@ import { parseCustomModeDocument, type SessionMode, type Turn, type TurnStatus }
 import { errorBlock, finishTurn, openAgentTurn, recordUserTurn, systemTurn } from "./persist.js";
 import { roundTableAgents } from "./routing.js";
 import type { EngineDeps } from "./types.js";
+import type { StoredImage } from "../ipc/attachments.js";
 
 /** What a runner must do with one turn: run it, and say how it ended. */
 export type TurnRunner = (args: {
@@ -62,6 +67,8 @@ export type TurnRunner = (args: {
   turnId: string;
   agentId: string;
   text: string;
+  /** Attached pictures for this turn; only a user message ever carries them. */
+  images?: readonly TurnImage[];
 }) => Promise<{ status: TurnStatus }>;
 
 export interface RoundTableDeps extends EngineDeps {
@@ -80,6 +87,8 @@ export interface DispatchArgs {
   text: string;
   /** The composer's explicit agent pick; overrides mention parsing. */
   agentId?: string | null;
+  /** Verified, stored images from `chat.send`. */
+  images?: readonly StoredImage[];
 }
 
 export interface DispatchResult {
@@ -107,6 +116,8 @@ interface Entry {
   messageFrom: string | null;
   /** The turn `message` came from — kept out of the delta so it is not doubled. */
   sourceTurnId: string;
+  /** Pictures to send with `message`. Empty for every agent-to-agent hop. */
+  images?: readonly TurnImage[];
   debate?: { targets: RoundTableAgent[]; topic: string };
 }
 
@@ -173,6 +184,36 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
   const runningSessions = new Map<string, number>();
   const executing = new Map<string, Entry>();
   const debateIntents = new Map<string, { targets: RoundTableAgent[]; topic: string }>();
+  /**
+   * Images the *current* user message brought, per session.
+   *
+   * A chain hop (`@codex, what do you make of this?`) and a crew debate are
+   * still about the picture the user attached, so the pictures travel with the
+   * chain rather than evaporating after the first answer. The set is bounded by
+   * `chat.send` itself (at most four stored files) and is replaced on every new
+   * user message, so a hop can never accumulate images from older turns.
+   */
+  const chainImages = new Map<string, readonly TurnImage[]>();
+
+  /**
+   * What a hop is told when the pictures are not sent to it. A model on the
+   * text-only list is told it cannot read images; one capygen has no record for
+   * is told exactly that, rather than being given a claim nobody verified.
+   */
+  function imagesUnavailableNote(images: readonly TurnImage[], model: string): string {
+    const names = images.map((image) => image.name).join(", ");
+    const one = images.length === 1;
+    const why =
+      imageSupport(model) === "no"
+        ? "Your model cannot read images"
+        : "capygen has not verified that your model reads images";
+    return (
+      `\n\n[capygen: the user attached ${images.length} image${one ? "" : "s"} ` +
+      `(${names}) to this conversation. ${why}, so ${one ? "it is" : "they are"} ` +
+      `not included here — ask the agent that saw ${one ? "it" : "them"} to ` +
+      "describe what you need.]"
+    );
+  }
 
   function sessionSettings(sessionId: string): {
     hopCap: number;
@@ -293,9 +334,16 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       message: string;
       messageFrom: string | null;
       sourceTurnId: string;
+      images?: readonly TurnImage[];
     },
   ): Entry[] {
-    return targets.map((agent) => ({
+    const images = args.images ?? [];
+    return targets.map((agent) => {
+      // A hop whose model has no vision is told, in one line, that pictures
+      // exist and were not sent to it — the alternative is a message that reads
+      // as if there had never been an image at all.
+      const sees = images.length === 0 || modelAcceptsImages(agent.model);
+      return {
       agent,
       turn: openAgentTurn(deps, {
         sessionId,
@@ -305,10 +353,12 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         triggeredByTurnId: args.triggeredByTurnId,
         speakerLabel: speakerLabel(agent),
       }),
-      message: args.message,
+      message: sees ? args.message : `${args.message}${imagesUnavailableNote(images, agent.model)}`,
       messageFrom: args.messageFrom,
       sourceTurnId: args.sourceTurnId,
-    }));
+      ...(sees && images.length ? { images } : {}),
+      };
+    });
   }
 
   /** Close a queued turn nobody will run (interrupt between rounds). */
@@ -324,6 +374,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       const result = await deps.runTurn({
         sessionId: entry.turn.sessionId, turnId: entry.turn.id,
         agentId: entry.agent.id, text,
+        ...(entry.images?.length ? { images: entry.images } : {}),
       });
       return { entry, status: result.status };
     } finally {
@@ -422,6 +473,9 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
                 ? `Decide the outcome of this debate: ${debate.topic}`
                 : `Contribute your assessment to this debate: ${debate.topic}`,
               messageFrom: entry.agent.id, sourceTurnId: "",
+              ...(chainImages.get(sessionId)?.length
+                ? { images: chainImages.get(sessionId)! }
+                : {}),
             });
             queued!.debate = { targets: remaining, topic: debate.topic };
             next.push(queued!);
@@ -468,6 +522,9 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
             message: reply,
             messageFrom: entry.agent.id,
             sourceTurnId: entry.turn.id,
+            ...(chainImages.get(sessionId)?.length
+              ? { images: chainImages.get(sessionId)! }
+              : {}),
           }),
         );
       }
@@ -535,6 +592,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       // themselves: R11's "until the user speaks".
       pending.delete(args.sessionId);
       cancelled.delete(args.sessionId);
+      chainImages.delete(args.sessionId);
 
       const agents = roundTableAgents(store, args.sessionId);
       const targets = resolveTargets({
@@ -551,11 +609,13 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         );
       }
 
+      const images = args.images ?? [];
       const userTurn = recordUserTurn(
         deps,
         args.sessionId,
         args.text,
         targets.source === "mentions" ? targets.agents.map((a) => a.id) : [],
+        images,
       );
 
       // No agents at all: the turn still has to exist and has to close, or the
@@ -578,13 +638,62 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         };
       }
 
-      const entries = openEntries(args.sessionId, targets.agents, {
+      // Vision is decided per target, before any turn runs. An agent whose
+      // model cannot read images is not sent them and is not quietly handed a
+      // text-only version of a question about a picture: its turn ends with the
+      // reason, while the agents that *can* see the image still answer.
+      const canSee = (agent: RoundTableAgent): boolean =>
+        images.length === 0 || modelAcceptsImages(agent.model);
+      const blind = targets.agents.filter((agent) => !canSee(agent));
+      const refusedTurnIds: string[] = [];
+      for (const agent of blind) {
+        const turn = openAgentTurn(deps, {
+          sessionId: args.sessionId,
+          agentId: agent.id,
+          parentTurnId: userTurn.id,
+          hopIndex: userTurn.hopIndex + 1,
+          triggeredByTurnId: userTurn.id,
+          speakerLabel: speakerLabel(agent),
+        });
+        errorBlock(
+          deps,
+          args.sessionId,
+          turn.id,
+          imageUnsupportedMessage(agent.displayName, agent.backend, agent.model),
+        );
+        finishTurn(deps, args.sessionId, turn.id, "error", "images not sent to this model");
+        refusedTurnIds.push(turn.id);
+      }
+      const sighted = targets.agents.filter(canSee);
+      if (sighted.length === 0) {
+        // Every target was refused above; the user's turn and its pictures are
+        // still recorded, and each refusal turn says why.
+        return {
+          userTurnId: userTurn.id,
+          agentTurnId: refusedTurnIds[0] ?? userTurn.id,
+          agentTurnIds: refusedTurnIds,
+          unknownMentions: targets.unknown,
+        };
+      }
+
+      // The chain that starts here keeps the pictures: a hop, a debate and a
+      // Continue are all still about the message the user attached them to.
+      const turnImages: TurnImage[] = images.map((image) => ({
+        path: image.path,
+        mediaType: image.mediaType,
+        name: image.name,
+        size: image.size,
+      }));
+      if (turnImages.length > 0) chainImages.set(args.sessionId, turnImages);
+
+      const entries = openEntries(args.sessionId, sighted, {
         hopIndex: userTurn.hopIndex + 1,
         parentTurnId: userTurn.id,
         triggeredByTurnId: userTurn.id,
         message: args.text,
         messageFrom: null,
         sourceTurnId: userTurn.id,
+        ...(turnImages.length ? { images: turnImages } : {}),
       });
       log.info(
         `[roundtable] ${args.sessionId}: ${targets.source} → ` +
@@ -629,6 +738,10 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
             message: chain.text,
             messageFrom: chain.fromAgentId,
             sourceTurnId: chain.fromTurnId,
+            // Continue resumes the same chain, so it carries the same pictures.
+            ...(chainImages.get(sessionId)?.length
+              ? { images: chainImages.get(sessionId)! }
+              : {}),
           }),
         );
         start(sessionId, entries);
@@ -665,6 +778,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
     cancel(sessionId: string): void {
       pending.delete(sessionId);
+      chainImages.delete(sessionId);
       for (const [turnId, entry] of executing) {
         if (entry.turn.sessionId === sessionId) debateIntents.delete(turnId);
       }

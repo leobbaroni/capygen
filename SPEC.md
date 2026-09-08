@@ -134,8 +134,9 @@ Format: WHEN <trigger> THE SYSTEM SHALL <behaviour>. Each carries an acceptance 
 ### Settings hub
 - R19 THE SYSTEM SHALL provide settings sections mirroring Omnigent (general, appearance, git,
   shortcuts, import, integrations, account, cli, updates, members, policies, sharing, archived)
-  plus Harnesses, MCP servers, Skills, Plugins, API keys, Dev servers, Diagnostics. Check: nav
-  test lists all ids.
+  plus Harnesses, MCP servers, Skills, Plugins, API keys, Dev servers, Diagnostics. Per the user's
+  2026-09-08 direction, the legacy Integrations entry is replaced by the dedicated Tools surface;
+  `/settings/integrations` redirects there for compatibility. Check: nav test lists all active ids.
 - R20 WHEN the user edits MCP servers / skills / plugins THE SYSTEM SHALL write the backend's
   own config (Claude: `~/.claude/settings.json`, `.claude/`, plugin marketplaces via the `claude`
   CLI headless; Codex: `~/.codex/config.toml`) and show the effect per agent. Check: round-trip

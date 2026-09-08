@@ -12,6 +12,7 @@
  * compile error rather than a runtime "no handler registered".
  */
 import { z } from "zod";
+import { InputImageAttachmentsSchema } from "./attachments.js";
 import { AutomationDraftSchema, AutomationPatchSchema, AutomationSchema, AutomationRunSchema } from "./automations.js";
 import { InboxItemSchema, InboxItemKindSchema } from "./inbox.js";
 import { UsageRangeSchema, UsageReportSchema } from "./usageReport.js";
@@ -43,6 +44,7 @@ import { CUSTOM_MODE_INVOKE_CHANNELS } from "./customModeIpc.js";
 import { LOCAL_INPUT_INVOKE_CHANNELS } from "./localInputIpc.js";
 import { EXTENSION_INVOKE_CHANNELS, EXTENSION_EVENT_CHANNELS } from "./extensionIpc.js";
 import { UPDATES_INVOKE_CHANNELS, UPDATES_EVENT_CHANNELS } from "./updatesIpc.js";
+import { AgentContextSnapshotSchema } from "./contextSnapshot.js";
 import { AgentToolCatalogueSchema } from "./toolCatalogue.js";
 import { LocalPolicyChangedSchema } from "./localPolicies.js";
 import { ApprovePendingPageSchema, ApprovePendingRequestArgsSchema } from "./approveIpc.js";
@@ -171,6 +173,7 @@ export const INVOKE_CHANNELS = {
   /** Native folder picker; resolves to null when the user cancels. */
     "projects.pick": channel(Empty, ProjectSchema.nullable()),
     "projects.list": channel(Empty, z.array(ProjectSchema)),
+    "projects.default": channel(Empty, ProjectSchema),
 
     /** Git is authoritative; every operation is scoped by an explicit source project. */
     "worktrees.list": channel(
@@ -428,6 +431,7 @@ export const INVOKE_CHANNELS = {
   ),
   /** One agent's usage description, Claude-Code-info-card style (R13). */
   "agents.describe": channel(z.object({ agentId: z.string().min(1) }), AgentDescribeSchema),
+  "agents.context": channel(z.object({ sessionId: z.string().min(1) }).strict(), z.array(AgentContextSnapshotSchema)),
   "agents.catalogue": channel(z.object({
     sessionId: z.string().min(1),
     agentId: z.string().min(1).nullable().default(null),
@@ -478,6 +482,15 @@ export const INVOKE_CHANNELS = {
       text: z.string(),
       /** Target agent in round-table mode; the lead when omitted. */
       agentId: z.string().min(1).nullable().default(null),
+      /**
+       * Images the user attached (PNG/JPEG/WebP, bounded by
+       * `@capygen/shared/attachments`). The main process sniffs and stores the
+       * bytes, records one `image` block on the user's turn, and hands each
+       * target agent the real picture — a model that cannot read images fails
+       * its turn with a message saying so rather than being sent a chip it
+       * cannot see.
+       */
+      attachments: InputImageAttachmentsSchema,
     }),
     z.object({
       userTurnId: z.string(),
@@ -687,6 +700,11 @@ export const INVOKE_CHANNELS = {
       tools: z.array(ToolPolicyEntrySchema),
       lastSync: TimestampSchema.nullable(),
     }),
+  ),
+
+  "integrations.openFolder": channel(
+    z.object({ backend: z.enum(["claude", "codex"]), kind: z.enum(["skills", "plugins", "mcp"]) }).strict(),
+    OkSchema,
   ),
 
   "integrations.mcp.add": channel(

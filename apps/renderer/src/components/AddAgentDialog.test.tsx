@@ -296,31 +296,14 @@ describe("AddAgentDialog — seeding (first open after launch)", () => {
     expect(onAdd).toHaveBeenLastCalledWith(expect.objectContaining({ role: "member" }));
   });
 
-  it("refuses a cross-backend sub-agent route for a Codex parent, and says why", async () => {
-    const user = userEvent.setup();
-    render(
-      <AddAgentDialog
-        mode="draft"
-        open
-        onOpenChange={vi.fn()}
-        harnesses={HARNESSES}
-        existingMentionNames={[]}
-        onAdd={vi.fn()}
-      />,
-    );
-    // Claude parent: every target is offered.
-    const before = Array.from(
-      screen.getByTestId("add-agent-routing-backend").querySelectorAll("option"),
-    );
-    expect(before.every((o) => !o.disabled)).toBe(true);
-    expect(screen.queryByTestId("add-agent-routing-note")).toBeNull();
-
-    await user.selectOptions(screen.getByTestId("add-agent-backend"), "codex");
-    const routing = screen.getByTestId("add-agent-routing-backend");
-    const options = Array.from(routing.querySelectorAll("option"));
-    expect(options.find((o) => o.value === "claude")).toBeDisabled();
-    expect(options.find((o) => o.value === "api")).toBeDisabled();
-    expect(options.find((o) => o.value === "codex")).toBeEnabled();
-    expect(screen.getByTestId("add-agent-routing-note")).toHaveTextContent("fail open");
+  it("uses catalogue efforts and saves backend config without manual routing", async () => {
+    const user = userEvent.setup(); const onAdd = vi.fn();
+    const harnesses = HARNESSES.map(h => ({ ...h, models: h.models.map(m => ({ ...m, efforts: ["low", "high"] })) }));
+    render(<AddAgentDialog mode="draft" open onOpenChange={vi.fn()} harnesses={harnesses} existingMentionNames={[]} onAdd={onAdd} />);
+    expect(screen.queryByTestId("add-agent-routing-backend")).toBeNull();
+    await user.type(screen.getByTestId("add-agent-name-input"), "Alice");
+    await user.selectOptions(screen.getByTestId("add-agent-effort"), "high");
+    await user.click(screen.getByTestId("add-agent-submit"));
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ config: { claude: { effort: "high" } } }));
   });
 });

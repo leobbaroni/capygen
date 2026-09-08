@@ -1,3 +1,5 @@
+import { ContextMeter } from "@/components/ContextMeter";
+import { agentEffort, withAgentEffort } from "@/lib/agentDisplay";
 /**
  * Chat page (P2): a scrolling transcript with the composer pinned at the
  * bottom, both inside Omnigent's centred content column, plus the turn rail
@@ -268,6 +270,7 @@ export function ChatPage() {
           </Button>
         </header>
 
+        <ContextMeter sessionId={sessionId} mode={session?.mode ?? "solo"} />
         <TurnRail turns={turns} />
 
         <div
@@ -327,12 +330,17 @@ export function ChatPage() {
           <div className="mx-auto flex w-full max-w-[840px] flex-col gap-2">
             {queuedMessages.length > 0 ? (
               <ul data-testid="queued-messages" className="flex flex-col gap-1">
-                {queuedMessages.map((text, i) => (
+                {queuedMessages.map((queued, i) => (
                   <li
                     key={i}
                     className="flex items-center gap-2 rounded-lg border border-border-weak bg-muted/40 px-3 py-1.5 text-sm text-muted-foreground"
                   >
-                    <span className={cn("min-w-0 flex-1 truncate")}>{text}</span>
+                    <span className={cn("min-w-0 flex-1 truncate")}>{queued.text}</span>
+                    {queued.images.length > 0 ? (
+                      <span className="shrink-0 text-xs">
+                        {queued.images.length} image{queued.images.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
                     <span className="shrink-0 text-xs">queued</span>
                     <button
                       type="button"
@@ -351,7 +359,7 @@ export function ChatPage() {
               </ul>
             ) : null}
             <Composer
-              onSubmit={(text) => send(text)}
+              onSubmit={(text, images) => send(text, images)}
               onInterrupt={() => void interrupt()}
               busy={busy}
               testId="chat-composer"
@@ -360,7 +368,7 @@ export function ChatPage() {
               mcpTools={mcpTools}
               mcpStatus={mcpStatus}
               harnesses={harnesses}
-              agent={leadAgent ? { backend: leadAgent.backend, model: leadAgent.model } : null}
+              agent={leadAgent ? { backend: leadAgent.backend, model: leadAgent.model, effort: agentEffort(leadAgent) } : null}
               // This agent exists, so its backend is fixed for its lifetime.
               lockBackend
               // An agent's backend is fixed once it exists (CONTEXT.md); the
@@ -371,14 +379,21 @@ export function ChatPage() {
               // from the backend's own `session` event once the switch lands
               // (`SessionRunner`), so the label here follows the real model.
               //
-              onPickAgent={({ model }) => void send(`/model ${model}`)}
+              onPickAgent={async ({ model, effort }) => {
+                if (!leadAgent) return;
+                try {
+                  if (model !== leadAgent.model) await send(`/model ${model}`);
+                  else await useAppStore.getState().updateAgent(leadAgent.id, { config: withAgentEffort(leadAgent.config, leadAgent.backend, effort ?? "") });
+                } catch (reason) { useAppStore.setState({ error: String(reason) }); }
+              }}
               // Disabled for a backend with no command layer at all
               // (`ApiHarness.capabilities().slashCommands === false`,
               // `BACKEND_BUILTIN_SLASH_COMMANDS.api === []`): picking a model
               // there used to send the literal text "/model <id>" to the
               // provider, which answered it as prose while the agent kept its
               // old model.
-              canPickModel={canSwitchModel}
+              canPickModel={canSwitchModel && session?.mode !== "custom"}
+              canPickEffort={session?.mode !== "custom"}
               agents={session?.mode === "round-table" ? agents : []}
             />
           </div>

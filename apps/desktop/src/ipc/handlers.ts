@@ -1,3 +1,5 @@
+import { enabledCommands } from "./enabledCommands.js";
+import { createSharedSkillTools } from "../engine/sharedSkills.js";
 /**
  * Every IPC handler, with no Electron import — the shell injects the two things
  * that need it (the folder picker and the app metadata) and the broadcast
@@ -8,10 +10,12 @@
  * main.ts) and return the domain shape; main validates the result on the way
  * back so a handler bug is caught at the boundary.
  */
+import { homedir } from "node:os";
 import { fromJson, type CapygenStore, type Row, type SqlValue } from "@capygen/db";
 import { effectiveBackendConfig, type ModelCatalogue } from "@capygen/engine";
 import {
   builtinSlashCommandsFor,
+  UNKNOWN_CONTEXT,
   assertNoInlineAgentMcpCredentials,
   redactInlineAgentMcpCredentials,
   APPROVE_INPUT_SUMMARY_MAX,
@@ -75,6 +79,7 @@ import {
 } from "../integrations/DiagnosticsService.js";
 import type { McpPoolRegistry } from "./mcpPools.js";
 import type { WidgetHostHandlers } from "./widgets.js";
+import type { AttachmentStore, StoredImage } from "./attachments.js";
 import type { BrowserViewHandlers } from "../workspace/BrowserViewService.js";
 import { emitBlock as persistBlock, textBlock } from "../engine/persist.js";
 import type {
@@ -138,6 +143,7 @@ export interface IpcContextDeps {
   log: EngineLogger;
   /** Native folder picker; resolves to null when the user cancels. */
   pickDirectory: () => Promise<string | null>;
+  defaultDirectory?: () => string;
   appInfo: () => InvokeResult<"app.version">;
   /**
    * Overridable for tests, which run against the echo double; the app runs the
@@ -166,6 +172,12 @@ export interface IpcContextDeps {
    * the three widget channels refuse loudly instead of pretending.
    */
   widgets?: WidgetHostHandlers;
+  /**
+   * Where an attached image is decoded, verified and stored (`./attachments.ts`).
+   * Absent in a profile with no `userData` (tests that never attach one), in
+   * which case `chat.send` refuses an attachment loudly rather than dropping it.
+   */
+  attachments?: AttachmentStore;
   /** Shared MCP client pools (R26); see `EngineDeps.pools`. */
   pools?: McpPoolRegistry;
   /**
@@ -416,8 +428,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     broadcast: tappedBroadcast,
     log,
     ...(deps.widgets ? { widgets: deps.widgets } : {}),
+    ...(deps.attachments ? { attachments: deps.attachments } : {}),
     ...(deps.pools ? { pools: deps.pools } : {}),
     resolveMcpServers: (args) => integrations.resolveMcpServers(args),
+    sharedSkillTools: (projectId) => createSharedSkillTools(() => integrations.sharedSkillSources(projectId)),
     // R21: the engine never reads a key from disk. This is the only bridge
     // between the stored ciphertext and an `api` harness, and it hands over a
     // value the renderer can never ask for (`secrets.has` returns a boolean).
@@ -562,8 +576,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       return authoring.generate(args);
     },
     "customMode.cancel": (args) => ({ ok: authoring.cancel(args.requestId) }),
-    "customMode.capabilities": () => {
-      const harnesses = deps.catalogue?.() ?? [];
+    "customMode.capabilities": async () => {
+      // Landing stays usable while discovery runs, but crew validation must
+      // await that same catalogue instead of freezing an empty startup snapshot.
+      const harnesses = (await deps.listHarnesses?.()) ?? deps.catalogue?.() ?? [];
       const capabilities = crewCapabilities(harnesses);
       return harnesses.map((harness) => ({ ...harness, models: harness.models.map((model) => ({
         ...model, efforts: [...(capabilities.find((row) => row.backend === harness.backend && row.model === model.id)?.efforts ?? [])],
@@ -602,6 +618,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
 
     "projects.list": () => store.projects.list(),
+    "projects.default": () => store.projects.upsertByPath({ path: deps.defaultDirectory?.() ?? homedir() }),
 
     "sessions.create": (args) => {
       const project = store.projects.get(args.projectId);
@@ -783,6 +800,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * rather than guessing at a tool list.
      */
     "agents.describe": (args) => engine.describeAgent(args.agentId),
+    "agents.context": ({ sessionId }) => engine.agentContexts?.(sessionId) ?? store.sessions.agents(sessionId).map((agent) => ({
+      agentId: agent.id, backend: agent.backend, model: agent.model, ...UNKNOWN_CONTEXT,
+    })),
     "agents.catalogue": async (args) => {
       const session = store.sessions.get(args.sessionId);
       if (!session || session.origin === "import") throw new Error("No runnable session for this catalogue");
@@ -813,10 +833,22 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       if (store.sessions.get(args.sessionId)?.origin === "import") {
         throw new Error("Imported transcript sessions are read-only. Continue in a new session to send messages.");
       }
+      // Stored *before* any turn row exists: a picture that cannot be verified
+      // must reject the whole send (the composer keeps the draft and the
+      // attachments), never leave a message in the transcript whose image is
+      // missing from everything downstream.
+      let images: StoredImage[] = [];
+      if (args.attachments.length > 0) {
+        if (!deps.attachments) {
+          throw new Error("This build has no attachment store, so images cannot be sent.");
+        }
+        images = deps.attachments.store(args.attachments);
+      }
       const dispatched = engine.dispatch({
         sessionId: args.sessionId,
         text: args.text,
         agentId: args.agentId,
+        images,
       });
       return {
         userTurnId: dispatched.userTurnId,
@@ -877,7 +909,9 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       const backendCommands = args.sessionId
         ? engine.listCommands(args.sessionId, args.agentId ?? null)
         : [];
-      for (const command of backendCommands) {
+      const session = args.sessionId ? store.sessions.get(args.sessionId) : null;
+      const usable = backend && session ? enabledCommands(backendCommands, integrations.list({ backend, projectId: session.projectId })) : backendCommands;
+      for (const command of usable) {
         if (seen.has(command.name)) continue;
         seen.add(command.name);
         commands.push(command);
@@ -1320,7 +1354,7 @@ function backendOf(
   store: CapygenStore,
   sessionId: string,
   agentId?: string | null,
-): string | null {
+): "claude" | "codex" | "api" | null {
   const session = store.sessions.get(sessionId);
   if (!session) return null;
   const wanted = agentId ?? session.leadAgentId;

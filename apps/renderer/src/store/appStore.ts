@@ -1,3 +1,4 @@
+import { saveRoundTableSettings, saveRoundTableRoster } from "@/lib/sessionPreferences";
 /**
  * The renderer's single store. Holds what the shell needs (projects,
  * sessions, the open session's turns and blocks, settings) and subscribes to
@@ -43,8 +44,15 @@ import {
   type TurnStatus,
   type Turn,
   type UsageEvent,
+  type InputImageAttachment,
 } from "@capygen/shared";
 import { hasBridge, ipc } from "@/lib/ipc";
+
+/** One message waiting behind a streaming turn, attachments included. */
+export interface QueuedMessage {
+  text: string;
+  images: InputImageAttachment[];
+}
 
 export interface AppState {
   ready: boolean;
@@ -90,8 +98,12 @@ export interface AppState {
    *  meter, grouped by `turnId` for each turn's byModel breakdown tooltip. */
   usageEvents: UsageEvent[];
 
-  /** Messages typed while a turn was streaming; drained in order as it frees up. */
-  queuedMessages: string[];
+  /**
+   * Messages typed while a turn was streaming; drained in order as it frees up.
+   * A queued message keeps its image attachments — dropping them on the way
+   * through the queue would send a question about a picture with no picture.
+   */
+  queuedMessages: QueuedMessage[];
   /** Mic button pressed (composer dictation UI — real speech-to-text is Phase 10). */
   listening: boolean;
   /** `Date.now()` of the most recent IPC event or user action, any session. */
@@ -156,7 +168,7 @@ export interface AppState {
     leadAgent?: Pick<AgentDraft, "backend" | "model" | "name">,
   ): Promise<Session>;
   openSession(sessionId: string): Promise<void>;
-  send(text: string): Promise<void>;
+  send(text: string, images?: InputImageAttachment[]): Promise<void>;
   interrupt(): Promise<void>;
   /** Resume a round-table chain the dispatcher stopped at the hop cap
    *  (`chat.continue`, ADR-0002/SPEC R11). */
@@ -339,9 +351,16 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     // The whole roster, replaced rather than merged — an add/update/remove/
     // setLead all broadcast this the same way (handlers.ts's `emitAgents`).
+    client.on("integrations.changed", ({ projectId, kinds }) => {
+      if (!kinds.some((kind) => kind === "skills" || kind === "plugins")) return;
+      const sessionId = get().activeSessionId;
+      const session = get().sessions.find((entry) => entry.id === sessionId);
+      if (sessionId && (projectId === null || projectId === session?.projectId)) void refreshCommands(sessionId).catch(() => {});
+    });
     client.on("agents.updated", ({ sessionId, agents }) => {
       if (sessionId !== get().activeSessionId) return;
       set({ agents });
+      if (get().sessions.find((session) => session.id === sessionId)?.mode === "round-table") saveRoundTableRoster(agents);
     });
 
     // ADR-0002/SPEC R11: the dispatcher stopped an agent-to-agent chain at
@@ -432,12 +451,17 @@ export const useAppStore = create<AppState>()((set, get) => {
    * still reaches the lead — that fallback lives in `resolveTargets`, one
    * code path for solo and round-table alike.
    */
-  async function dispatchNow(sessionId: string, text: string): Promise<void> {
+  async function dispatchNow(
+    sessionId: string,
+    text: string,
+    images: InputImageAttachment[] = [],
+  ): Promise<void> {
     set({ chainStopped: null, unknownMentions: null });
     const { userTurnId, unknownMentions } = await ipc().invoke("chat.send", {
       sessionId,
       text,
       agentId: null,
+      attachments: images,
     });
     if (get().activeSessionId === sessionId && unknownMentions.length > 0) {
       set({ unknownMentions: { turnId: userTurnId, names: unknownMentions } });
@@ -469,7 +493,7 @@ export const useAppStore = create<AppState>()((set, get) => {
     set({ queuedMessages: rest });
     // Nobody is awaiting this one — a failure has to land somewhere visible,
     // and the message goes back in the queue rather than disappearing.
-    void dispatchNow(sessionId, next).catch((err: unknown) => {
+    void dispatchNow(sessionId, next.text, next.images).catch((err: unknown) => {
       set((s) => ({
         queuedMessages: [next, ...s.queuedMessages],
         error: err instanceof Error ? err.message : String(err),
@@ -637,19 +661,19 @@ export const useAppStore = create<AppState>()((set, get) => {
       void refreshUsage(sessionId);
     },
 
-    async send(text) {
+    async send(text, images = []) {
       const sessionId = get().activeSessionId;
       const trimmed = text.trim();
-      if (!sessionId || trimmed === "") return;
+      if (!sessionId || (trimmed === "" && images.length === 0)) return;
       touchActivity();
       // A turn is already streaming: queue rather than racing chat.send —
       // the stub (and the real harnesses later) run one turn at a time per
       // session, so a second send now would just supersede the first.
       if (isBusy(get())) {
-        set((s) => ({ queuedMessages: [...s.queuedMessages, trimmed] }));
+        set((s) => ({ queuedMessages: [...s.queuedMessages, { text: trimmed, images }] }));
         return;
       }
-      await dispatchNow(sessionId, trimmed);
+      await dispatchNow(sessionId, trimmed, images);
     },
 
     async interrupt() {
@@ -728,6 +752,7 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     async updateSessionSettings(sessionId, patch) {
       const session = await ipc().invoke("sessions.updateSettings", { sessionId, patch });
+      if (session.mode === "round-table") saveRoundTableSettings(session.settings);
       set((s) => ({ sessions: s.sessions.map((x) => (x.id === session.id ? session : x)) }));
       return session;
     },

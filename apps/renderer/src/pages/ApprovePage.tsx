@@ -131,7 +131,7 @@ export function ApprovePage() {
   }
 
   return (
-    <div className="titlebar-clearance min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-8" data-testid="approve-page">
+    <div className="titlebar-top-clearance min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-8" data-testid="approve-page">
       <h1 className="mb-1 text-3xl font-normal tracking-[-0.03em]">Approve</h1>
       <p className="mb-6 text-sm text-muted-foreground">
         Tool calls waiting for an answer, across every session. Answering here is the same as

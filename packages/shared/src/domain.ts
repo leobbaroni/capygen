@@ -10,6 +10,7 @@
 // Side-effect import: must run before the first schema below is constructed.
 import "./zodRuntime.js";
 import { z } from "zod";
+import { InputImageMediaTypeSchema } from "./attachments.js";
 import { LocalPolicyAttributionSchema } from "./localPolicies.js";
 import { CrewTargetSchema, CrewTaskKindSchema, CrewDifficultySchema, CrewIdSchema, CustomModeDocumentSchema } from "./customMode.js";
 
@@ -838,6 +839,28 @@ export const UsageBlockSchema = z.object({
   usage: UsageTotalsSchema,
 });
 
+/**
+ * A picture the **user** attached to a message (`chat.send`'s `attachments`).
+ *
+ * The row carries only the identity of the stored file — the bytes live in the
+ * app's attachment store under `userData`, never in `payload_json` — so the
+ * transcript renders the same image after a restart and the harness that has
+ * to re-send it can read the file rather than a database blob.
+ *
+ * No backend ever emits this kind (see `BACKEND_BLOCK_PARITY`): it is input,
+ * recorded so the transcript shows what was actually sent.
+ */
+export const ImageBlockSchema = z.object({
+  ...blockBase,
+  kind: z.literal("image"),
+  /** Attachment-store id; the renderer resolves it to a `capygen-attachment://` URL. */
+  attachmentId: z.string().min(1),
+  /** The user's own file name, shown under the thumbnail. */
+  name: z.string().min(1),
+  mediaType: InputImageMediaTypeSchema,
+  size: z.number().int().nonnegative(),
+});
+
 export const BlockSchema = z.discriminatedUnion("kind", [
   TextBlockSchema,
   ThinkingBlockSchema,
@@ -850,6 +873,7 @@ export const BlockSchema = z.discriminatedUnion("kind", [
   UsageBlockSchema,
   WidgetBlockSchema,
   ElicitationBlockSchema,
+  ImageBlockSchema,
 ]);
 export type Block = z.infer<typeof BlockSchema>;
 export type BlockKind = Block["kind"];
@@ -865,6 +889,7 @@ export type ErrorBlock = z.infer<typeof ErrorBlockSchema>;
 export type UsageBlock = z.infer<typeof UsageBlockSchema>;
 export type WidgetBlock = z.infer<typeof WidgetBlockSchema>;
 export type ElicitationBlock = z.infer<typeof ElicitationBlockSchema>;
+export type ImageBlock = z.infer<typeof ImageBlockSchema>;
 
 export const BLOCK_KINDS = [
   "text",
@@ -878,6 +903,7 @@ export const BLOCK_KINDS = [
   "usage",
   "widget",
   "elicitation",
+  "image",
 ] as const satisfies readonly BlockKind[];
 
 // ---------------------------------------------------------------------------
@@ -929,7 +955,7 @@ export type Theme = z.infer<typeof ThemeSchema>;
  * settings row take the same code path.
  */
 export const SettingsSchema = z.object({
-  theme: ThemeSchema.default("system"),
+  theme: ThemeSchema.default("dark"),
   /** Never install anything silently (CLAUDE.md); this only picks the mode. */
   permissionMode: PermissionModeSchema.default("default"),
   defaultBackend: BackendSchema.default("claude"),
@@ -1496,7 +1522,7 @@ export type GlobalGeneralPatch = z.infer<typeof GlobalGeneralPatchSchema>;
 
 export const GlobalAppearanceSchema = z
   .object({
-    theme: ThemeSchema.default("system"),
+    theme: ThemeSchema.default("dark"),
     /** Free-form palette id (Omnigent ships several named palettes); not
      *  enumerated here so a new palette ships without a schema change. */
     palette: z.string().min(1).default("default"),

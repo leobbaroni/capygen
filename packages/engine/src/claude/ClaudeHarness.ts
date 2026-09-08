@@ -22,6 +22,7 @@
  *  - **`Options.env` replaces the child environment**, so `cleanEnv()` returns a
  *    complete one.
  */
+import { RequestContext } from "../contextSnapshot.js";
 import {
   newId,
   type Backend,
@@ -54,6 +55,7 @@ import {
   type ClaudeQueryFn,
   type SDKUserMessage,
 } from "./sdk.js";
+import { encodeTurnImages } from "../images.js";
 import type { ClaudeInitSnapshot } from "./describe.js";
 import {
   authorizeLocally,
@@ -340,8 +342,12 @@ export class ClaudeHarness implements Harness {
       resume: true,
       interrupt: true,
       slashCommands: true,
+      imageInput: true,
     };
   }
+
+  private readonly requestContext = new RequestContext();
+  contextSnapshot() { return this.requestContext.snapshot(); }
 
   listCommands(): SlashCommand[] {
     return this.commands;
@@ -406,19 +412,41 @@ export class ClaudeHarness implements Harness {
       else ctx.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    void this.dispatch(turn, input.text).catch((err: unknown) => {
+    void this.dispatch(turn, input).catch((err: unknown) => {
       this.settle(turn, "error", describe(err));
     });
 
     return out;
   }
 
-  /** Make sure a query exists, then push this turn's user message into it. */
-  private async dispatch(turn: ActiveTurn, text: string): Promise<void> {
+  /**
+   * Make sure a query exists, then push this turn's user message into it.
+   *
+   * With no attachments the message stays a plain string — byte-identical to
+   * what Phase 2 sent, which is what keeps the cached prefix intact (SPEC R24).
+   * With images it becomes a `MessageParam` content array: the text block first,
+   * then one real Anthropic `image` block per attachment (base64), which is
+   * what the Agent SDK forwards to the Messages API.
+   */
+  private async dispatch(turn: ActiveTurn, input: TurnInput): Promise<void> {
+    const images = await encodeTurnImages(input.images);
     await this.ensureQuery();
+    const content: SDKUserMessage["message"]["content"] = images.length === 0
+      ? input.text
+      : [
+          ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
+          ...images.map((image) => ({
+            type: "image" as const,
+            source: {
+              type: "base64" as const,
+              media_type: image.mediaType,
+              data: image.data,
+            },
+          })),
+        ];
     const message: SDKUserMessage = {
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
     };
     this.queryInput?.push(message);
@@ -800,6 +828,7 @@ export class ClaudeHarness implements Harness {
     if (!event) return;
 
     if (event.type === "message_start") {
+      this.requestContext.claude(event.message?.usage);
       this.currentMessageId = str(event.message?.id) ?? this.currentMessageId;
       return;
     }
@@ -863,6 +892,7 @@ export class ClaudeHarness implements Harness {
     }
 
     const inner = message.message as AssistantMessageLike | undefined;
+    if (inner?.usage) this.requestContext.claude(inner.usage);
     const messageId = str(inner?.id);
     if (messageId) this.currentMessageId = messageId;
     const content = Array.isArray(inner?.content) ? inner.content : [];
@@ -973,6 +1003,9 @@ export class ClaudeHarness implements Harness {
 
   private routeResult(message: SdkMessageLike): void {
     const turn = this.active;
+    const model = this.resolvedModel ?? this.agent?.model ?? "";
+    const metadata = (message.modelUsage as Record<string, { contextWindow?: unknown }> | undefined)?.[model];
+    this.requestContext.capacity(metadata?.contextWindow);
     const byModel = readModelUsage(message.modelUsage);
     const delta = deltaUsage(this.lastByModel, byModel);
     this.lastByModel = byModel;
@@ -1673,12 +1706,13 @@ interface SdkMessageLike {
 interface StreamEventLike {
   type?: string;
   index?: number;
-  message?: { id?: unknown };
+  message?: { id?: unknown; usage?: unknown };
   delta?: { type?: string; text?: unknown; thinking?: unknown };
 }
 
 interface AssistantMessageLike {
   id?: unknown;
+  usage?: unknown;
   content?: {
     type?: string;
     text?: unknown;

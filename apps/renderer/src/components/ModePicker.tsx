@@ -45,11 +45,12 @@ export function ModePicker({
           type="button"
           role="radio"
           aria-checked={mode === option}
+          aria-label={label}
           disabled={disabled}
           data-testid={`${testId}-${option}`}
           onClick={() => option !== mode && onChange(option)}
           className={cn(
-            "flex h-6 items-center gap-1 rounded-full px-2.5 text-sm font-normal whitespace-nowrap transition-colors",
+            "flex h-6 items-center gap-1 rounded-full px-2 text-xs font-normal whitespace-nowrap transition-colors",
             mode === option
               ? "bg-card text-foreground shadow-xs"
               : "text-muted-foreground hover:text-foreground",
@@ -57,7 +58,7 @@ export function ModePicker({
           )}
         >
           <Icon className="size-3.5 shrink-0" />
-          {label}
+          {option === "solo" ? "Solo" : label}
         </button>
       ))}
     </div>

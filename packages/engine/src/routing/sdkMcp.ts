@@ -23,7 +23,12 @@ import type {
   DelegateRequest,
   DelegateResult,
 } from "./delegate.js";
-import { DELEGATE_TASK_DESCRIPTION, DELEGATE_TASK_TOOL } from "./delegate.js";
+import {
+  DELEGATE_TASK_DESCRIPTION,
+  DELEGATE_TASK_TOOL,
+  UNKNOWN_BACKEND_TEXT,
+  isBackend,
+} from "./delegate.js";
 
 /** The MCP server name; the model sees `mcp__capygen__delegate_task`. */
 export const CAPYGEN_MCP_SERVER = "capygen";
@@ -97,18 +102,40 @@ export async function createDelegateMcpServer(
           .describe(
             "The full, self-contained instruction for the sub-agent. It cannot see this conversation.",
           ),
+        backend: z
+          .enum(["claude", "codex", "api"])
+          .optional()
+          .describe(
+            "Optional backend for the sub-agent; leave it out for the routed default. capygen " +
+              "refuses a backend this installation cannot run.",
+          ),
         model: z
           .string()
           .optional()
-          .describe("Optional model override; capygen's routing policy already chose one."),
+          .describe(
+            "Optional model override, as an exact model id this installation offers for the " +
+              "chosen backend; leave it out for the routed default.",
+          ),
+        effort: z
+          .string()
+          .optional()
+          .describe("Optional reasoning effort, from the ones that backend/model accepts."),
         taskKind: z.enum(["design", "research", "development", "text", "decision", "general"]).optional(),
         difficulty: z.enum(["easy", "medium", "hard"]).optional(),
       } as unknown as Record<string, unknown>,
       async (args: Record<string, unknown>) => {
+        // The zod enum normally rejects this before the handler runs; a client
+        // that reaches here with an unknown backend is refused rather than run
+        // on the routed default it did not ask for.
+        if (args.backend !== undefined && !isBackend(args.backend)) {
+          return { content: [{ type: "text", text: UNKNOWN_BACKEND_TEXT }], isError: true };
+        }
         const result = await deps.run({
           description: typeof args.description === "string" ? args.description : "",
           prompt: typeof args.prompt === "string" ? args.prompt : "",
+          ...(isBackend(args.backend) ? { backend: args.backend } : {}),
           ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
+          ...(typeof args.effort === "string" && args.effort ? { effort: args.effort } : {}),
           ...(typeof args.taskKind === "string" ? { taskKind: args.taskKind } : {}),
           ...(typeof args.difficulty === "string" ? { difficulty: args.difficulty } : {}),
         });
@@ -136,8 +163,9 @@ export async function createDelegateMcpServer(
       name: CAPYGEN_MCP_SERVER,
       version: "1.0.0",
       instructions:
-        "capygen's own tools. delegate_task runs one task on the backend/model capygen's " +
-        "sub-agent routing policy chose for this agent.",
+        "capygen's own tools. delegate_task runs one task on another agent: the backend/model " +
+        "capygen's routing policy chose for this agent by default, or any other backend/model " +
+        "this installation can run when the call names one.",
       tools: [delegateTool, ...(debateTool ? [debateTool] : [])],
     });
     return { [CAPYGEN_MCP_SERVER]: server };

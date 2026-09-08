@@ -8,6 +8,7 @@ import type { Block } from "@capygen/shared";
 import { DiffCard } from "./DiffCard";
 import { ElicitationCard } from "./ElicitationCard";
 import { ErrorCard } from "./ErrorCard";
+import { ImageBlockView } from "./ImageBlockView";
 import { PermissionCard } from "./PermissionCard";
 import { QuestionCard } from "./QuestionCard";
 import { SubagentCard } from "./SubagentCard";
@@ -28,6 +29,8 @@ export function BlockRenderer({ block, isUser }: { block: Block; isUser: boolean
   switch (block.kind) {
     case "text":
       return <TextBlockView block={block} isUser={isUser} />;
+    case "image":
+      return <ImageBlockView block={block} />;
     case "thinking":
       return <ThinkingCard block={block} />;
     case "tool_call":

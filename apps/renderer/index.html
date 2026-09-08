@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,7 +13,7 @@
          every widget's inline script (docs/spikes/mcp-apps.md §a4). -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; frame-src capygen-widget:"
+      content="default-src 'self'; img-src 'self' data: blob: capygen-attachment:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; frame-src capygen-widget:"
     />
     <!-- Staged into public/ from assets/icons by scripts/sync-assets.ts. -->
     <link rel="icon" href="./favicon.ico" />

@@ -39,10 +39,12 @@
  * `HarnessInfo.reason`, so an expired Codex token or a missing API key reads as
  * a sentence the user can act on instead of an empty list.
  *
- * Attach is disabled until `chat.send` can carry a file
- * (packages/shared/src/ipc.ts): taking one, showing a chip and then dropping
- * it on send is worse than saying it is not available yet. The chip list and
- * `addFiles` stay so the panes phase only has to re-enable the button. The
+ * Attach takes two kinds of file. A PNG/JPEG/WebP becomes a real image
+ * attachment on `chat.send`, sent to the model as a picture (and refused, with
+ * the reason, by an agent whose model cannot read images). Anything else must be
+ * bounded UTF-8 text/code, whose actual contents go into the message text. Every
+ * other binary — PDFs included — is refused visibly rather than becoming a chip
+ * nothing can read. The
  * mic starts a bounded local Windows Speech capture, updating the mascot
  * while listening. A completed phrase enters only the editable draft;
  * cancellation/navigation discards late transcripts.
@@ -76,11 +78,28 @@ import {
   XIcon,
 } from "lucide-react";
 import type { Agent, Backend, HarnessInfo, SlashCommand } from "@capygen/shared";
+import { DraftHighlight } from "./composer/DraftHighlight";
+import {
+  attachmentMessage,
+  isImageFile,
+  readImageAttachment,
+  readTextAttachment,
+  toSendableImages,
+  ATTACHMENT_MAX_COUNT,
+  ATTACHMENT_TOTAL_BYTES,
+  type ImageAttachment,
+  type TextAttachment,
+} from "./composer/attachments";
+import {
+  IMAGE_ATTACHMENT_MAX_COUNT,
+  IMAGE_ATTACHMENT_TOTAL_BYTES,
+  type InputImageAttachment,
+} from "@capygen/shared";
 import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu, type McpToolMenuEntry } from "@/components/SlashMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { BACKEND_LABEL, modelDisplayName, supportedEfforts } from "@/lib/agentDisplay";
 import { activeMentionQuery, insertMention, type MentionQuery } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useComposerDictation } from "@/hooks/useComposerDictation";
@@ -88,10 +107,16 @@ import { useComposerDictation } from "@/hooks/useComposerDictation";
 export interface AgentChoice {
   backend: Backend;
   model: string;
+  /** Explicit supported effort; omitted uses backend defaults. */
+  effort?: string;
 }
 
 export interface ComposerProps {
-  onSubmit: (text: string) => void | Promise<void>;
+  /**
+   * `images` are real attachments carried by `chat.send` — never described in
+   * the text. An empty array is the ordinary text-only send.
+   */
+  onSubmit: (text: string, images?: InputImageAttachment[]) => void | Promise<void>;
   onInterrupt?: () => void;
   busy?: boolean;
   disabled?: boolean;
@@ -140,6 +165,7 @@ export interface ComposerProps {
    * picker then renders disabled, still labelled with the current model.
    */
   canPickModel?: boolean;
+  canPickEffort?: boolean;
   /** Session agents the `@mention` menu can suggest (SPEC item B2.2). Empty
    *  (the default) keeps the menu from ever opening — a solo session's one
    *  agent has nothing worth mentioning. */
@@ -163,11 +189,29 @@ export function Composer({
   lockBackend = false,
   onPickAgent,
   canPickModel = true,
+  canPickEffort = true,
   agents = [],
   testId = "composer",
 }: ComposerProps) {
   const [value, setValue] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<TextAttachment[]>([]);
+  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [readingFiles, setReadingFiles] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  // Previews are object URLs: whatever is still attached when the composer goes
+  // away (navigation, a closed session) has to be released, or the blob stays
+  // alive for the life of the window. `imagesRef` is read at teardown so the
+  // effect itself never re-runs as chips come and go.
+  const imagesRef = useRef<ImageAttachment[]>([]);
+  useEffect(() => { imagesRef.current = images; }, [images]);
+  useEffect(() => {
+    return () => {
+      for (const image of imagesRef.current) URL.revokeObjectURL(image.previewUrl);
+    };
+  }, []);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   /** The exact draft Escape closed the menu for; editing it reopens the menu. */
@@ -197,6 +241,7 @@ export function Composer({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+    if (highlightRef.current) highlightRef.current.style.width = `calc(100% - ${Math.max(0, el.offsetWidth - el.clientWidth)}px)`;
   }, [value]);
 
   useEffect(() => { if (disabled) dictation.cancel(); }, [disabled, dictation.cancel]);
@@ -259,11 +304,13 @@ export function Composer({
    */
   async function sendText(text: string): Promise<void> {
     const trimmed = text.trim();
-    if (trimmed === "" || disabled) return;
+    if ((trimmed === "" && files.length === 0 && images.length === 0) || disabled || readingFiles) return;
     dictation.cancel();
     const keptFiles = files;
+    const keptImages = images;
     setValue("");
     setFiles([]);
+    setImages([]);
     setSendError(null);
     // A stale in-progress "@query" would otherwise survive the programmatic
     // clear above (setValue doesn't fire the textarea's own onChange/onSelect)
@@ -272,10 +319,15 @@ export function Composer({
     setMentionQuery(null);
     setMentionDismissedFor(null);
     try {
-      await onSubmit(trimmed);
+      // Text-only sends keep the one-argument shape they have always had; the
+      // images argument appears only when there are pictures to carry.
+      const message = attachmentMessage(trimmed, keptFiles);
+      await (keptImages.length ? onSubmit(message, toSendableImages(keptImages)) : onSubmit(message));
+      for (const image of keptImages) URL.revokeObjectURL(image.previewUrl);
     } catch (err) {
       setValue((current) => (current === "" ? trimmed : current));
       setFiles(keptFiles);
+      setImages(keptImages);
       setSendError(err instanceof Error ? err.message : String(err));
       ref.current?.focus();
     }
@@ -287,14 +339,15 @@ export function Composer({
 
   /**
    * A command with no `argumentHint` (SPEC R14: "Enter runs argument-less
-   * commands") sends immediately; one that takes an argument is written into
+   * commands") sends immediately on Enter; skill selection and Tab always insert.
+   * A command that takes an argument is written into
    * the composer instead, caret after it, so the argument can be typed
    * before anything is sent — the only way `/model opus` or
    * `/cockpit:pilot what's next` can be dispatched at all.
    */
-  function selectCommand(command: SlashCommand): void {
+  function selectCommand(command: SlashCommand, completeOnly = false): void {
     setSlashDismissedFor(null);
-    if (!command.argumentHint) {
+    if (!command.argumentHint && command.source !== "skill" && command.source !== "plugin" && !completeOnly) {
       void sendText(command.name);
       return;
     }
@@ -344,10 +397,10 @@ export function Composer({
         setHighlighted((h) => (h - 1 + filteredCommands.length) % filteredCommands.length);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault();
         const command = filteredCommands[highlighted] ?? filteredCommands[0];
-        if (command) selectCommand(command);
+        if (command) selectCommand(command, event.key === "Tab");
         return;
       }
     }
@@ -384,10 +437,63 @@ export function Composer({
     }
   }
 
-  function addFiles(list: FileList | null): void {
-    if (!list || list.length === 0) return;
-    setFiles((prev) => [...prev, ...Array.from(list)]);
+  /**
+   * One picker, two destinations. A PNG/JPEG/WebP becomes a real image
+   * attachment (`chat.send`'s `attachments`, sent to the model as a picture);
+   * anything else must be UTF-8 text, whose contents are embedded in the
+   * message. Every other binary — a PDF, an archive, a video — is refused
+   * visibly, because a chip the model cannot see would be a lie.
+   */
+  async function addFiles(list: FileList | null): Promise<void> {
+    if (!list || list.length === 0 || disabled || readingFiles) return;
+    const selected = Array.from(list);
+    const pickedImages = selected.filter(isImageFile);
+    const pickedText = selected.filter((file) => !isImageFile(file));
+    if (images.length + pickedImages.length > IMAGE_ATTACHMENT_MAX_COUNT) {
+      setAttachmentError(`Attach up to ${IMAGE_ATTACHMENT_MAX_COUNT} images.`); return;
+    }
+    if (images.reduce((total, image) => total + image.size, 0)
+      + pickedImages.reduce((total, file) => total + file.size, 0) > IMAGE_ATTACHMENT_TOTAL_BYTES) {
+      setAttachmentError(`Images are limited to ${IMAGE_ATTACHMENT_TOTAL_BYTES / (1024 * 1024)} MiB per message.`); return;
+    }
+    if (files.length + pickedText.length > ATTACHMENT_MAX_COUNT) { setAttachmentError("Attach up to 8 text or code files."); return; }
+    if (files.reduce((total, file) => total + file.size, 0) + pickedText.reduce((total, file) => total + file.size, 0) > ATTACHMENT_TOTAL_BYTES) { setAttachmentError("Text attachments are limited to 256 KiB total."); return; }
+    setReadingFiles(true); setAttachmentError(null);
+    // Settled, not `all`: one refused file in a mixed batch used to reject
+    // before the previews created for its siblings could be adopted or freed,
+    // which leaked an object URL per picture for the life of the window.
+    const imageResults = await Promise.allSettled(pickedImages.map(readImageAttachment));
+    const textResults = await Promise.allSettled(pickedText.map(readTextAttachment));
+    const loadedImages = imageResults.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const loaded = textResults.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const failure = [...imageResults, ...textResults].find((r) => r.status === "rejected");
+    if (!mounted.current) {
+      // Unmounted mid-read: nothing will ever render these previews.
+      for (const image of loadedImages) URL.revokeObjectURL(image.previewUrl);
+      return;
+    }
+    // A batch is all-or-nothing: attaching half of what the user picked, with
+    // an error about the rest, is the state that gets sent by accident.
+    if (failure) {
+      for (const image of loadedImages) URL.revokeObjectURL(image.previewUrl);
+      const reason = (failure as PromiseRejectedResult).reason;
+      setAttachmentError(reason instanceof Error ? reason.message : String(reason));
+      setReadingFiles(false);
+      return;
+    }
+    if (loadedImages.length) setImages((current) => [...current, ...loadedImages]);
+    if (loaded.length) setFiles((current) => [...current, ...loaded]);
+    setReadingFiles(false);
   }
+
+  function removeImage(index: number): void {
+    setImages((current) => {
+      const removed = current[index];
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((_, idx) => idx !== index);
+    });
+  }
+  const recognized = useMemo(() => new Set([...commands.map((command) => command.name.toLowerCase()), ...agents.map((entry) => `@${entry.mentionName.toLowerCase()}`)]), [commands, agents]);
 
   // Harness/model picker (SPEC item 5). Only the backends `harness.list`
   // reports available can be *chosen*; `lockBackend` narrows that to the open
@@ -402,7 +508,7 @@ export function Composer({
   // whose token had expired saw "No models available" and no way to learn why.
   const unavailableHarnesses = locked ? [] : harnesses.filter((h) => !h.available);
   const pickerLabel = agent
-    ? `${BACKEND_LABEL[agent.backend]} · ${agent.model}`
+    ? `${BACKEND_LABEL[agent.backend]} · ${modelDisplayName(harnesses, agent.backend, agent.model)}`
     : "Choose model";
 
   function pick(backend: Backend, model: string): void {
@@ -441,6 +547,8 @@ export function Composer({
       ) : null}
 
       <div className="relative overflow-hidden px-4 pt-3">
+        <div className="relative">
+        {value && <DraftHighlight ref={highlightRef} text={value} recognized={recognized} />}
         <Textarea
           ref={ref}
           value={value}
@@ -449,6 +557,7 @@ export function Composer({
             setValue(next);
             setMentionQuery(activeMentionQuery(next, e.target.selectionStart ?? next.length));
           }}
+          onScroll={(event) => { if (highlightRef.current) highlightRef.current.scrollTop = event.currentTarget.scrollTop; }}
           onKeyDown={onKeyDown}
           onSelect={(e: SyntheticEvent<HTMLTextAreaElement>) => {
             const el = e.currentTarget;
@@ -460,10 +569,13 @@ export function Composer({
           spellCheck={false}
           data-testid={`${testId}-input`}
           aria-label="Message"
-          className="max-h-[220px] min-h-[24px] overflow-y-auto"
+          className={cn("relative max-h-[220px] min-h-[24px] overflow-y-auto caret-foreground", value && "!text-transparent")}
         />
+        </div>
       </div>
 
+      {readingFiles && <p role="status" className="px-4 pt-1 text-xs text-muted-foreground">Reading attachments…</p>}
+      {attachmentError && <p role="alert" className="px-4 pt-1 text-xs text-destructive">{attachmentError}</p>}
       {sendError ? (
         <p
           role="alert"
@@ -472,6 +584,32 @@ export function Composer({
         >
           Could not send: {sendError}
         </p>
+      ) : null}
+
+      {images.length > 0 ? (
+        <div className="flex flex-wrap gap-2 px-4 pb-1" data-testid={`${testId}-images`}>
+          {images.map((image, i) => (
+            <span
+              key={`${image.name}-${i}`}
+              className="flex items-center gap-1.5 rounded-md border border-border bg-muted p-1 pr-2 text-xs text-muted-foreground"
+            >
+              <img
+                src={image.previewUrl}
+                alt={image.name}
+                className="size-10 rounded object-cover"
+              />
+              <span className="max-w-32 truncate">{image.name}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${image.name}`}
+                onClick={() => removeImage(i)}
+                className="rounded-full hover:text-foreground"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
       ) : null}
 
       {files.length > 0 ? (
@@ -503,20 +641,19 @@ export function Composer({
             multiple
             hidden
             onChange={(e) => {
-              addFiles(e.target.files);
+              void addFiles(e.target.files);
               e.target.value = "";
             }}
             data-testid={`${testId}-file-input`}
           />
-          {/* Disabled on purpose: `chat.send` carries only text, so accepting
-              a file here would show a chip and then drop it silently. */}
+          {/* Text content is included in chat.send; binary files are refused visibly. */}
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            disabled
+            disabled={disabled || readingFiles}
             onClick={() => fileInputRef.current?.click()}
-            title="Attachments arrive with the file panes (Phase 5)"
+            title="Attach images (PNG, JPEG, WebP) or UTF-8 text and code files"
             aria-label="Attach files"
             data-testid={`${testId}-attach`}
           >
@@ -535,13 +672,7 @@ export function Composer({
           >
             <MicIcon className={cn("size-4", listening && "text-destructive")} />
           </Button>
-          {dictation.languages.length > 0 ? (
-            <select aria-label="Dictation language" value={dictation.language}
-              onChange={event => dictation.setLanguage(event.target.value)} disabled={listening}
-              className="max-w-24 rounded bg-transparent px-1 text-xs text-muted-foreground">
-              {dictation.languages.map(language => <option key={language} value={language}>{language}</option>)}
-            </select>
-          ) : null}
+
         </div>
 
         <div className="flex min-w-0 items-center gap-1.5">
@@ -626,6 +757,8 @@ export function Composer({
             ) : null}
           </div>
 
+          {agent && supportedEfforts(harnesses, agent.backend, agent.model).length > 0 ? <select aria-label="Model effort" value={agent.effort ?? ""} disabled={disabled || busy || !onPickAgent || !canPickEffort} onChange={(event) => onPickAgent?.({ backend: agent.backend, model: agent.model, ...(event.target.value ? { effort: event.target.value } : {}) })} className="h-7 max-w-24 rounded-md border border-border-weak bg-background px-1 text-xs"><option value="">Default effort</option>{agent.effort && !supportedEfforts(harnesses, agent.backend, agent.model).includes(agent.effort) && <option value={agent.effort} disabled>{agent.effort} (unavailable)</option>}{supportedEfforts(harnesses, agent.backend, agent.model).map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select> : null}
+
           {busy ? (
             <Button
               variant="secondary"
@@ -640,7 +773,7 @@ export function Composer({
             <Button
               type="submit"
               size="icon-sm"
-              disabled={disabled || value.trim() === ""}
+              disabled={disabled || readingFiles || (value.trim() === "" && files.length === 0 && images.length === 0)}
               aria-label="Send"
               data-testid={`${testId}-send`}
             >

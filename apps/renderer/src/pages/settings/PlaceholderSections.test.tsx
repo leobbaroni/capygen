@@ -4,15 +4,19 @@
  */
 import { UpdatesSection as LiveUpdatesSection } from "./UpdatesSection";
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AccountSection,
   LegacyIntegrationsSection,
   LocalCliSection,
   UpdatesSection,
 } from "./PlaceholderSections";
+
+const invoke = vi.fn();
+vi.mock("@/lib/ipc", () => ({ ipc: () => ({ invoke }), hasBridge: () => true }));
+beforeEach(() => { invoke.mockReset(); invoke.mockImplementation((channel) => Promise.resolve(channel === "harness.list" ? [] : { ok: false, started: false })); });
 
 function renderWithRouter(node: ReactElement) {
   return render(<MemoryRouter>{node}</MemoryRouter>);
@@ -44,4 +48,13 @@ describe("PlaceholderSections", () => {
     expect(screen.getByRole("link", { name: "Prerequisites" })).toHaveAttribute("href", "/settings/prereqs");
     expect(screen.getByRole("link", { name: "Harnesses" })).toHaveAttribute("href", "/settings/harnesses");
   });
+});
+
+it("runs the chosen native login only on click and reports a launch that did not start", async () => {
+  renderWithRouter(<AccountSection />);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("harness.list", {}));
+  expect(invoke).not.toHaveBeenCalledWith("prereqs.run", expect.anything());
+  fireEvent.click(screen.getAllByRole("button", { name: "Sign in / reconnect" })[1]!);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("prereqs.run", { stepId: "codex-login" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Codex sign-in did not start");
 });

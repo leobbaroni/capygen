@@ -90,6 +90,20 @@ export function openaiInput(messages: readonly ChatMessage[]): unknown[] {
         if (block.text.length > 0) textParts.push(block.text);
         continue;
       }
+      if (block.type === "image") {
+        // Images ride with the text they were sent with, so the collected text
+        // is flushed into the *same* message rather than a separate one.
+        const text = textParts.join("\n");
+        textParts.length = 0;
+        out.push({
+          role: message.role,
+          content: [
+            ...(text ? [{ type: "input_text", text }] : []),
+            { type: "input_image", image_url: `data:${block.mediaType};base64,${block.data}` },
+          ],
+        });
+        continue;
+      }
       if (block.type === "tool_use") {
         // Flush any text collected before this call so ordering survives.
         flushText(out, message.role, textParts);

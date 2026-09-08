@@ -79,14 +79,14 @@ export function SettingsPage() {
   const Body = SECTION_BODIES[current.id];
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1" data-testid="settings-page">
+    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="settings-page">
       <nav
         aria-label="Settings sections"
         data-testid="settings-nav"
         // The drag strip is fixed across the top 36px of the window, so the
         // first link would sit under it and clicking it would drag the window
         // instead of navigating.
-        className="titlebar-top-clearance hidden w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border-weak p-3 md:flex"
+        className="titlebar-top-clearance hidden w-48 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border-weak p-3 md:flex"
       >
         {SETTINGS_NAV_GROUPS.map((group) => (
           <div key={group.title} className="flex flex-col gap-0.5">
@@ -119,12 +119,12 @@ export function SettingsPage() {
         ))}
       </nav>
 
-      <div className="titlebar-clearance min-h-0 min-w-0 flex-1 overflow-y-auto p-4 max-md:!pt-12 max-md:!pr-4 sm:p-8" data-testid="settings-body">
+      <div className="titlebar-top-clearance min-h-0 min-w-0 flex-1 overflow-y-auto p-4 max-md:!pt-12 max-md:!pr-4 sm:p-5" data-testid="settings-body">
         <select aria-label="Settings section" value={current.id} onChange={(event) => navigate(`/settings/${event.target.value}`)} className="mb-4 w-full rounded-md border border-border bg-background p-2 md:hidden">
           {SETTINGS_NAV_GROUPS.map((group) => <optgroup key={group.title} label={group.title}>{group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</optgroup>)}
         </select>
-        <h1 className="mb-1 text-3xl font-normal tracking-[-0.03em]">{current.label}</h1>
-        <div className="mt-6 max-w-2xl">
+        <h1 className="mb-1 text-2xl font-normal tracking-[-0.03em]">{current.label}</h1>
+        <div className="mt-4 max-w-3xl">
           {PROJECT_SCOPED_SECTIONS.has(current.id) ? <SelectedProjectNote /> : null}
           {Body ? <Body /> : null}
         </div>

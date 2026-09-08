@@ -23,7 +23,17 @@
  *    would silently rewrite what the model believes it did).
  *  - **Thinking is replayed only when it carries a signature.** Anthropic
  *    rejects an unsigned `thinking` block on the way back in.
+ *  - **Images are replayed, but bounded and deduplicated.** An `api` agent has
+ *    no backend memory, so a picture the user attached before the restart has
+ *    to come back as a real image or the model is answering about something it
+ *    can no longer see. The newest pictures are re-sent up to
+ *    `MAX_REPLAYED_IMAGES` *and* `MAX_REPLAYED_IMAGE_BYTES` across the whole
+ *    replay — every replayed image is billed on every request the session makes
+ *    afterwards — and the same file, or byte-identical content, is carried
+ *    once. Anything not re-sent becomes a line naming the file and saying so,
+ *    which is the honest alternative to pretending it is still in view.
  */
+import { createHash } from "node:crypto";
 import type { CapygenStore } from "@capygen/db";
 import {
   IMPORTED_REFERENCE_SPEAKER_LABEL,
@@ -36,6 +46,20 @@ import type { Block } from "@capygen/shared";
 
 /** Longest tool result replayed verbatim; the rest is a marked stub (R25). */
 const MAX_REPLAYED_RESULT_CHARS = 8 * 1024;
+
+/**
+ * What a replayed history may spend on pictures (R24/R25).
+ *
+ * Both bounds are enforced together and across the *whole* replay, not per
+ * message: four 5 MiB screenshots are four attachments and also 20 MiB, and it
+ * is the byte total that decides what every later turn costs, since a replayed
+ * image is re-sent on every request the session makes from then on.
+ */
+export const MAX_REPLAYED_IMAGES = 4;
+export const MAX_REPLAYED_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** Reads one stored attachment; absent (or null) means "cannot be replayed". */
+export type AttachmentReader = (block: Extract<Block, { kind: "image" }>) => Buffer | null;
 
 function textOf(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -60,6 +84,7 @@ export function loadApiHistory(
   store: CapygenStore,
   session: HarnessSession,
   agent: HarnessAgent,
+  readAttachment?: AttachmentReader,
 ): ChatMessage[] {
   const turns = store.turns.list(session.sessionId);
   const blocks = store.blocks.listBySession(session.sessionId);
@@ -70,6 +95,49 @@ export function loadApiHistory(
     else byTurn.set(block.turnId, [block]);
   }
   const agentName = new Map(store.sessions.historicalAgents(session.sessionId).map((a) => [a.id, a.name]));
+
+  // Which pictures are actually re-sent, decided before the walk so the rest
+  // can be replayed as a note instead.
+  //
+  // Chosen newest-first, because the picture the conversation is currently
+  // about is the one worth paying for on every subsequent request, and stopped
+  // by whichever bound is reached first — count or bytes. Two references to the
+  // same stored file, and two files with identical content, are replayed once:
+  // the model gains nothing from the second copy and each one is billed again.
+  const prepared = new Map<string, Buffer>();
+  /** Block ids whose picture is carried by another block in this replay. */
+  const duplicates = new Set<string>();
+  if (readAttachment) {
+    const digests = new Set<string>();
+    const seenAttachments = new Set<string>();
+    let spent = 0;
+    const imageBlocks = blocks.filter(
+      (b): b is Extract<Block, { kind: "image" }> => b.kind === "image",
+    );
+    for (let index = imageBlocks.length - 1; index >= 0; index -= 1) {
+      const block = imageBlocks[index]!;
+      if (prepared.size >= MAX_REPLAYED_IMAGES) break;
+      // The same stored file twice: the later reference is already carrying it.
+      if (seenAttachments.has(block.attachmentId)) {
+        duplicates.add(block.id);
+        continue;
+      }
+      const bytes = readAttachment(block);
+      // A file that is gone is announced, never faked.
+      if (!bytes) continue;
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      // Byte-identical content under a different attachment id.
+      if (digests.has(digest)) {
+        duplicates.add(block.id);
+        continue;
+      }
+      if (spent + bytes.byteLength > MAX_REPLAYED_IMAGE_BYTES) continue;
+      digests.add(digest);
+      seenAttachments.add(block.attachmentId);
+      prepared.set(block.id, bytes);
+      spent += bytes.byteLength;
+    }
+  }
 
   const messages: ChatMessage[] = [];
   const pushUser = (content: ChatContent[]): void => {
@@ -108,7 +176,25 @@ export function loadApiHistory(
         .map((b) => b.text)
         .join("\n")
         .trim();
-      if (text) pushUser([{ type: "text", text }]);
+      const content: ChatContent[] = text ? [{ type: "text", text }] : [];
+      for (const block of own) {
+        if (block.kind !== "image") continue;
+        const bytes = prepared.get(block.id) ?? null;
+        if (bytes) {
+          content.push({ type: "image", mediaType: block.mediaType, data: bytes.toString("base64") });
+          continue;
+        }
+        // Never "here is the image": it is not being sent. A duplicate says so
+        // precisely, because the model *can* see that picture — further down.
+        const elsewhere = duplicates.has(block.id);
+        content.push({
+          type: "text",
+          text: elsewhere
+            ? `[image attachment "${block.name}" (${block.mediaType}); the same image is included later in this conversation]`
+            : `[image attachment "${block.name}" (${block.mediaType}) was sent earlier and is not re-sent here]`,
+        });
+      }
+      if (content.length > 0) pushUser(content);
       continue;
     }
 
@@ -166,8 +252,9 @@ export function loadApiHistory(
           break;
         }
         default:
-          // permission / question / elicitation / widget / diff / usage / error
-          // / subagent are capygen's own UI record of the turn. The model
+          // image (an agent turn never carries one) / permission / question /
+          // elicitation / widget / diff / usage / error / subagent are
+          // capygen's own UI record of the turn. The model
           // already saw their effect (the tool ran, or it did not); replaying
           // them would be inventing conversation.
           break;

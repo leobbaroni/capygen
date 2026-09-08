@@ -19,7 +19,7 @@ import { openStore, type CapygenStore } from "@capygen/db";
 import { AsyncQueue, CodexHarness, type EngineEvent, type Harness, type HarnessAgent } from "@capygen/engine";
 import { parseInvokeArgs, parseInvokeResult, type InvokeChannel, type HarnessInfo } from "@capygen/shared";
 import { createIpcContext, type IpcContext } from "../src/ipc/handlers.js";
-import { createSessionRunner, type HarnessExtras } from "../src/engine/SessionRunner.js";
+import { backendSessionToolsKey, createSessionRunner, type HarnessExtras } from "../src/engine/SessionRunner.js";
 import { createFakeAppServer, settle, type FakeAppServer } from "../../../packages/engine/test/codexFakeAppServer.js";
 
 const THREAD_ID = "thread_codex_1";
@@ -280,9 +280,9 @@ describe("a Codex lead is given delegate_task as a dynamic tool", () => {
     const server = await openTurn(sessionId);
 
     const start = threadStarts.at(-1)!;
-    expect(start.dynamicTools).toEqual([
-      expect.objectContaining({ type: "function", name: "delegate_task" }),
-    ]);
+    expect(start.dynamicTools).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "function", name: "delegate_task" })]),
+    );
 
     server.notify("item/started", itemFrame("inProgress"));
     await settle();
@@ -297,11 +297,37 @@ describe("a Codex lead is given delegate_task as a dynamic tool", () => {
     expect(startedChildren[0]!.backend).toBe("api");
   });
 
-  it("declares nothing when the agent has no routing rule", async () => {
+  it("declares it for an agent with no routing rule at all", async () => {
+    // The tool used to exist only for an agent whose user had configured a
+    // cross-backend rule — settings that no longer have a UI. Without a rule
+    // the default target is the agent's own backend and model, which is a real
+    // sub-agent, so the tool is declared like any other.
     const { sessionId } = await makeSession({ route: false });
     await openTurn(sessionId);
-    expect(threadStarts.at(-1)).not.toHaveProperty("dynamicTools");
-    expect(codexExtras.at(-1)?.dynamicTools).toBeUndefined();
+    expect(threadStarts.at(-1)!.dynamicTools).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "function", name: "delegate_task" })]),
+    );
+    expect(codexExtras.at(-1)?.dynamicTools?.map((tool) => tool.name)).toContain("delegate_task");
+  });
+
+  it("runs a call that names a backend, with no routing rule behind it", async () => {
+    const { sessionId } = await makeSession({ route: false, permissionMode: "bypassPermissions" });
+    const server = await openTurn(sessionId);
+    server.notify("item/started", itemFrame("inProgress"));
+    await settle();
+    const answer = server.ask(
+      "item/tool/call",
+      dynamicCall({
+        arguments: { description: "child work", prompt: "do it", backend: "api", model: "gpt-5" },
+      }),
+    );
+    await vi.waitFor(() => expect(childHarness).not.toBeNull());
+    childHarness!.finish("the api child answered");
+    const response = (await answer) as { contentItems: { text?: string }[]; success: boolean };
+    expect(response.success).toBe(true);
+    // No stored routing rule was involved: the call named the target itself.
+    expect(startedChildren[0]!.backend).toBe("api");
+    expect(startedChildren[0]!.model).toBe("gpt-5");
   });
 
   it("does not infer a host bypass from Codex's own approvalPolicy=never", async () => {
@@ -515,8 +541,12 @@ describe("continuity when a fresh thread is forced (R26-bounded)", () => {
     expect(prompts[0]).toBe("do the thing");
   });
 
-  it("starts a fresh thread when every tool is removed, not just when they change", async () => {
-    const { sessionId, agentId } = await makeSession();
+  it("starts a fresh thread for a stored thread that predates the tool", async () => {
+    // The mirror of the signature check above, and the case every installation
+    // meets once now that the tool is universal: a thread created by a build
+    // that declared nothing carries no signature, and cannot be handed a tool
+    // set after the fact — so it is replaced rather than resumed.
+    const { sessionId, agentId } = await makeSession({ route: false });
     const first = await openTurn(sessionId);
     first.notify("session", { threadId: THREAD_ID });
     first.notify("turn/completed", {
@@ -526,17 +556,11 @@ describe("continuity when a fresh thread is forced (R26-bounded)", () => {
     await settle();
     await restart();
 
-    // The rule now keeps sub-agents on Codex itself, so there is nothing to
-    // delegate and the agent declares no tools at all — but the stored thread
-    // still advertises `delegate_task` to the model.
-    await call("agents.update", {
-      agentId,
-      patch: { subagentRouting: { backend: "codex", model: "gpt-5.6-luna" } },
-    });
+    store.settings.setRaw(backendSessionToolsKey(agentId), null);
     await openTurn(sessionId);
     const params = threadStarts.at(-1)!;
     expect(params).not.toHaveProperty("threadId");
-    expect(params).not.toHaveProperty("dynamicTools");
+    expect(params.dynamicTools).toBeDefined();
   });
 
   it("keeps the thread when only the routing target changes", async () => {

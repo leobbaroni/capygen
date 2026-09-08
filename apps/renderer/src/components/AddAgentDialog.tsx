@@ -1,8 +1,7 @@
 /**
  * "Add agent" dialog (SPEC items B2.1/B2.3): backend, model, display name,
  * mention name (auto-derived from the display name, editable), role, an
- * optional per-agent sub-agent routing override (backend/model, SPEC R12)
- * and description — field set ported from
+ * supported model effort and description — field set ported from
  * reference/omnigent/web/src/shell/AddAgentDialog.tsx + CreateAgentDialog.tsx,
  * adapted to capygen's backend/model shape (no agent catalog to pick from —
  * `harness.list` is the whole picker).
@@ -18,7 +17,7 @@
  *     `store.addAgent`, which itself composes two IPC calls because
  *     `agents.add`'s channel only accepts
  *     `{backend, model, displayName, mentionName, role, config}` —
- *     `description`/`subagentRouting`/`color` go through a follow-up
+ *     `description`/`color` go through a follow-up
  *     `agents.update` (`AgentPatchSchema`, which does carry them) once the
  *     agent exists. See `appStore.ts`'s `addAgent` for that composition.
  *
@@ -27,11 +26,11 @@
  * must not already be used by another agent in this session/draft roster.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { MentionNameSchema, deriveMentionName, type AgentDraft, type Backend, type HarnessInfo, type RoutingTarget } from "@capygen/shared";
+import { MentionNameSchema, deriveMentionName, type AgentDraft, type Backend, type HarnessInfo } from "@capygen/shared";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { supportedEfforts, withAgentEffort } from "@/lib/agentDisplay";
 import { useAppStore } from "@/store/appStore";
 
 export interface AddAgentDialogProps {
@@ -55,6 +54,10 @@ function firstAvailable(harnesses: HarnessInfo[]): HarnessInfo | null {
   return harnesses.find((h) => h.available) ?? null;
 }
 
+function initialModel(harness: HarnessInfo | null): string {
+  return harness?.models.find((model) => model.id === harness.defaultModel)?.id ?? harness?.models[0]?.id ?? "";
+}
+
 export function AddAgentDialog({
   open,
   onOpenChange,
@@ -69,27 +72,18 @@ export function AddAgentDialog({
   const available = useMemo(() => harnesses.filter((h) => h.available), [harnesses]);
 
   const [backend, setBackend] = useState<Backend | "">(() => firstAvailable(harnesses)?.backend ?? "");
-  const [model, setModel] = useState<string>(() => firstAvailable(harnesses)?.defaultModel ?? "");
+  const [model, setModel] = useState<string>(() => initialModel(firstAvailable(harnesses)));
   const [displayName, setDisplayName] = useState("");
   const [mentionName, setMentionName] = useState("");
   const [mentionEdited, setMentionEdited] = useState(false);
   const [makeLead, setMakeLead] = useState(defaultLead);
   const [description, setDescription] = useState("");
-  const [routingBackend, setRoutingBackend] = useState<Backend | "">("");
-  const [routingModel, setRoutingModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const currentHarness = available.find((h) => h.backend === backend) ?? null;
-  /**
-   * A Codex parent cannot be handed a `delegate_task` tool at all — `codex
-   * app-server` takes MCP servers only from `~/.codex/config.toml` and capygen
-   * will not write one behind the user's back (ADR-0004, `canDelegateFrom`).
-   * A cross-backend rule on such an agent is not a preference the product
-   * honours later; it is dead on arrival, so the options say so rather than
-   * accepting a policy that silently fails open.
-   */
-  const crossBackendRouting = backend !== "codex";
+  const efforts = backend ? supportedEfforts(harnesses, backend, model) : [];
 
   // Auto-derive the mention name from the display name until the user edits
   // it directly — the same "auto, then sticky once touched" pattern the
@@ -101,14 +95,13 @@ export function AddAgentDialog({
   function resetFields(): void {
     const first = firstAvailable(harnesses);
     setBackend(first?.backend ?? "");
-    setModel(first?.defaultModel ?? "");
+    setModel(initialModel(first));
     setDisplayName("");
     setMentionName("");
     setMentionEdited(false);
     setMakeLead(defaultLead);
     setDescription("");
-    setRoutingBackend("");
-    setRoutingModel("");
+    setEffort("");
     setError(null);
     setSubmitting(false);
   }
@@ -143,7 +136,7 @@ export function AddAgentDialog({
     const first = firstAvailable(harnesses);
     if (!first) return;
     setBackend(first.backend);
-    setModel(first.defaultModel);
+    setModel(initialModel(first));
   }, [harnesses, backend]);
 
   function handleOpenChange(next: boolean): void {
@@ -152,7 +145,8 @@ export function AddAgentDialog({
 
   function validate(): string | null {
     if (!backend) return "Choose a backend.";
-    if (!model.trim()) return "Choose a model.";
+    if (!model.trim() || !currentHarness?.models.some((entry) => entry.id === model)) return "Choose an available model.";
+    if (effort && !efforts.includes(effort)) return "Choose a supported effort.";
     if (!displayName.trim()) return "Enter a display name.";
     const parsed = MentionNameSchema.safeParse(mentionName);
     if (!parsed.success) {
@@ -163,14 +157,6 @@ export function AddAgentDialog({
     }
     return null;
   }
-
-  const routing: RoutingTarget | undefined =
-    routingBackend || routingModel.trim()
-      ? {
-          ...(routingBackend ? { backend: routingBackend } : {}),
-          ...(routingModel.trim() ? { model: routingModel.trim() } : {}),
-        }
-      : undefined;
 
   async function handleSubmit(): Promise<void> {
     const problem = validate();
@@ -191,8 +177,7 @@ export function AddAgentDialog({
         model,
         role: makeLead ? "lead" : "member",
         ...(description.trim() ? { description: description.trim() } : {}),
-        ...(routing ? { subagentRouting: routing } : {}),
-        config: null,
+        config: effort ? withAgentEffort(null, chosenBackend, effort) : null,
       });
       handleOpenChange(false);
       return;
@@ -209,7 +194,7 @@ export function AddAgentDialog({
         mentionName,
         role: makeLead ? "lead" : "member",
         ...(description.trim() ? { description: description.trim() } : {}),
-        ...(routing ? { subagentRouting: routing } : {}),
+        ...(effort ? { config: withAgentEffort(null, chosenBackend, effort) } : {}),
       });
       handleOpenChange(false);
     } catch (err) {
@@ -243,12 +228,8 @@ export function AddAgentDialog({
                       const nextBackend = e.target.value as Backend;
                       setBackend(nextBackend);
                       const harness = available.find((h) => h.backend === nextBackend);
-                      setModel(harness?.defaultModel ?? harness?.models[0]?.id ?? "");
-                      // A rule this backend cannot apply must not survive the
-                      // switch as an invisible no-op.
-                      if (nextBackend === "codex" && routingBackend && routingBackend !== "codex") {
-                        setRoutingBackend("");
-                      }
+                      setModel(initialModel(harness ?? null));
+                      setEffort("");
                     }}
                     className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring"
                   >
@@ -268,7 +249,7 @@ export function AddAgentDialog({
                     id="add-agent-model"
                     data-testid="add-agent-model"
                     value={model}
-                    onChange={(e) => setModel(e.target.value)}
+                    onChange={(e) => { setModel(e.target.value); setEffort(""); }}
                     className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring"
                   >
                     {(currentHarness?.models ?? []).map((m) => (
@@ -279,6 +260,8 @@ export function AddAgentDialog({
                   </select>
                 </Field>
               </div>
+
+              {efforts.length > 0 ? <Field label="Effort" htmlFor="add-agent-effort"><select id="add-agent-effort" data-testid="add-agent-effort" value={effort} onChange={(event) => setEffort(event.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="">Backend default</option>{efforts.map((value) => <option key={value} value={value}>{value}</option>)}</select></Field> : null}
 
               <Field label="Display name" htmlFor="add-agent-name">
                 <input
@@ -336,49 +319,7 @@ export function AddAgentDialog({
                 />
               </Field>
 
-              <fieldset className="flex flex-col gap-1.5 rounded-md border border-border-weak p-2.5">
-                <legend className="px-1 text-xs font-medium text-muted-foreground">
-                  Sub-agent routing (SPEC R12) — optional, overrides the session default
-                </legend>
-                <div className="flex gap-2">
-                  <select
-                    aria-label="Sub-agent routing backend"
-                    data-testid="add-agent-routing-backend"
-                    value={routingBackend}
-                    onChange={(e) => setRoutingBackend(e.target.value as Backend | "")}
-                    className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
-                  >
-                    <option value="">Inherit parent's backend</option>
-                    <option value="claude" disabled={!crossBackendRouting}>
-                      {BACKEND_LABEL.claude}
-                    </option>
-                    <option value="codex">{BACKEND_LABEL.codex}</option>
-                    <option value="api" disabled={!crossBackendRouting}>
-                      {BACKEND_LABEL.api}
-                    </option>
-                  </select>
-                  <input
-                    type="text"
-                    aria-label="Sub-agent routing model"
-                    data-testid="add-agent-routing-model"
-                    value={routingModel}
-                    onChange={(e) => setRoutingModel(e.target.value)}
-                    placeholder="model (optional)"
-                    className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none"
-                  />
-                </div>
-                {!crossBackendRouting ? (
-                  <p
-                    data-testid="add-agent-routing-note"
-                    className="px-1 text-xs text-muted-foreground"
-                  >
-                    A Codex agent can only route sub-agents to Codex. capygen cannot hand{" "}
-                    <code>codex app-server</code> a tool — it reads MCP servers only from{" "}
-                    <code>~/.codex/config.toml</code> (ADR-0004) — so another backend here
-                    would fail open onto Codex's own model.
-                  </p>
-                ) : null}
-              </fieldset>
+
             </>
           )}
 

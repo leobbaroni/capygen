@@ -36,10 +36,12 @@
  * project it started on even though another window has moved on.
  */
 import path from "node:path";
+import fs from "node:fs";
 import type { CapygenStore } from "@capygen/db";
 import {
   API_MCP_SETTINGS_KEY,
   ApiConfigStore,
+  nodeFileIo,
   ClaudeConfigStore,
   CodexConfigStore,
   claudeWatchTargets,
@@ -62,6 +64,7 @@ import type {
   ToolPolicyEntry,
 } from "@capygen/shared";
 import { assertNoInlineAgentMcpCredentials } from "@capygen/shared";
+import { sharedSkillMetadataIo, type SharedSkillSource } from "../engine/sharedSkills.js";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
 import { defaultConfirm } from "../prereqs/electronDefaults.js";
 import type { ConfirmOptions } from "../prereqs/runGate.js";
@@ -208,6 +211,19 @@ export class IntegrationsService {
     return resolveBackendHomes(this.deps.env ?? process.env, this.deps.home);
   }
 
+  sharedSkillSources(projectId?: string): SharedSkillSource[] {
+    const scope = this.scopeFor(projectId);
+    const homes = this.homes();
+    const claudePaths = this.claude(scope).paths;
+    const codexPaths = this.codex(scope).paths;
+    const rootsFor = (paths: typeof claudePaths | typeof codexPaths) => [paths.userSkillsDir, path.join(paths.configDir, "plugins"), ...(paths.projectSkillsDir ? [paths.projectSkillsDir] : [])];
+    const claudeRoots = rootsFor(claudePaths), codexRoots = rootsFor(codexPaths);
+    const base = this.deps.io ?? nodeFileIo;
+    const claude = new ClaudeConfigStore({ configDir: homes.claude, home: homes.home, env: this.deps.env ?? process.env, projectPath: scope.projectPath, io: sharedSkillMetadataIo(base, claudeRoots) }).read();
+    const codex = new CodexConfigStore({ configDir: homes.codex, projectPath: scope.projectPath, io: sharedSkillMetadataIo(base, codexRoots) }).read();
+    return [{ skills: claude.skills, plugins: claude.plugins, roots: claudeRoots }, { skills: codex.skills, plugins: codex.plugins, roots: codexRoots }];
+  }
+
   claude(scope: ProjectScope = GLOBAL_SCOPE): ClaudeConfigStore {
     const homes = this.homes();
     return new ClaudeConfigStore({
@@ -324,6 +340,25 @@ export class IntegrationsService {
       tools: this.toolPolicies(args.backend, snapshot),
       lastSync: this.sync.lastSyncAt(args.backend, scope),
     };
+  }
+
+  /** Only canonical backend directories can reach the shell; never a renderer path. */
+  async openFolder(args: InvokeArgs<"integrations.openFolder">): Promise<{ ok: boolean }> {
+    if (!this.deps.openPath) throw new Error("Folder opening is unavailable in this host.");
+    const paths = args.backend === "claude" ? this.claude().paths : this.codex().paths;
+    const directory = args.kind === "skills" ? paths.userSkillsDir
+      : args.kind === "plugins" ? path.join(paths.configDir, "plugins")
+      : args.backend === "claude" ? path.dirname(this.claude().paths.globalConfig)
+      : path.dirname(this.codex().paths.configToml);
+    // Missing child folders fall back to their existing backend directory. Opening
+    // a folder never creates configuration or installs a backend as a side effect.
+    let target = directory;
+    if (!fs.existsSync(target) && args.kind !== "mcp") target = paths.configDir;
+    if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+      throw new Error("This backend configuration folder does not exist yet. Set up the backend first.");
+    }
+    await this.deps.openPath(target);
+    return { ok: true };
   }
 
   private toolPolicies(backend: Backend, snapshot: IntegrationsSnapshot): ToolPolicyEntry[] {

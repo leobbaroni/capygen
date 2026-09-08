@@ -33,9 +33,20 @@ const SCOPE_OPTIONS: { value: SkillScope; label: string }[] = [
 
 export function SkillsSection() {
   const [tab, setTab] = useState<Backend>("claude");
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  async function openFolder(): Promise<void> {
+    if (tab === "api") return;
+    setOpening(true); setFolderError(null);
+    try { await ipc().invoke("integrations.openFolder", { backend: tab, kind: "skills" }); }
+    catch (error) { setFolderError(error instanceof Error ? error.message : String(error)); }
+    finally { setOpening(false); }
+  }
   return (
     <div data-testid="settings-skills">
-      <SectionIntro title="Skills" description="Reusable instructions each backend can invoke." />
+      <SectionIntro title="Skills" description="Enabled Claude and Codex skill instructions are shared with all agents. Their files remain the source of truth." />
+      {tab !== "api" ? <Button variant="outline" size="sm" disabled={opening} onClick={() => void openFolder()} className="mb-3">Open folder</Button> : null}
+      {folderError ? <RowError message={folderError} /> : null}
       <div className="mb-4 flex gap-1 border-b border-border-weak" role="tablist" aria-label="Backend">
         {BACKENDS.map((b) => (
           <button
@@ -51,7 +62,11 @@ export function SkillsSection() {
           </button>
         ))}
       </div>
-      <SkillsBackendPanel backend={tab} />
+      {tab === "api" ? <div data-testid="skills-panel-api" className="space-y-4">
+        <p className="text-sm text-muted-foreground">API agents read shared instructions from these native sources. Referenced plugin tools still need to be available to the agent.</p>
+        <section><h3 className="mb-2 text-sm font-medium">Claude Code source</h3><SkillsBackendPanel backend="claude" /></section>
+        <section><h3 className="mb-2 text-sm font-medium">Codex source</h3><SkillsBackendPanel backend="codex" /></section>
+      </div> : <SkillsBackendPanel backend={tab} />}
     </div>
   );
 }
@@ -88,7 +103,7 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
           onRefresh={() => void rows.run("refresh", refreshFromBackend)}
           testId="skills-sync"
         />
-        <Button size="sm" data-testid="skill-create-button" onClick={() => setCreating(true)}>
+        <Button size="sm" disabled={backend === "api"} title={backend === "api" ? "API agents do not have a native skill loader" : undefined} data-testid="skill-create-button" onClick={() => setCreating(true)}>
           Create skill
         </Button>
       </div>
@@ -96,7 +111,7 @@ function SkillsBackendPanel({ backend }: { backend: Backend }) {
         <RowError message={rows.errorFor("refresh") as string} testId="skills-refresh-error" />
       ) : null}
       {skills.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No skills found for this backend.</p>
+        <p className="text-sm text-muted-foreground">{backend === "api" ? "No skills are available for API agents. Native skills remain in their Claude Code or Codex folders." : "No skills found for this backend."}</p>
       ) : (
         skills.map((skill) => {
           const key = `${skill.scope}:${skill.name}`;

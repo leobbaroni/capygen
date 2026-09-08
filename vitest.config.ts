@@ -28,6 +28,7 @@ export default defineConfig({
       {
         test: {
           name: "engine",
+          setupFiles: [fileURLToPath(new URL("./tests/unit/isolatedHomes.ts", import.meta.url))],
           root: "./packages/engine",
           environment: "node",
           include: ["test/**/*.test.ts"],
@@ -36,6 +37,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop",
+          setupFiles: [fileURLToPath(new URL("./tests/unit/isolatedHomes.ts", import.meta.url))],
           root: "./apps/desktop",
           environment: "node",
           include: ["test/**/*.test.ts"],

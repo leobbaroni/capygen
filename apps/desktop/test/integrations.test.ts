@@ -202,7 +202,7 @@ describe("contract coverage", () => {
     for (const channel of INTEGRATIONS_CHANNELS) {
       expect(typeof ipc.handlers[channel]).toBe("function");
     }
-    expect(INTEGRATIONS_CHANNELS).toHaveLength(15);
+    expect(INTEGRATIONS_CHANNELS).toHaveLength(16);
   });
 });
 
@@ -621,6 +621,30 @@ describe("integrations.mcp.test", () => {
 const SKILL_MD = ["---", "name: capy", "---", ""].join("\n");
 
 describe("integrations.skill.open only opens skills capygen lists", () => {
+  it("shared skills re-read canonical enabled metadata without copying instructions", () => {
+    const file = path.join(codexHome, "skills", "shared", "SKILL.md");
+    write(file, "---\nname: shared\ndescription: Canonical fixture\n---\nBody");
+    const source = ipc.integrations.sharedSkillSources().find((source) => source.skills.some((skill) => skill.name === "shared"));
+    expect(source?.skills[0]).toMatchObject({ backend: "codex", path: file, enabled: true });
+    fs.renameSync(file, path.join(path.dirname(file), "SKILL.md.disabled"));
+    expect(ipc.integrations.sharedSkillSources().flatMap((source) => source.skills)).not.toContainEqual(expect.objectContaining({ name: "shared", enabled: true }));
+    expect(fs.existsSync(path.join(claudeHome, "skills", "shared"))).toBe(false);
+  });
+  it("opens only the selected canonical folder, refuses executable targets and creates no files", async () => {
+    const skills = path.join(claudeHome, "skills");
+    fs.mkdirSync(skills, { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    await call("integrations.openFolder", { backend: "claude", kind: "skills" });
+    await call("integrations.openFolder", { backend: "codex", kind: "plugins" });
+    await call("integrations.openFolder", { backend: "claude", kind: "mcp" });
+    expect(opened).toEqual([skills, codexHome, claudeHome]);
+    expect(fs.existsSync(path.join(codexHome, "plugins"))).toBe(false);
+    await expect(call("integrations.openFolder", { backend: "claude", kind: "skills", path: "C:/attack.exe" })).rejects.toThrow();
+    await expect(call("integrations.openFolder", { backend: "api", kind: "skills" })).rejects.toThrow();
+    fs.writeFileSync(path.join(codexHome, "plugins"), "not a directory");
+    await expect(call("integrations.openFolder", { backend: "codex", kind: "plugins" })).rejects.toThrow("does not exist");
+    expect(opened).toHaveLength(3);
+  });
   it("opens a real skill file", async () => {
     const file = path.join(claudeHome, "skills", "capy", "SKILL.md");
     write(file, SKILL_MD);

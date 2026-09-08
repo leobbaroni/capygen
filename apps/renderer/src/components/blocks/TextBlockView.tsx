@@ -6,10 +6,19 @@
  * code, blockquotes) gets Tailwind classes instead of the `@tailwindcss/
  * typography` plugin, which isn't installed.
  */
+import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TextBlock } from "@capygen/shared";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/store/appStore";
+
+const BUILT_INS = new Set(["/compact", "/context", "/effort", "/model", "/help", "/clear", "/cost"]);
+function highlight(value: React.ReactNode, recognized: ReadonlySet<string>): React.ReactNode {
+  if (typeof value !== "string") return value;
+  const parts = value.split(/((?:^|\s)(?:[@/])[\w:.-]+(?![\w/-]))/g);
+  return parts.map((part, index) => { const token = part.trim().toLowerCase(); return recognized.has(token) ? <span key={index}>{part.match(/^\s*/)?.[0]}<span className="rounded bg-primary/10 text-primary">{part.trim()}</span></span> : part; });
+}
 
 const components: Components = {
   p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
@@ -56,6 +65,10 @@ const components: Components = {
 };
 
 export function TextBlockView({ block, isUser }: { block: TextBlock; isUser: boolean }) {
+  const agents = useAppStore((state) => state.agents);
+  const commands = useAppStore((state) => state.commands);
+  const recognized = new Set([...BUILT_INS, ...commands.map((command) => command.name.toLowerCase()), ...agents.map((agent) => `@${agent.mentionName.toLowerCase()}`)]);
+  const markdownComponents: Components = isUser ? { ...components, p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{React.Children.map(children, (child) => highlight(child, recognized))}</p> } : components;
   return (
     <div
       data-testid="block-text"
@@ -66,7 +79,7 @@ export function TextBlockView({ block, isUser }: { block: TextBlock; isUser: boo
           : "text-foreground",
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {block.text}
       </ReactMarkdown>
     </div>

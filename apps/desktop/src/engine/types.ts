@@ -1,3 +1,4 @@
+import type { ToolDefinition } from "../../../../packages/engine/src/tools/types.js";
 /**
  * The seam between the IPC handlers and whatever actually answers a turn.
  *
@@ -7,7 +8,7 @@
  * is the echo double the handler tests run against.
  */
 import type { CapygenStore } from "@capygen/db";
-import type { KeyProvider, McpServerConfig } from "@capygen/engine";
+import type { KeyProvider, McpServerConfig, TurnImage } from "@capygen/engine";
 import type {
   AgentDescribe,
   AgentRuntimeInfo,
@@ -19,6 +20,7 @@ import type {
 } from "@capygen/shared";
 import type { McpPoolRegistry } from "../ipc/mcpPools.js";
 import type { WidgetHostHandlers } from "../ipc/widgets.js";
+import type { AttachmentStore, StoredImage } from "../ipc/attachments.js";
 
 export type Broadcast = <E extends EventChannel>(event: E, payload: EventInput<E>) => void;
 
@@ -30,6 +32,7 @@ export interface EngineLogger {
 
 export interface EngineDeps {
   store: CapygenStore;
+  sharedSkillTools?: (projectId: string) => ToolDefinition[];
   broadcast: Broadcast;
   log: EngineLogger;
   /**
@@ -55,6 +58,13 @@ export interface EngineDeps {
    * twice per session. Absent in tests and in the stub engine.
    */
   pools?: McpPoolRegistry;
+  /**
+   * The image attachment store (`ipc/attachments.ts`), used to read a stored
+   * picture back when an `api` agent's history is replayed after a restart.
+   * Absent in the echo double and in tests that never attach an image, in which
+   * case a replayed image is announced as not re-sent rather than faked.
+   */
+  attachments?: AttachmentStore;
   /** Main-process resolver for the exact MCP list captured by a harness. */
   resolveMcpServers?: (args: {
     backend: Backend;
@@ -70,6 +80,13 @@ export interface EngineSendArgs {
   /** Which agent speaks; the session's lead when null. */
   agentId?: string | null;
   text: string;
+  /**
+   * Images the user attached to the message this turn answers, already stored
+   * (`ipc/attachments.ts`). Only the turns a *user* message opens carry them:
+   * an agent-to-agent hop is text, so a picture is never re-sent as if a second
+   * model had been shown it.
+   */
+  images?: readonly TurnImage[];
 }
 
 export interface EnginePermissionAnswer {
@@ -84,6 +101,13 @@ export interface EngineDispatchArgs {
   text: string;
   /** The composer's explicit agent pick; mention parsing decides when absent. */
   agentId?: string | null;
+  /**
+   * Verified, stored images from `chat.send`. Each becomes an `image` block on
+   * the user's turn (so the transcript still shows it after a restart) and is
+   * handed to every target agent whose model can read images; one that cannot
+   * gets an explicit error instead of a silently text-only message.
+   */
+  images?: readonly StoredImage[];
 }
 
 export interface EngineDispatchResult {
@@ -144,6 +168,7 @@ export interface Engine {
    * rather than a guess.
    */
   describeAgent(agentId: string): Promise<AgentDescribe>;
+  agentContexts?(sessionId: string): import("@capygen/shared").AgentContextSnapshot[];
   /**
    * The backend's own commands/skills/plugins for the agent that will receive
    * the next message — the session's lead unless `agentId` names another (R14).

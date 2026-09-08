@@ -166,6 +166,14 @@ export function projectShareBundle(input: ShareProjectionInput): ShareBundle {
           kind: "message", speaker, text: text.text } });
         break;
       }
+      case "image": {
+        // Shared bundles are text-only: disclose the omitted picture without
+        // exporting its local identity, filename or bytes.
+        push(sourceIndex, { redactions: 0, entry: {
+          index: 0, at, label: "attachment", truncated: false,
+          kind: "notice", text: "An image was attached here. Image contents are not included in this shared transcript." } });
+        break;
+      }
       case "thinking": {
         if (!input.options.includeReasoning) { dropped.thinking += 1; break; }
         const text = sanitize(block.text, MAX_TEXT_BYTES);
