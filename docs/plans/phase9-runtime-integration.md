@@ -3,6 +3,13 @@
 Astra decision, 2026-09-08. This supplements ADR-0007; it is an implementation brief,
 not evidence that the boundaries below are already enforced.
 
+Root has now added the shared integration contracts (2026-09-08):
+`PermissionRequest.localPolicy?: {ruleId: string|null, scope: LocalPolicyScope|null,
+boundary: PolicyBoundary}` is display attribution only. `policy.changed` carries
+`{area: "members"|"subjects"|"rules"|"grants"|"runtime", sessionId: string|null}`
+(sessionId defaults to null). Existing permission.answer already supports scope "session";
+do not use historical "always" to mint a grant. These are available through shared exports.
+
 ## Engine and desktop boundary
 
 The engine receives an optional local authorization callback, never a rule store or policy

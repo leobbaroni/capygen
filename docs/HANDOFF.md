@@ -2,17 +2,27 @@
 
 ## Resume review — 2026-09-08
 
-Verified work is pushed privately through `5eab81a` (local policy service), following
-`0819486` (Codex desktop delegation). Completed worker outputs for MCP catalogue, sharing
-staging/worker IPC and policy management were recovered from session histories. Their code
-remains uncommitted while integration review is open. See `docs/plans/phase9-resume-review.md`
-for concrete findings and proof. No Phase 9 or later acceptance has been claimed.
+Verified work is pushed privately through `96f4cf9` (engine local interception and bounded
+native MCP catalogues). Prior foundations include `5dfc080` (renderer catalogue metadata),
+`5eab81a` (local policy service) and `0819486` (Codex desktop delegation). Engine acceptance:
+602 passed, four explicit skips, types clean, all eight native Claude hook cases proven.
+Phase 9 and later phases remain unaccepted; desktop/sharing/renderer integration is ongoing.
 
-Opus initially failed with `Login expired · Please run /login`. The user subsequently
-renewed login and all three Opus lanes resumed: MCP lifecycle fixes, sharing worker cleanup,
-and renderer Members/Policies pages. Astra is wiring and testing the native sharing shell.
-Luna's central policy IPC wiring has two isolated context tests and passes desktop typecheck.
-Outstanding review findings still require fixes and independent acceptance.
+Login was renewed and Opus lanes are healthy. Engine now owns the separate Windows 8.3-path
+containment false positive; desktop owns policy/widget integration; sharing/renderer owns
+Approve aggregation and fresh shared continuation. Root alone stages/commits. Luna reviewed
+the root native tool test and Phase 10–12 briefs without high/medium findings.
+
+Latest native checks: `localPoliciesShell.spec.ts` proves viewer refusal, persistence and
+management invalidation. `localPolicyTools.spec.ts` passes real tool execution, exact grants,
+revocation, busy reassignment refusal, restrictive viewer cancellation, stale-answer refusal
+and zero further provider requests (1 passed, 3.6s). Sharing first-use export/import/restart
+passed, but a new repeat-use assertion exposes Prepare staying disabled after save. Root also
+found stale finally callbacks can unlock another operation. These findings remain visible in
+the current review queue, alongside widget backend/boundary mismatch and notes anchor review.
+Read the full current findings in phase9-resume-review.md before accepting any worker output.
+In-flight broad mutation sweeps were stopped; do not mutate the shared checkout during
+another agent's build/tests. No pending changes are staged and state.lock remains unrelated.
 
 Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied

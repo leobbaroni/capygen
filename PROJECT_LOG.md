@@ -2238,3 +2238,143 @@ Commit 5dfc080 was pushed to origin/main. Catalogue IPC ownership checks also pa
 remains pending. Evidence: e2e-out/catalogue-ipc-green.log and catalogue-context.log.
 Renderer fixture captures at actual 700px viewport reported scrollWidth=700 for Members
 and Policies (e2e-out/policy-narrow.log); these do not establish native policy enforcement.
+
+### Phase 9 integration review continued — 2026-09-08
+
+Root independently confirmed the corrected worker foundation before the sharing UI wave:
+8 sharing files, 116 tests passed (2.33s), and native sharing/restart/comments 1 passed (5.0s).
+Evidence: e2e-out/sharing-astra-accepted-tests.log and sharing-reviewed-e2e.log. Later UI and
+local-note changes are not covered by that earlier result.
+
+Root's latest focused native-Windows checks:
+
+```text
+engine policy + catalogue
+Test Files  2 passed (2)
+Tests       98 passed (98)
+Duration    2.46s
+
+desktop runtime contexts + broker + service assembly + actual runner integration
+Test Files  4 passed (4)
+Tests       44 passed (44)
+Duration    2.50s
+
+native local-policy viewer refusal and persisted subject across restart
+1 passed (2.0s)
+```
+
+Logs: e2e-out/engine-policy-catalogue-astra.log, policy-corrective-astra.log and
+policy-native-shell.log. The native test uses the real main/service/runner and strips all
+provider keys, including when a suite test identity exists. It does not run a model.
+
+Two added integration assertions are deliberately red, with corrections assigned:
+
+```text
+policy-native-invalidation-red.log
+Expected: { area: "members", sessionId: null }
+Received: []
+Timeout 15000ms — successful profile rename emitted no policy.changed
+1 failed
+
+sharing-ui-native.log
+Prepare export: sharing.export.comments rejected by staging.use
+"this share is already being saved or imported"
+1 failed
+```
+
+The Sharing page requested entries and comments concurrently on an exclusive staged handle.
+Earlier direct-IPC assertions in that same native run passed. Root also found stale preview
+ownership, an export handle orphaned after save, missing comment pagination, and local-note
+anchor/UTF-8 issues. Corrections and deferred-response regressions are assigned to Opus;
+root redirected an unproductive broad mutation sweep to these concrete failures. No broad
+mutation sweep should alter the shared tree while another agent builds or tests it.
+
+The actual policy runtime/runner tests now cover cold owner dispatch, zero-start viewer and
+unavailable-boundary refusals, changed configuration, child checks and build-failure cleanup.
+Still required: originating-turn binding for ephemeral child/widget approval cards, widget
+connection enforcement, automation subject copying, catalogue/UI integration, explicit local
+session-grant actions, Approve aggregation, complete notes and fresh shared continuation.
+
+The native Claude loopback fixture now reports a passing Write control and three precedence
+cases (deny under allow/bypass, neutral under deny). Routed Agent precedence is still open;
+do not count the probe's nonzero exit as a pass. Codex request admission identity and Claude
+policy changes while native approval waits are under an additional corrective wave.
+
+Phases 9, 9C and 10–12 remain open. Root added implementation briefs for Phase 10 extension
+parity, Phase 11 measurement and Phase 12 private release/update behavior; these still need
+independent review. Last verified push remains 9a272e2; no in-flight changes were staged.
+
+Management invalidation correction confirmed by Astra through actual native preload/main:
+`localPoliciesShell.spec.ts` now passes all assertions, including the rename event.
+`e2e-out/policy-native-invalidation-green.log`: `1 passed (1.6s)`. This supersedes the
+invalidation failure above. The separate API-tool native regression is still red: its
+successful write control is followed by an ask whose permission.request event lacks required
+turnId/blockId; main event validation fails before the waiter is registered. Root tightened
+the test to require an actually waiting turn and successful answer delivery, then assigned
+the typed-event fix. No tool permission acceptance is inferred from a missing sentinel alone.
+
+Astra independently reran the native Claude loopback probe; its report contains eight proven
+cases, including positive Write/Agent controls, hook denials under native allow/bypass,
+neutral routed model rewriting, and native deny under both neutral and old allow hooks.
+Evidence: e2e-out/claude-hook-astra-proof.json/.err. This closes the routed-hook semantics
+question for the pinned CLI; the earlier claim that old allow widened a hard deny was not
+supported and the new control refutes it. Probe metadata/environment reporting cleanup and
+Codex early-arrival turn correlation remain review items before accepting the engine task.
+
+## 2026-09-08 — resumed native verification and engine acceptance
+
+Astra independently verified Opus runtime changes; this accepts the engine task, not Phase 9.
+Catalogue startup/cancellation, exact local authorization, native approval correlation and
+neutral Claude routing remain covered by engine regressions and native fixture probes.
+Final probe environment is allowlisted and the completed-turn deadline is cleared.
+Astra removed stale capability comments and updated COMPAT. No personal backend homes used.
+
+Literal output tails:
+```text
+$ corepack pnpm exec vitest run --project engine
+ Test Files  25 passed (25)
+      Tests  602 passed | 4 skipped (606)
+   Duration  5.47s
+$ corepack pnpm --filter @capygen/engine typecheck
+$ tsc --noEmit
+$ corepack pnpm --filter @capygen/engine probe:claude-hook-precedence
+[PROVEN] control-neutral-under-native-allow
+[PROVEN] deny-under-native-allow
+[PROVEN] deny-under-bypass
+[PROVEN] neutral-under-native-deny
+[PROVEN] routing-with-allow
+[PROVEN] routing-neutral
+[PROVEN] routing-neutral-under-native-deny
+[PROVEN] routing-allow-under-native-deny
+$ corepack pnpm build
+[build] desktop bundle written to C:\Users\TugaPlayz\Desktop\GITHUB\capygen\apps\desktop\dist
+$ corepack pnpm exec playwright test tests/e2e/localPolicyTools.spec.ts tests/e2e/sharingShell.spec.ts
+  2 passed (6.9s)
+$ corepack pnpm exec playwright test tests/e2e/localPolicyTools.spec.ts
+  1 passed (3.6s)
+```
+
+Final native tool test adds busy reassignment refusal, restrictive viewer cancellation,
+revoked-grant absence, stale-answer refusal and zero new provider requests after viewer
+dispatch. Earlier extensions failed on test expectations (IPC exposes session-busy code;
+chat.send returns a turn whose asynchronous status becomes error), corrected without
+changing app behavior. Luna independently reviewed this test and Phase 10–12 briefs with
+no high/medium findings. Sharing Prepare/export/import/restart UI is now green.
+Remaining Phase 9 work includes Approve aggregation, shared fresh continuation, MCP editor/
+Composer integration and the full gate. Build still reports the renderer chunk-size warning.
+
+Follow-up native Sharing note proof passed every assertion through local reply creation,
+resolution, restart, unchanged received comments, duplicate re-import and annotated re-export.
+The test remains red on the subsequent repeat-use UI regression:
+```text
+$ corepack pnpm exec playwright test tests/e2e/sharingShell.spec.ts
+Error: expect(locator).toBeEnabled() failed
+Locator: getByTestId('share-export-stage')
+Expected: enabled
+Received: disabled
+1 failed (19.3s)
+```
+This is not a notes phase acceptance or a full passing Sharing test. Root found the busy
+state generation mismatch in useStagedShare; stale finally callbacks also clear running
+without checking operation ownership. Correct before integrating the renderer task.
+Engine task `96f4cf9` was pushed to origin/main successfully; no force push.
