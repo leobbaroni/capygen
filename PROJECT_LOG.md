@@ -2194,3 +2194,47 @@ Astra reproduced a sharing worker generation bug with an owned fake-child probe:
 child's exit rejects a replacement child's valid request. Remaining review findings are
 tracked in docs/plans/phase9-resume-review.md; dependent code remains uncommitted pending
 correction and review. Phases 9, 9C and 10–12 remain open.
+
+## Phase 9 native sharing integration and corrective review — 2026-09-08
+
+User renewed Claude authentication; the three Opus lanes resumed. Astra wired the real
+sharing utility process into Electron main and added an owned-home native shell proof.
+No live model prompts or personal backend homes were used.
+
+```text
+corepack pnpm exec playwright test tests/e2e/sharingShell.spec.ts
+1 passed (4.6s)
+corepack pnpm exec vitest run apps/desktop/test/shareWorkerLifecycle.test.ts apps/desktop/test/shareWorkerFork.test.ts apps/desktop/test/sharingIpc.test.ts
+Test Files 3 passed (3)
+Tests 42 passed (42)
+Duration 2.28s
+```
+Evidence: e2e-out/sharing-shell-e2e.log and sharing-review-final.log. The shell proof covers
+actual worker/preload IPC, exact JSON/HTML saved sizes, restart persistence, duplicate import
+and unchanged source bytes. The initial proof predates added comment-preview assertions;
+those require a fresh native build/run. Root added paged import/export comment channels:
+
+```text
+Red: sharingIpc.test.ts — 1 failed, 21 passed (missing export comments handler)
+Green: sharingIpc.test.ts + ipc.test.ts — 2 files, 65 passed, 2.14s
+```
+Evidence: e2e-out/sharing-comments-red.log and sharing-comments-green.log.
+
+Opus independently reviewed root main/e2e. Astra keeps worker stdio ignored because raw
+parser diagnostics may contain input or secrets; fixed failure messages remain available.
+The worker is still under correction: retain creating reservations until settlement,
+confirm exit before freeing process budgets, validate bounded correlated responses and
+recognize renamed HTML carriers. Do not accept earlier green tests as proof of these cases.
+MCP adapter corrections include no late Claude startup, one unresolved query per lifecycle,
+and exact JSON-escaped metadata byte accounting. Engine policy hooks are the next active
+implementation wave. Members/Policies UI is in progress; runtime policy enforcement and
+Phase 9 acceptance remain pending. No phase checkboxes changed.
+
+
+Astra added a strict renderer catalogue metadata contract; 2 focused tests passed (810ms).
+Luna independently reviewed it and the paged sharing comments with no high/medium findings.
+Commit 5dfc080 was pushed to origin/main. Catalogue IPC ownership checks also passed:
+44 tests across shared IPC and desktop catalogue context (2.41s); runtime adapter wiring
+remains pending. Evidence: e2e-out/catalogue-ipc-green.log and catalogue-context.log.
+Renderer fixture captures at actual 700px viewport reported scrollWidth=700 for Members
+and Policies (e2e-out/policy-narrow.log); these do not establish native policy enforcement.

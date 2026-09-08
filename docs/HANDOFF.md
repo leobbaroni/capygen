@@ -8,10 +8,11 @@ staging/worker IPC and policy management were recovered from session histories. 
 remains uncommitted while integration review is open. See `docs/plans/phase9-resume-review.md`
 for concrete findings and proof. No Phase 9 or later acceptance has been claimed.
 
-Opus restart failed with `Login expired · Please run /login`; the user has been asked to
-sign in to the Claude agent session. Astra review and Luna's easy central IPC wiring continued.
-Resume the existing Opus sessions after sign-in, preserving ownership and outstanding review
-findings. Do not silently substitute another model for the requested Opus implementation.
+Opus initially failed with `Login expired · Please run /login`. The user subsequently
+renewed login and all three Opus lanes resumed: MCP lifecycle fixes, sharing worker cleanup,
+and renderer Members/Policies pages. Astra is wiring and testing the native sharing shell.
+Luna's central policy IPC wiring has two isolated context tests and passes desktop typecheck.
+Outstanding review findings still require fixes and independent acceptance.
 
 Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied

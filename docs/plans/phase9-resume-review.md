@@ -1,7 +1,7 @@
 # Phase 9 resume review — 2026-09-08
 
 Open findings, not phase acceptance. Astra reviewed the completed worker outputs after
-resuming. Opus implementation is temporarily unavailable: the runner reports expired login.
+resuming. The initial expired-login blocker was resolved by the user; Opus work has resumed.
 
 ## Sharing worker and staging
 
@@ -27,7 +27,7 @@ resuming. Opus implementation is temporarily unavailable: the runner reports exp
 
 ## MCP catalogue
 
-Sent to the runtime worker; launch failed before work began:
+Sent to the runtime worker and now being corrected:
 
 - A pre-aborted refresh currently starts execute/initialize before checking cancellation.
 - A hung shared fetch keeps `inFlight` forever after every caller times out. Bound the shared
@@ -48,3 +48,29 @@ Standalone factory/contract confirmation by Astra: 2 files, 20 passed, 1.74s
 (e2e-out/phase9-policy-ipc-astra.log). Luna added central contract and optional desktop factory
 wiring; central-context tests are being added. The sharing changes interleave with those
 files, so they remain uncommitted until the dependency set can be reviewed together.
+
+
+## Corrective waves now in progress
+
+The initial catalogue findings were corrected with adapter-level lifecycle regressions and
+an escaped-JSON aggregate byte test. Opus reports 40 catalogue tests and both native local
+MCP probes passing; these are not yet a complete desktop catalogue integration proof.
+
+Sharing has real native worker and shell proofs, but Astra's second review found that
+creating-job cancellation released admission too early, and a requested kill was treated
+as confirmed process exit. Keep reservations until actual settlement/exit, retain generation
+ownership, and validate exact bounded response shapes. The worker is correcting those cases
+and renamed-HTML detection. Raw worker stderr remains ignored by Astra decision; fixed failure
+codes provide diagnostics without persisting hostile input or secret-bearing exceptions.
+
+Members/Policies renderer tests pass, but review requires stale preview/query invalidation,
+local rename drafts, full existing-rule editing and owning-rule links, and generic unexpected
+errors. Use the already-existing agents.list instead of loading sessions.get history. Actual
+700px Chrome viewport captures show no document horizontal overflow; the corrected UI still
+needs a fresh visual pass and native IPC integration.
+
+Engine policy hooks are under a corrective review wave: abort a hung authorizer promptly,
+strict bounded input equality without JSON field elision, refuse invalid edited inputs,
+per-turn Claude hook cancellation, complete Codex file-approval identity including diffs,
+and honest capability availability. Desktop integration follows the brief in
+phase9-runtime-integration.md. No Phase 9 acceptance is implied.
