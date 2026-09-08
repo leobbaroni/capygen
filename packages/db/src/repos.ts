@@ -4,6 +4,7 @@
  * so a schema drift shows up as a parse error at the boundary instead of a
  * malformed object three layers up.
  */
+import { transcriptTextEntries, turnText } from "./textProjection.js";
 import {
   AgentSchema,
   BlockSchema,
@@ -1467,6 +1468,10 @@ export class BlocksRepo {
       )
       .map(rowToBlock);
   }
+
+  /** Minimal SQL text projection for round-table deltas/chaining. */
+  textEntries(sessionId: string) { return transcriptTextEntries(this.db, sessionId); }
+  textOfTurn(turnId: string): string { return turnText(this.db, turnId); }
 
   /** Next free index inside a turn. */
   nextIndex(turnId: string): number {

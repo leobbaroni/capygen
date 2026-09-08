@@ -1,0 +1,22 @@
+[
+  "Read INVENTORY.md. List the initial red and blue counts for each shelf in a compact table.",
+  "How many red boxes and blue boxes are there initially across all shelves?",
+  "Calculate each shelf's initial weight. Show the arithmetic briefly.",
+  "Calculate the remaining weight capacity of each shelf before delivery.",
+  "Apply the delivery from the fixture and give the resulting counts on shelves A and B.",
+  "What is the total warehouse weight after delivery, before the proposed transfer?",
+  "Apply the proposed transfer and list the final counts on all three shelves.",
+  "Calculate the final weight of each shelf and identify the heaviest shelf.",
+  "Does any shelf exceed its capacity at any stage? Explain with exact weights.",
+  "How many additional red boxes could fit on each shelf in the final state?",
+  "How many additional blue boxes could fit on each shelf in the final state?",
+  "Explain why moving boxes between shelves cannot change the total warehouse weight.",
+  "What is the minimum elapsed time for one inspector to inspect all three shelves?",
+  "What is the minimum elapsed time for two inspectors to inspect all three shelves?",
+  "Give a valid inspection schedule for two inspectors starting Monday at 09:00.",
+  "Identify three assumptions that would need checking before using this arithmetic operationally.",
+  "Write a five-item checklist for checking the delivery and transfer without changing the plan.",
+  "Summarize the difference between shelf capacity and inspection capacity in two sentences.",
+  "Prepare a concise final report with final counts, total weight, and inspection completion time.",
+  "Check your final report against the original fixture and correct any arithmetic mistakes. Keep the answer concise."
+]

@@ -203,6 +203,8 @@ export const ApiAgentConfigSchema = z
     model: z.string().min(1).optional(),
     baseUrl: z.string().optional(),
     maxTokens: z.number().int().positive().optional(),
+    /** Explicit provider/model capacity; unknown windows are never guessed for compaction. */
+    contextWindowTokens: z.number().int().min(1024).max(10_000_000).optional(),
     /** Provider-specific extended-thinking config; shape varies by provider. */
     thinking: z.unknown().optional(),
     permissionMode: PermissionModeSchema.optional(),

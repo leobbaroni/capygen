@@ -79,6 +79,7 @@ import {
 } from "../catalogue/types.js";
 import { resolveApiKey, type KeyProvider } from "./keys.js";
 import { estimateCost } from "./pricing.js";
+import { COMPACTION_SYSTEM, SUMMARY_PREFIX, compactionPrefix } from "./compaction.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
   createProvider as defaultCreateProvider,
@@ -122,6 +123,10 @@ export const DEFAULT_MAX_TOKENS = 8_192;
 export const DEFAULT_MAX_ITERATIONS = 24;
 
 export interface ApiHarnessDeps {
+  /** Verified capacity of the selected API model. Unknown means automatic compaction is unavailable. */
+  contextWindowTokens?: number;
+  /** Session-captured fraction, normally effectiveEfficiency(...).compactionThreshold. */
+  compactionThreshold?: number;
   /** No tools, history, MCP, or application prompt; exactly one provider call. */
   authoringSystemPrompt?: string;
   /** Injected by the desktop; the engine never reads a key from disk (R21). */
@@ -195,6 +200,7 @@ interface ResolvedConfig {
   model: string;
   baseUrl?: string | undefined;
   maxTokens: number;
+  contextWindowTokens?: number;
   thinking?: ThinkingConfig | undefined;
   reasoningEffort?: string | undefined;
   permissionMode: NonNullable<HarnessAgent["permissionMode"]>;
@@ -350,6 +356,8 @@ export class ApiHarness implements Harness {
     }
 
     void this.runTurn(turn, input.text).catch((err: unknown) => {
+      if (turn.settled || this.active !== turn) return;
+      this.emitUsage(turn);
       if (turn.interrupted) {
         this.settle(turn, "interrupted");
         return;
@@ -371,6 +379,7 @@ export class ApiHarness implements Harness {
     const provider = await this.ensureProvider(config);
     const tools = await this.ensureTools();
     const byName = toolMap(tools);
+    if (this.deps.authoringSystemPrompt === undefined) await this.compactHistory(turn, provider, config);
     const maxIterations = this.deps.authoringSystemPrompt !== undefined ? 1 : this.deps.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
@@ -424,6 +433,37 @@ export class ApiHarness implements Harness {
     });
     this.emitUsage(turn);
     this.settle(turn, "error", "tool-call limit reached");
+  }
+
+  /** One bounded, billed summary request; the primary system/tool prefix stays unchanged. */
+  private async compactHistory(turn: ActiveTurn, provider: Provider, config: ResolvedConfig): Promise<void> {
+    const prefix = compactionPrefix(this.messages, this.system, this.toolSchemas, config.contextWindowTokens, this.deps.compactionThreshold, config.maxTokens);
+    if (!prefix || turn.interrupted) return;
+    let deltas = ""; const settled: string[] = []; let complete = false;
+    const request: ProviderRequest = {
+      model: config.model, system: COMPACTION_SYSTEM, tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify(this.messages.slice(0, prefix)) }] }],
+      maxTokens: 1024, reasoningEffort: config.reasoningEffort, signal: turn.abort.signal,
+    };
+    for await (const event of provider.stream(request)) {
+      if (turn.interrupted || turn.abort.signal.aborted) throw new Error("Compaction was interrupted.");
+      if (event.type === "usage") {
+        turn.usage = addRawUsage(turn.usage, event.usage);
+        turn.byModel.set(event.model, addRawUsage(turn.byModel.get(event.model) ?? { ...ZERO_USAGE }, event.usage));
+      } else if (event.type === "text_delta") deltas += event.text;
+      else if (event.type === "content") {
+        if (event.block.type !== "text") throw new Error("Compaction returned unsupported content.");
+        settled.push(event.block.text);
+      } else if (event.type === "error") throw new Error("Context summarization failed; earlier history was retained.");
+      else if (event.type === "stop") complete = event.reason === "end_turn";
+      if (Buffer.byteLength(deltas, "utf8") > 16_384 || Buffer.byteLength(settled.join(""), "utf8") > 16_384) throw new Error("Context summary exceeded its size limit; earlier history was retained.");
+    }
+    const summary = (settled.length ? settled.join("\n") : deltas).trim();
+    if (!complete || !summary || turn.interrupted || turn.abort.signal.aborted) throw new Error("Context summary did not finish; earlier history was retained.");
+    const replacement: ChatMessage = { role: "user", content: [{ type: "text", text: SUMMARY_PREFIX + summary }] };
+    if (JSON.stringify(replacement).length >= JSON.stringify(this.messages.slice(0, prefix)).length) throw new Error("Context summary did not reduce the history; earlier history was retained.");
+    this.messages = [replacement, ...this.messages.slice(prefix)];
+    this.emitBlock(`compaction:${turn.turnId}`, { kind: "text", text: `[Earlier API context summarized from ${prefix} messages; the saved transcript remains unchanged.]` });
   }
 
   /** One provider response, mapped to blocks and events. */
@@ -831,6 +871,7 @@ export class ApiHarness implements Harness {
     } catch {
       /* an already-aborted controller is exactly what we wanted */
     }
+    this.emitUsage(turn);
     this.settle(turn, "interrupted");
     return true;
   }
@@ -1015,7 +1056,10 @@ export function resolveConfig(agent: HarnessAgent, deps: ApiHarnessDeps): Resolv
         : "";
   const thinking = readThinking(config.thinking);
   const effort = typeof config.reasoningEffort === "string" ? config.reasoningEffort : undefined;
+  const contextWindowTokens = config.contextWindowTokens ?? deps.contextWindowTokens;
+  if (contextWindowTokens !== undefined && (typeof contextWindowTokens !== "number" || !Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 1024 || contextWindowTokens > 10_000_000)) throw new Error("API contextWindowTokens must be a verified capacity between 1024 and 10000000.");
   return {
+    ...(typeof contextWindowTokens === "number" ? { contextWindowTokens } : {}),
     provider,
     model,
     baseUrl: typeof config.baseUrl === "string" ? config.baseUrl : undefined,

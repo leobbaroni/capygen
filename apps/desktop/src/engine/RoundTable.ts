@@ -204,25 +204,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
    * right now is one of them.
    */
   function transcriptOf(sessionId: string): DesktopTranscriptTurn[] {
-    const blocks = store.blocks.listBySession(sessionId);
-    const texts = new Map<string, string[]>();
-    for (const block of blocks) {
-      if (block.kind !== "text") continue;
-      if (block.delegatedFrom) continue; // see `textOfTurn`
-      const list = texts.get(block.turnId);
-      if (list) list.push(block.text);
-      else texts.set(block.turnId, [block.text]);
-    }
-    return store.turns
-      .list(sessionId)
-      .filter((turn) => turn.status !== "streaming" && turn.status !== "pending")
-      .map((turn) => ({
-        id: turn.id,
-        agentId: turn.agentId,
-        role: turn.role,
-        ...(turn.speakerLabel !== undefined ? { speakerLabel: turn.speakerLabel } : {}),
-        text: (texts.get(turn.id) ?? []).join("\n").trim(),
-      }));
+    return store.blocks.textEntries(sessionId);
   }
 
   /**
@@ -236,13 +218,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
    * is exactly the marker that says which blocks those are.
    */
   function textOfTurn(turnId: string): string {
-    return store.blocks
-      .listByTurn(turnId)
-      .filter((b): b is Extract<typeof b, { kind: "text" }> => b.kind === "text")
-      .filter((b) => !b.delegatedFrom)
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    return store.blocks.textOfTurn(turnId);
   }
 
   /**

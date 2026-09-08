@@ -498,6 +498,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         },
         api: {
           log,
+          compactionThreshold: settings().efficiency.compactionThresholdPct / 100,
           ...(extras.authorizeLocal ? { authorizeLocal: extras.authorizeLocal } : {}),
           ...(deps.keys ? { keys: deps.keys } : {}),
           ...(deps.pools
