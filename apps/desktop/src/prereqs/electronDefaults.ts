@@ -18,6 +18,7 @@
  * packaged app exactly the way it does here.
  */
 import { spawn } from "node:child_process";
+import { cleanEnv } from "@capygen/engine";
 import type { ConfirmOptions, ConsoleArgv } from "./runGate.js";
 
 /**
@@ -46,8 +47,13 @@ export async function defaultConfirm(options: ConfirmOptions): Promise<boolean> 
  * `app/src/win/bootstrap.js` `runInConsole`); `windowsHide: false` is the
  * whole point — CLAUDE.md requires the console be visible.
  */
-export function defaultOpenConsole(argv: ConsoleArgv): { pid?: number } {
-  const child = spawn(argv.file, argv.args, { detached: true, stdio: "ignore", windowsHide: false });
-  child.unref();
-  return { pid: child.pid };
+export function defaultOpenConsole(argv: ConsoleArgv): Promise<{ pid?: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv.file, argv.args, { detached: true, stdio: "ignore", windowsHide: false, env: cleanEnv() });
+    child.once("error", () => reject(new Error("Could not open the setup console. Check that Windows PowerShell is available.")));
+    child.once("spawn", () => {
+      child.unref();
+      resolve({ pid: child.pid });
+    });
+  });
 }

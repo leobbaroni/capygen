@@ -27,7 +27,7 @@ export interface PrereqsIpcDeps {
    *  real `dialog.showMessageBox` (see `electronDefaults.ts`). */
   confirm?: (options: ConfirmOptions) => Promise<boolean>;
   /** Launches the visible console. Defaults to a real detached PowerShell. */
-  openConsole?: (argv: ConsoleArgv) => { pid?: number };
+  openConsole?: (argv: ConsoleArgv) => { pid?: number } | Promise<{ pid?: number }>;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
   /** How long a Codex probe is reused before it is asked again — same idea
    *  and default as `harnessList.ts`'s `CACHE_TTL_MS`. 0 disables caching
@@ -170,7 +170,7 @@ export function createPrereqsIpc(deps: PrereqsIpcDeps = {}): { handlers: Prereqs
     if (!confirmed) return { ok: false, started: false };
 
     try {
-      const { pid } = openConsole(consoleArgv(step.command));
+      const { pid } = await openConsole(consoleArgv(step.command));
       log?.info(`[prereqs] launched "${step.id}" in a visible console (pid ${pid ?? "?"})`);
       watchUntilDetected(step.id);
       return { ok: true, started: true };

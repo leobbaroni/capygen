@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrereqStep } from "@capygen/shared";
 import { confirmOptionsFor, consoleArgv, firstUnmetDependency } from "../src/prereqs/runGate.js";
+import { probeCommand } from "../src/prereqs/nativeProbe.js";
 
 function step(over: Partial<PrereqStep> = {}): PrereqStep {
   return {
@@ -45,6 +46,7 @@ describe("consoleArgv", () => {
     const argv = consoleArgv("node --version");
     expect(argv.file).toBe("powershell.exe");
     expect(argv.args).toContain("-NoExit");
+    expect(argv.args).toContain("-NoProfile");
   });
 
   it("echoes the exact command before running it", () => {
@@ -58,6 +60,13 @@ describe("consoleArgv", () => {
     const argv = consoleArgv("echo 'hello'");
     const script = argv.args[argv.args.length - 1]!;
     expect(script).toContain("echo ''hello''");
+  });
+
+  it("refreshes installed PATH entries and quotes native probe executables and arguments", () => {
+    const script = probeCommand("C:\\Users\\O'Neil\\npm.cmd", ["config", "get", "prefix"]);
+    expect(script).toContain("GetEnvironmentVariable('Path', 'User')");
+    expect(script).toContain("& 'C:\\Users\\O''Neil\\npm.cmd' 'config' 'get' 'prefix'");
+    expect(script).toContain("if (-not $?) { exit 1 }");
   });
 });
 

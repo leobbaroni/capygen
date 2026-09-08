@@ -17,7 +17,7 @@ import { SectionIntro } from "@/components/settings/primitives";
 export function PrereqsSection() {
   return (
     <div data-testid="settings-prereqs">
-      <SectionIntro title="Prerequisites" description="Re-checked every time this page opens (R3)." />
+      <SectionIntro title="Prerequisites" description="Install missing tools and sign in to your backends." />
       <PrereqPanel />
     </div>
   );

@@ -761,3 +761,13 @@ replaces only the in-memory API prefix; persisted transcript, primary system and
 remain unchanged. Failures/cancellation retain history. Reported summary usage is included
 in per-model turn accounting. Claude/Codex retain backend-native compaction behavior; the API
 summarizer does not promise a particular native CLI auto-compaction threshold.
+
+### UX repair — Windows prerequisite launch (2026-09-08)
+
+Prerequisite-only probes run PowerShell with `-NoProfile` to support Windows `.cmd`
+shims and refresh the process PATH from machine/user PATH after installation.
+Visible command consoles use the same refreshed PATH and cleaned child environment;
+launch IPC awaits the native spawn event and reports asynchronous launch errors.
+Detected absolute and packaged CLI paths are retained for sign-in. Every setup step
+still goes through the exact-command native confirmation gate; quick setup sequences
+those steps and waits for detection before advancing.

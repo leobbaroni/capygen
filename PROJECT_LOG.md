@@ -2713,3 +2713,14 @@ https://github.com/leobbaroni/capygen/actions/runs/34199812626/artifacts/1004552
 Evidence: `e2e-out/ci-packaging-success.log`. Release job/tag verification correctly skipped;
 no release was published. Remaining acceptance needs microphone result, separately authenticated
 benchmark homes, actual older-build/private-feed proof and the final full gate.
+
+### 2026-09-08 — UX repair: prerequisite setup
+
+Fixed Windows shim detection, stale PATH after installation, absolute/bundled CLI
+sign-in paths, and false successful launches before asynchronous spawn errors.
+Setup now collapses command details and offers sequential setup with confirmation
+for each step. No actual install or login was performed during verification.
+
+Validation (native Windows): 49 focused prerequisite tests passed; desktop and
+renderer typechecks passed at task completion. Luna reviewed the launch/gate diff:
+no high/medium findings; visible console and mandatory confirmation preserved.

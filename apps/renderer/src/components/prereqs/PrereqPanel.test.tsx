@@ -48,6 +48,29 @@ afterEach(() => {
 });
 
 describe("PrereqPanel", () => {
+  it("keeps commands collapsed and confirms each sequential step only after detection; cancellation stops setup", async () => {
+    let installed = false;
+    invoke.mockImplementation(async (channel: string, args: { stepId?: string }) => {
+      if (channel === "prereqs.status") return statusResult([{ ...CLAUDE_CLI, detected: installed }, CLAUDE_LOGIN]);
+      if (args.stepId === "claude-cli") return { ok: true, started: true };
+      return { ok: false, started: false };
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<PrereqPanel />);
+    await screen.findByText("Set up missing steps");
+    await waitFor(() => expect(screen.getByText("Set up missing steps")).toBeEnabled());
+    expect(screen.getAllByText("Details and command")[0]?.parentElement).not.toHaveAttribute("open");
+    await user.click(screen.getByText("Set up missing steps"));
+    expect(invoke).toHaveBeenCalledWith("prereqs.run", { stepId: "claude-cli" });
+    expect(invoke).not.toHaveBeenCalledWith("prereqs.run", { stepId: "claude-login" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(invoke).not.toHaveBeenCalledWith("prereqs.run", { stepId: "claude-login" });
+    installed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(invoke).toHaveBeenCalledWith("prereqs.run", { stepId: "claude-login" });
+    expect(screen.getByRole("status")).toHaveTextContent("Setup stopped");
+    expect(invoke.mock.calls.filter(([channel]) => channel === "prereqs.run")).toHaveLength(2);
+  });
   it("fetches prereqs.status on mount and renders each step", async () => {
     invoke.mockResolvedValue(statusResult([CLAUDE_CLI, CLAUDE_LOGIN]));
     render(<PrereqPanel />);

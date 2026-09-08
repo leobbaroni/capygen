@@ -9,6 +9,7 @@
  * open with `-NoExit` so the result is still on screen after it finishes).
  */
 import type { PrereqStep } from "@capygen/shared";
+import { REFRESH_WINDOWS_PATH } from "./nativeProbe.js";
 
 export interface ConfirmOptions {
   title: string;
@@ -46,6 +47,7 @@ export interface ConsoleArgv {
 export function consoleArgv(command: string): ConsoleArgv {
   const quoted = command.replace(/'/g, "''");
   const script = [
+    REFRESH_WINDOWS_PATH,
     "Write-Host 'capygen is running this command:' -ForegroundColor Cyan",
     `Write-Host '  ${quoted}' -ForegroundColor Cyan`,
     "Write-Host ''",
@@ -55,7 +57,7 @@ export function consoleArgv(command: string): ConsoleArgv {
   ].join("; ");
   return {
     file: "powershell.exe",
-    args: ["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", script],
+    args: ["-NoLogo", "-NoProfile", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", script],
   };
 }
 

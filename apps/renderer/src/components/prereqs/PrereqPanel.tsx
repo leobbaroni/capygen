@@ -41,6 +41,9 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
   const [recommendation, setRecommendation] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [quickSetup, setQuickSetup] = useState(false);
+  const sequence = useRef(0);
+  const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const poll = useRef<{ timer: ReturnType<typeof setInterval> | null; count: number }>({
@@ -82,7 +85,7 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
 
   useEffect(() => {
     void refresh();
-    return stopPolling;
+    return () => { sequence.current += 1; stopPolling(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -92,6 +95,7 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
     try {
       const result = await ipc().invoke("prereqs.run", { stepId: step.id });
       if (result.started) startPolling();
+      else setNotice("Nothing started. If you confirmed the command, re-detect the required tools and try again.");
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
@@ -99,6 +103,43 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
       }));
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function setupMissing(): Promise<void> {
+    const runId = ++sequence.current;
+    stopPolling();
+    setQuickSetup(true);
+    setNotice("");
+    try {
+      for (;;) {
+        const result = await ipc().invoke("prereqs.status", {});
+        if (sequence.current !== runId) return;
+        setSteps(result.steps); setRecommendation(result.recommendation);
+        const missing = result.steps.filter((step) => !step.detected);
+        if (!missing.length) { setNotice("Setup is complete."); return; }
+        const next = missing.find((step) => (step.blockedBy ?? []).every((id) => result.steps.find((candidate) => candidate.id === id)?.detected));
+        if (!next) { setNotice("Finish the required dependencies, then try setup again."); return; }
+        setBusyId(next.id);
+        setNotice(`Waiting for ${next.title.toLowerCase()}. Each step needs your confirmation.`);
+        const launched = await ipc().invoke("prereqs.run", { stepId: next.id });
+        if (sequence.current !== runId) return;
+        if (!launched.started) { setNotice("Setup stopped. No further commands will run."); return; }
+        let detected = false;
+        for (let attempt = 0; attempt < MAX_POLLS; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+          if (sequence.current !== runId) return;
+          const current = await ipc().invoke("prereqs.status", {});
+          if (sequence.current !== runId) return;
+          setSteps(current.steps); setRecommendation(current.recommendation);
+          if (current.steps.find((step) => step.id === next.id)?.detected) { detected = true; break; }
+        }
+        if (!detected) { setNotice("Setup paused while the current step finishes. Check its console, then run setup again."); return; }
+      }
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (sequence.current === runId) { setQuickSetup(false); setBusyId(null); }
     }
   }
 
@@ -126,6 +167,14 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
         </Button>
       </div>
 
+      <div className="flex items-center gap-2">
+        {quickSetup ? <Button variant="outline" size="sm" onClick={() => {
+          sequence.current += 1; setQuickSetup(false); setBusyId(null);
+          setNotice("Setup stopped. Any command already running remains in its console.");
+        }}>Stop setup</Button> : <Button size="sm" disabled={loading || busyId !== null || !steps.some((step) => !step.detected)} onClick={() => void setupMissing()}>Set up missing steps</Button>}
+        <span className="text-xs text-muted-foreground">Review each command before it runs.</span>
+      </div>
+      {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
       {error ? (
         <p role="alert" data-testid="prereq-error" className="text-sm text-destructive">
           {error}
@@ -164,15 +213,18 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
                     <span className="text-sm font-medium text-foreground">{step.title}</span>
                     {step.version ? <Badge variant="outline">{step.version}</Badge> : null}
                   </div>
+                  <details className="mt-1 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">Details and command</summary>
                   {step.description ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">{step.description}</p>
                   ) : null}
                   <code
-                    className="mt-1 block truncate rounded bg-code-bg px-1.5 py-0.5 font-mono text-xs text-foreground"
+                    className="mt-1 block whitespace-pre-wrap break-all rounded bg-code-bg px-1.5 py-0.5 font-mono text-xs text-foreground"
                     title={step.command}
                   >
                     {step.command}
                   </code>
+                  </details>
                   {rowError ? (
                     <p role="alert" data-testid="prereq-step-error" className="mt-1 text-xs text-destructive">
                       {rowError}
@@ -184,7 +236,7 @@ export function PrereqPanel({ className }: PrereqPanelProps) {
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={busyId === step.id || Boolean(blockedId)}
+                    disabled={busyId !== null || quickSetup || Boolean(blockedId)}
                     title={blockedId ? `Finish "${blockedTitle}" first` : undefined}
                     onClick={() => void run(step)}
                     data-testid="prereq-step-run"

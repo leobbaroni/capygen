@@ -71,6 +71,10 @@ describe("detectCodexCli", () => {
 });
 
 describe("detectPrereqSteps", () => {
+  it("uses the discovered absolute Claude path in the exact sign-in command", async () => {
+    const steps = await detectPrereqSteps({ probe: NONE, home: "C:\\Users\\O'Neil", exists: (file) => file.endsWith("\\.local\\bin\\claude.exe"), probeCodexBackend: async () => SIGNED_OUT, env: {} });
+    expect(steps.find((step) => step.id === "claude-login")?.command).toBe("& 'C:\\Users\\O''Neil\\.local\\bin\\claude.exe'");
+  });
   const ALL_FOUND = probeFor({
     node: "v22.16.0",
     git: "git version 2.44.0",

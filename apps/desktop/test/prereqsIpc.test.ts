@@ -88,7 +88,7 @@ describe("prereqs.run", () => {
   it("reports a launch failure honestly instead of claiming success", async () => {
     const { handlers } = ipc({
       probe: ALL_FOUND,
-      openConsole: () => {
+      openConsole: async () => {
         throw new Error("ENOENT: powershell.exe");
       },
     });

@@ -20,7 +20,8 @@ import os from "node:os";
 import path from "node:path";
 import { probeCodex, type CodexProbeResult } from "@capygen/engine";
 import type { PrereqStep } from "@capygen/shared";
-import { claudeSignInSignal, defaultCliProbe, type CliProbe } from "../ipc/harnessList.js";
+import { claudeSignInSignal, type CliProbe } from "../ipc/harnessList.js";
+import { nativePrereqProbe } from "./nativeProbe.js";
 
 export interface DetectPrereqsDeps {
   probe?: CliProbe;
@@ -37,6 +38,16 @@ interface CliDetection {
   path?: string;
 }
 
+function bundledExecutable(backend: "claude" | "codex", deps: DetectPrereqsDeps): string | undefined {
+  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!resources) return undefined;
+  const relative = backend === "claude"
+    ? "@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
+    : "@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe";
+  const executable = path.join(resources, "app", "node_modules", relative);
+  return (deps.exists ?? fs.existsSync)(executable) ? executable : undefined;
+}
+
 /**
  * `claude.exe` can be a native install (`~/.local/bin/claude.exe`, this
  * machine's own, per SPEC "Current State") or an npm global install, and
@@ -48,9 +59,15 @@ interface CliDetection {
  * for an npm-global install whose shim is not on PATH yet.
  */
 export async function detectClaudeCli(deps: DetectPrereqsDeps): Promise<CliDetection> {
-  const probe = deps.probe ?? defaultCliProbe;
+  const probe = deps.probe ?? nativePrereqProbe;
   const exists = deps.exists ?? fs.existsSync;
   const home = deps.home ?? os.homedir();
+
+  const bundled = bundledExecutable("claude", deps);
+  if (bundled) {
+    const result = await probe(bundled, ["--version"]);
+    if (result.ok) return { found: true, path: bundled, version: result.version };
+  }
 
   const onPath = await probe("claude", ["--version"]);
   if (onPath.ok) return { found: true, version: onPath.version };
@@ -75,13 +92,18 @@ export async function detectClaudeCli(deps: DetectPrereqsDeps): Promise<CliDetec
  *  npm's own convention, so the extra checks `detectClaudeCli` needs do not
  *  apply here. */
 export async function detectCodexCli(deps: DetectPrereqsDeps): Promise<CliDetection> {
-  const probe = deps.probe ?? defaultCliProbe;
+  const probe = deps.probe ?? nativePrereqProbe;
+  const bundled = bundledExecutable("codex", deps);
+  if (bundled) {
+    const result = await probe(bundled, ["--version"]);
+    if (result.ok) return { found: true, path: bundled, version: result.version };
+  }
   const r = await probe("codex", ["--version"]);
   return r.ok ? { found: true, version: r.version } : { found: false };
 }
 
 async function detectSimple(deps: DetectPrereqsDeps, command: string): Promise<CliDetection> {
-  const probe = deps.probe ?? defaultCliProbe;
+  const probe = deps.probe ?? nativePrereqProbe;
   const r = await probe(command, ["--version"]);
   return r.ok ? { found: true, version: r.version } : { found: false };
 }
@@ -179,7 +201,7 @@ export async function detectPrereqSteps(deps: DetectPrereqsDeps = {}): Promise<P
       id: "claude-login",
       title: "Sign in to Claude Code",
       detected: claudeLogin.signedIn,
-      command: PREREQ_COMMANDS.claudeLogin,
+      command: claude.path ? `& '${claude.path.replace(/'/g, "''")}'` : PREREQ_COMMANDS.claudeLogin,
       description:
         "Opens Claude Code so you can complete the browser sign-in. Type /exit when done, " +
         "then Re-detect.",
@@ -200,7 +222,7 @@ export async function detectPrereqSteps(deps: DetectPrereqsDeps = {}): Promise<P
       id: "codex-login",
       title: "Sign in to Codex",
       detected: codexAccount.signedIn,
-      command: PREREQ_COMMANDS.codexLogin,
+      command: codex.path ? `& '${codex.path.replace(/'/g, "''")}' login` : PREREQ_COMMANDS.codexLogin,
       description: "Opens the ChatGPT sign-in Codex needs. Type /exit when done, then Re-detect.",
       blockedBy: ["codex-cli"],
       kind: "cli",
