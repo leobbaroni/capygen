@@ -2976,3 +2976,13 @@ The actual preserved older 0.1.0 app also passed a credential-free updater prefl
 version 0.1.0, encrypted storage available, idle updater and registered credential/check handlers.
 Publication is additionally awaiting specific user approval after automatic approval review
 rejected the tag action; no tag was created or pushed by that rejected attempt.
+
+### 2026-09-09 — Automation form CI interaction cost
+
+CI 34292172893 passed typechecks and the previously failing fixture hooks: 2919 tests
+passed, 7 skipped. One renderer automation-creation test exceeded its 5s test deadline.
+Replaced per-character typing in its two fields with user-event click/paste interactions,
+and strengthened the IPC assertion to require the exact submitted name and prompt.
+The deadline and production behavior are unchanged. Independent Luna review found no
+coverage regression. Focused verification: 1 file, 3 tests passed in 3.43s; the creation
+test took 475ms. The full Windows gate will rerun before release publication approval.

@@ -23,10 +23,12 @@ it("creates an automation using the selected existing project agent and schedule
   render(<AutomationsPage />);
   await waitFor(() => expect(screen.getByText("No automations yet.")).toBeTruthy());
   await user.click(screen.getByRole("button", { name: "New automation" }));
-  await user.type(screen.getByLabelText("Name"), "Morning check");
-  await user.type(screen.getByLabelText("Prompt"), "Review the open work");
+  await user.click(screen.getByLabelText("Name"));
+  await user.paste("Morning check");
+  await user.click(screen.getByLabelText("Prompt"));
+  await user.paste("Review the open work");
   await user.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("automations.create", expect.objectContaining({ projectId: "p1", agentId: "a1", rrule: "FREQ=DAILY;INTERVAL=1", timeZone: expect.any(String), scheduleAnchorAt: expect.any(Number) })));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("automations.create", expect.objectContaining({ name: "Morning check", prompt: "Review the open work", projectId: "p1", agentId: "a1", rrule: "FREQ=DAILY;INTERVAL=1", timeZone: expect.any(String), scheduleAnchorAt: expect.any(Number) })));
 });
 
 it("waits for choices before enabling creation", async () => {
