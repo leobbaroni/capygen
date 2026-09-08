@@ -11,6 +11,23 @@ test("extension sample uses a confined port, persists storage and refuses ambien
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-extension-native-"));
   const profile = path.join(root, "profile"); const project = path.join(root, "project"); const bundle = path.join(root, "sample");
   fs.mkdirSync(profile); fs.mkdirSync(project); fs.cpSync(path.join(repo, "assets/extensions/sample"), bundle, { recursive: true });
+  fs.copyFileSync(path.join(repo, "assets/icons/icon.png"), path.join(bundle, "control.png"));
+  fs.writeFileSync(path.join(root, "secret.png"), fs.readFileSync(path.join(repo, "assets/icons/icon.png")));
+  const sampleManifest = JSON.parse(fs.readFileSync(path.join(bundle, "capygen-extension.json"), "utf8"));
+  sampleManifest.assets.push("control.png");
+  fs.writeFileSync(path.join(bundle, "capygen-extension.json"), JSON.stringify(sampleManifest));
+  // Capture the legitimate bootstrap port before the sample listener claims it, then
+  // exercise the main-process authority checks with bounded forged requests.
+  fs.writeFileSync(path.join(bundle, "sample.js"), `(() => {
+    window.__securityReplies = [];
+    window.addEventListener("message", (event) => {
+      if (event.data?.type !== "capygen-extension-ready" || event.ports.length !== 1) return;
+      const port = event.ports[0]; const base = { version: 1, instanceId: event.data.instanceId, requestId: "security-" + Date.now() };
+      port.addEventListener("message", (reply) => window.__securityReplies.push(reply.data)); port.start();
+      port.postMessage({ ...base, nonce: "x".repeat(32), method: "theme.getCurrent", params: {}, requestId: "security-nonce" });
+      port.postMessage({ ...base, nonce: event.data.nonce, method: "extension.unknown", params: {}, requestId: "security-method" });
+    });
+  })();\n` + fs.readFileSync(path.join(bundle, "sample.js"), "utf8"));
   fs.writeFileSync(path.join(profile, "capygen-extension-registry.json"), JSON.stringify([{ registrationId: randomUUID(), registration: {
     root: bundle, expectedId: "example.welcome", expectedVersion: "1.0.0", localDevelopment: false,
     grants: ["theme", "navigation", "storage.user", "projects.read", "sessions.read"],
@@ -49,6 +66,22 @@ test("extension sample uses a confined port, persists storage and refuses ambien
     }, url);
     expect(isolation).toEqual({ exposed: false, fetched: false, image: false, popup: false });
     expect(network).toBe(0);
+    const permissions = await extension.evaluate(async () => {
+      const geolocation = await new Promise<number>((resolve) => navigator.geolocation.getCurrentPosition(
+        () => resolve(0), (error) => resolve(error.code), { timeout: 1000 }));
+      const state = await navigator.permissions.query({ name: "geolocation" as PermissionName }).then((permission) => permission.state, () => "unavailable");
+      return { geolocation, state };
+    });
+    expect(permissions).toEqual({ geolocation: 1, state: "denied" });
+    const traversal = await extension.evaluate(async () => {
+      const load = (src: string) => new Promise<boolean>((resolve) => { const image = new Image(); image.onload = () => resolve(true); image.onerror = () => resolve(false); image.src = src; });
+      return { control: await load(`${location.origin}/control.png`), escaped: await load(`${location.origin}/%2e%2e%2fsecret.png`) };
+    });
+    expect(traversal).toEqual({ control: true, escaped: false });
+    await expect.poll(() => extension.evaluate(() => (window as any).__securityReplies)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: "security-nonce", ok: false }),
+      expect.objectContaining({ requestId: "security-method", ok: false }),
+    ]));
     const oldUrl = extension.url();
     await extension.getByRole("button", { name: "New conversation", exact: true }).click();
     await expect.poll(() => extension.isClosed()).toBe(true);

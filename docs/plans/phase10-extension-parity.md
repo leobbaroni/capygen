@@ -1,7 +1,9 @@
 # Phase 10 extension parity inventory
 
-Astra proposal, 2026-09-08; implementation and Opus review pending. This resolves the inventory
-called out at the end of ADR-0008. An isolated static sample is a first slice, not full P20.
+Astra design, implemented and reviewed by 2026-09-09 using the available-model fallback
+recorded in PLAN.md. This resolves the inventory called out at the end of ADR-0008.
+The implemented package includes the capability services below; a static sample alone
+would not establish P20. The local adaptation does not promise Python plugin compatibility.
 Reference is read-only: `reference/omnigent/docs/extending/browser_extensions.md` and
 `extension_manifest.md`. No reference module may be imported into capygen.
 
@@ -44,7 +46,7 @@ reaching any one refuses the write atomically. These are ceilings, not promised 
 | `sessions.getCached` | Optional bounded cached summaries or explicit unavailable/null; never imply canonical completeness | Stale cache does not become pagination authority |
 | `sessions.listPage` | Canonical non-archived top-level session summaries, default 25/max 1000; shorten to response budget; stable cursor | Same-time rows, deletions, oversized labels, cross-page deduplication |
 | SDK `sessions.listAll` | Bounded helper, at most 200 pages/5000 sessions; merge canonical rows by ID and discard preview-only rows at completion | Truncation disclosed and finite iteration under changing pages |
-| `sessions.pullRequest` | Implement a bounded main-process GitHub adapter to read the PR for the session branch; this capability does not yet exist. No arbitrary commands or repository mutation | Fixture PR lookup and bounded returned URL; explicit unavailable when tooling/auth is absent |
+| `sessions.pullRequest` | Bounded main-process GitHub adapter reads the PR for the trusted session branch; no arbitrary commands or repository mutation | `pullRequest.ts`, `integration.ts`, fixed-command/branch/output fixtures in `extensions.test.ts` |
 | `projects.list` | Only ID, name and icon for current app-profile projects | No path/config/credential fields beyond the capability contract |
 | `projects.create` | Use the same native directory selection and project-creation path as the sidebar; trimmed name <=100 chars | Cancellation creates nothing; success refreshes shell; no arbitrary extension-chosen filesystem write |
 
@@ -53,8 +55,25 @@ directory, worktree branch, project ID and timestamps. `sessions.read` consent m
 say it exposes titles and local working-directory paths. It does not expose messages, tool
 inputs/results, credentials or backend configuration. Derive unread/provisional flags from
 canonical app state; do not invent a value when the app lacks the corresponding state.
-The current source search found no existing `titleProvisional` or PR-lookup implementation;
-these require a concrete implementation or an explicitly reviewed compatibility decision.
+The PR lookup is implemented. `titleProvisional` and other unavailable cached state are
+reported as nullable fields rather than invented facts. `sessions.getCached` may return null;
+canonical paginated rows remain the source of truth, as specified above.
+
+## Recorded implementation evidence
+
+`apps/desktop/src/extensions/service.ts` implements grants, instance/nonce validation,
+bounded theme/navigation/storage/session/project operations and lifecycle cleanup.
+`integration.ts` binds canonical database paging, native project creation and PR lookup;
+`packages/shared/src/extensions.ts` supplies the bounded `listAllExtensionSessions` helper.
+`extensions.test.ts` covers collisions, junction/missing assets, per-namespace and aggregate
+quotas, stale authority, issued URLs, deadlines and fixed read-only PR commands.
+`extensionHost.test.ts` checks partition, permission, CSP, fresh-port and disposal wiring.
+Native `extensions.spec.ts` exercises the real isolated view and port, appearance,
+storage/restart, project navigation, blocked ambient fetch/image/popup access, exact
+geolocation permission denial, encoded traversal refusal with a valid image control,
+and rejected invalid-nonce/unknown-method requests through the real port.
+The packaged smoke verifies the shipped helper and sample assets. Phase 12's release/CI
+and live-updater acceptance remain separate from these local extension checks.
 
 ## Acceptance sequence
 

@@ -1,6 +1,6 @@
 # ADR-0008: Local dictation and isolated extension pages
 
-Date: 2026-09-07. Status: Implemented; dictation revised 2026-09-08 after failed human accuracy test.
+Date: 2026-09-07. Status: Implemented; Phase 10 accepted 2026-09-09 after the user confirmed the revised microphone path.
 
 ## 2026-09-08 dictation revision
 
@@ -10,15 +10,16 @@ multilingual small-q5_1 model, pinned hashes and roughly 199 MB download. Instal
 the native confirmation and visible-console gate. Availability never records or downloads.
 The Windows Speech decision below is historical; there is no cloud fallback.
 
-The compiled helper captures 16 kHz mono PCM16 through WinMM in memory, waits for a two-second
+The compiled helper captures 16 kHz mono PCM16 through WinMM in memory, waits for a 1.5-second
 pause after voice, and caps capture at 25 seconds. Parent EOF, main cancellation and timeouts
 own subprocess lifetime. PCM travels by pipe to Whisper; no recording file or renderer audio
 payload is created. The model chooses the language and text enters the draft without sending.
-Twelve focused lifecycle/setup/UI tests pass. A generated 5.13-second instruction transcribed
-exactly in 7.55 seconds. This does not accept microphone accuracy: repeat the ordinary and
-technical instruction test with the user.
+Lifecycle/setup/UI tests and the full automated gate pass. A generated 5.13-second instruction
+transcribed exactly in 4.64 seconds at twelve threads, versus 7.68 seconds at the native default
+four. The user separately confirmed real microphone transcription works. Request-scoped
+progress displays a spinning Transcribing locally status with Cancel still active.
 
-## Dictation
+## Historical Windows Speech decision
 
 Use installed Windows System.Speech recognition through an app-owned helper process.
 A read-only probe on this machine loaded the framework assembly and enumerated:
@@ -103,11 +104,13 @@ authorized origin; test fetch/image requests as well as navigation, popups and p
 requests. Bound and validate manifest fields, namespace identifiers, and check realpath
 confinement on every served asset. A selected directory may change after manifest discovery.
 
-### P20 inventory still to resolve
+### P20 capability inventory
 
 The reference's browser extension contract has more than a read-only page: namespaced pages
 and navigation, theme, quota-bound namespaced storage, and explicitly granted session/project
 services (`reference/omnigent/docs/extending/browser_extensions.md` and its services registry).
-The isolated sample is the first implementation slice; it does not by itself establish full
-P20 parity. Map these capabilities and their local permissions before accepting P20. No
-remaining capability is silently deferred by this proposal.
+The initial isolated sample was only the first implementation slice. The subsequent capability
+mapping is recorded in [phase10-extension-parity.md](../plans/phase10-extension-parity.md),
+with explicit local grants, namespace storage and bounded session/project services. Native
+storage/reopen/theme/network-denial and packaged assets now pass. These are local packages;
+no compatibility with arbitrary Python-distributed reference plugins is claimed.

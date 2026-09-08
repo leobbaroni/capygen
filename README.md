@@ -4,9 +4,10 @@ A native-Windows desktop app for working with Claude Code, Codex and API models 
 Omnigent's UI and features, no server to connect to, dockable panes, one-click dev servers, and
 in-app management of harnesses, MCP servers, skills and plugins.
 
-Status: in development — Phase 9C is accepted; Phases 10–12 remain in progress. Windows packaging,
-dictation, extensions, and private update flows have focused evidence but no published-release or
-live-updater acceptance yet. See `SPEC.md` (contract), `PLAN.md` (build order), `CONTEXT.md` (glossary),
+Status: Phases 1–11 and 9C are accepted. Local microphone transcription works, extension pages
+are available under Tools → App pages, and the full efficiency cohort passed at 102.25% of the
+CLI baseline. Phase 12 awaits full CI, release publication and the older-build private updater
+check. See `SPEC.md` (contract), `PLAN.md` (build order), `CONTEXT.md` (glossary),
 `PROJECT_LOG.md` (what happened), `docs/RUN.md` (how to dev/build/test/e2e), `COMPAT.md`
 (external contracts).
 

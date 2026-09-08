@@ -2954,3 +2954,10 @@ checking terminal environment, benchmark totals and the private updater verifier
 uses ElectronApplication.evaluate in main, not Page.evaluate in the renderer; its GitHub
 credential remains in test/main memory and isolated safeStorage, and it never installs.
 Standalone verifier typecheck passed. Focused real ConPTY/service checks: 12 passed.
+
+Final P20 documentation audit reconciled the implemented capability services with the old
+proposal. Strengthened native extension proof: exact geolocation PERMISSION_DENIED, valid
+same-origin image control versus encoded traversal refusal, and invalid-nonce/unknown-method
+rejection through the real MessagePort. Different-model root review tightened the initial
+weak timeout/fetch assertions. Focused native run: 1 passed (6.7s); tests TypeScript passed.
+Only fixture/docs changes followed release candidate 5065c59; runtime release bytes are unchanged.
