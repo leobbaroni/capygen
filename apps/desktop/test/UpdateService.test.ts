@@ -77,3 +77,19 @@ it("credential changes wait for restore and cannot overwrite retained download s
   expect(await f.service.deleteCredential()).toMatchObject({ phase: "ready", version: "0.2.0" });
   expect(f.deps.secrets.deleteUpdaterToken).toHaveBeenCalledOnce();
 });
+
+
+it("refuses cleanup through a replaced update-root junction", async () => {
+  const f = await fixture(); await f.service.check();
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), "capygen-update-external-"));
+  const sentinel = path.join(external, "pending.json");
+  await fs.writeFile(sentinel, "untouched external metadata");
+  await fs.rm(f.root, { recursive: true });
+  await fs.symlink(external, f.root, "junction");
+  try {
+    await expect(f.service.clear()).rejects.toThrow("Linked update root refused");
+    expect(await fs.readFile(sentinel, "utf8")).toBe("untouched external metadata");
+    expect((await f.service.download()).phase).toBe("error");
+    expect(f.driver.downloadUpdate).not.toHaveBeenCalled();
+  } finally { await fs.unlink(f.root); await fs.rm(external, { recursive: true }); }
+});

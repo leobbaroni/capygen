@@ -2652,3 +2652,9 @@ was undeclared (local dependency layout had masked it). Added exact root dev dep
 The API agent info drawer exposes verified context capacity without losing other config;
 custom-mode agents are directed to their mode editor. Focused drawer suite: 6 passed (4.14s).
 No broad local gate was repeated. Evidence: `e2e-out/ci-types-capacity-focused.log`.
+
+Final updater boundary review found that a junction replacing the whole owned update root
+could bypass child-only confinement. Root now rejects a linked root before restore/download/
+cleanup, and keeps the operation lock across the check. A native Windows junction fixture
+preserves external pending metadata and refuses the driver download (7 service tests passed;
+then the changed junction case alone was rechecked before the final desktop/package rebuild).

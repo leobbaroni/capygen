@@ -51,7 +51,12 @@ export class UpdateService {
   status(): UpdateStatus { return { ...this.value, hasCredential: this.deps.secrets.hasUpdaterToken() }; }
   private emit(patch: Partial<UpdateStatus>) { if (this.disposed) return; Object.assign(this.value, patch); this.deps.changed(this.status()); }
   private requireIdle() { if (this.disposed || this.busy) throw new Error("An update operation is already running or unavailable."); }
+  private async assertRoot() {
+    const info = await fs.lstat(this.deps.root);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("Linked update root refused.");
+  }
   private async contained(file: string): Promise<string> {
+    await this.assertRoot();
     const root = await fs.realpath(this.deps.root); const actual = await fs.realpath(file);
     const relative = path.relative(root, actual);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Update file is outside its owned cache.");
@@ -69,6 +74,7 @@ export class UpdateService {
   }
   private async restore() {
     try {
+      await this.assertRoot();
       const file = path.join(this.deps.root, "pending.json");
       if ((await fs.stat(file)).size > 4096) throw new Error("Invalid pending metadata");
       const pending: Pending = JSON.parse(await fs.readFile(file, "utf8"));
@@ -114,6 +120,7 @@ export class UpdateService {
     this.emit({ phase: "downloading", progress: 0, message: "Downloading and verifying the update…" });
     try {
       await fs.mkdir(this.deps.root, { recursive: true });
+      await this.assertRoot();
       const cache = path.join(this.deps.root, "cache"); await fs.mkdir(cache, { recursive: true });
       if ((await fs.lstat(cache)).isSymbolicLink()) throw new Error("Linked update cache refused");
       await this.contained(cache);
@@ -160,6 +167,7 @@ export class UpdateService {
   async clear() {
     await this.initialized; this.requireIdle(); this.busy = true;
     try {
+      try { await this.assertRoot(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       this.pending = null; this.candidate = null; this.driver?.dispose(); this.driver = null;
       await this.clearDownloadCache();
       const retained = path.join(this.deps.root, "retained");
