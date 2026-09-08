@@ -2378,3 +2378,24 @@ This is not a notes phase acceptance or a full passing Sharing test. Root found 
 state generation mismatch in useStagedShare; stale finally callbacks also clear running
 without checking operation ownership. Correct before integrating the renderer task.
 Engine task `96f4cf9` was pushed to origin/main successfully; no force push.
+
+## 2026-09-08 — Windows path identity correction
+
+Opus reproduced the absolute 8.3 alias false refusal and the lexical junction escape. Astra
+rejected the first catch-all canonicalization fallback; the revised implementation only
+walks genuinely absent segments, refuses unresolved links/loops/IO failures and requires a
+real project root. Returned paths use the same canonical spelling that was checked. This
+path check does not claim to prevent another process swapping a parent after validation.
+Link fixtures use explicit skips when unsupported; all 11 containment cases ran on Windows.
+
+Astra independent focused verification:
+```text
+$ corepack pnpm exec vitest run --project engine fsContainment.test.ts tools.test.ts registry.test.ts api.test.ts mcpClient.test.ts
+ Test Files  6 passed (6)
+      Tests  150 passed (150)
+   Duration  2.92s
+```
+The filename filter also selected codexDynamicTools.test.ts; counts above are the actual run.
+Opus reports full engine 613 passed / 4 skipped and clean typecheck. Root's native API fixture
+now supplies the original absolute temp alias path for the next integrated app run. Root also
+renamed the probe's legacy allow-case wording; production neutral behavior is unchanged.

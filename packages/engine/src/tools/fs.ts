@@ -10,7 +10,7 @@
  * once** unless `replace_all` is set. A silent second match is how an edit tool
  * corrupts a file, so an ambiguous edit is an error the model has to fix.
  */
-import type { Stats } from "node:fs";
+import { lstatSync, realpathSync, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -39,11 +39,28 @@ import {
  * the boundary is what makes that safe.
  */
 export function resolvePath(cwd: string, target: string): string {
-  const resolved = path.isAbsolute(target)
-    ? path.normalize(target)
-    : path.resolve(cwd, target);
-  const root = path.resolve(cwd);
-  const relative = path.relative(root, resolved);
+  const resolved = path.isAbsolute(target) ? path.normalize(target) : path.resolve(cwd, target);
+  // [review] Compared as *real* locations, not as strings.
+  //
+  // Two bugs lived in the lexical comparison this replaces. On Windows one
+  // directory has two legitimate names — the long form and the 8.3 alias that
+  // `os.tmpdir()` itself hands out — so a path demonstrably inside the project
+  // was refused for being spelled differently. And in the other direction a
+  // junction or symlink *inside* the project reads as inside it lexically while
+  // pointing anywhere on the disk, so the boundary this function exists for was
+  // not actually enforced.
+  const root = canonicalize(path.resolve(cwd), "the project directory");
+  if (root.missing.length > 0) {
+    throw new ToolInputError(
+      `The project directory (${path.resolve(cwd)}) does not exist, so no path can be ` +
+        "checked against it.",
+    );
+  }
+  const canonical = canonicalize(resolved, "this path");
+  const full = canonical.missing.length === 0
+    ? canonical.real
+    : path.join(canonical.real, ...canonical.missing);
+  const relative = path.relative(root.real, full);
   // `path.relative` returns an absolute path when the two are on different
   // Windows drives, and a leading `..` when the target escapes upwards.
   const outside =
@@ -51,11 +68,95 @@ export function resolvePath(cwd: string, target: string): string {
     (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`));
   if (outside) {
     throw new ToolInputError(
-      `${resolved} is outside the project directory (${root}). ` +
+      `${resolved} is outside the project directory (${root.real}). ` +
         "This runtime only reads and writes inside the project.",
     );
   }
-  return resolved;
+  // The canonical form is what was checked, so it is what the caller opens: a
+  // path validated in one spelling and opened in another is a gap between the
+  // decision and the effect.
+  return full;
+}
+
+interface Canonical {
+  /** The deepest ancestor that actually resolves. */
+  real: string;
+  /** Segments below it that genuinely do not exist yet, outermost first. */
+  missing: string[];
+}
+
+/**
+ * The real location of `input`, including paths that do not exist yet.
+ *
+ * `realpathSync` needs the path to exist, but `write_file` legitimately names a
+ * file — and whole directory trees — that do not. So the deepest ancestor that
+ * *does* exist is resolved and the remaining segments are appended to it.
+ *
+ * [review] What it must never do is treat "I could not resolve this" as "this
+ * segment is simply absent". Only `ENOENT` walks upward. `EACCES`, `ELOOP`,
+ * `EPERM`, `ENOTDIR`, an invalid name or any I/O failure **refuses**, because a
+ * component that exists but cannot be resolved is exactly the case where a link
+ * could be pointing somewhere this function is supposed to keep the model out
+ * of. An `ENOENT` from `realpath` is additionally checked with `lstat`: a
+ * dangling symlink or junction *exists* while resolving to nothing, and that is
+ * an unresolved link, not a missing segment.
+ *
+ * Honest limit: this resolves the path as it is at the moment of the check. A
+ * parent directory swapped for a link between this call and the subsequent open
+ * would not be caught — that is a time-of-check/time-of-use gap inherent to
+ * path-based checking, and it is why this is a containment boundary rather than
+ * a sandbox. A real sandbox would confine the process, not the path.
+ */
+function canonicalize(input: string, what: string): Canonical {
+  const absolute = path.resolve(input);
+  const missing: string[] = [];
+  let cursor = absolute;
+  for (;;) {
+    const real = attempt(() => realpathSync.native(cursor));
+    if (real.ok) return { real: real.value, missing: missing.reverse() };
+    if (real.code !== "ENOENT") {
+      throw new ToolInputError(
+        `${what} (${absolute}) could not be resolved (${real.code ?? "unknown error"}), ` +
+          "so it cannot be checked against the project directory.",
+      );
+    }
+    // `realpath` said ENOENT. If the name still exists, it is a link that
+    // resolves to nothing — refused rather than walked past.
+    const link = attempt(() => lstatSync(cursor));
+    if (link.ok) {
+      throw new ToolInputError(
+        `${what} (${absolute}) passes through a link that does not resolve, ` +
+          "so it cannot be checked against the project directory.",
+      );
+    }
+    if (link.code !== "ENOENT") {
+      throw new ToolInputError(
+        `${what} (${absolute}) could not be inspected (${link.code ?? "unknown error"}), ` +
+          "so it cannot be checked against the project directory.",
+      );
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      // Even the root did not resolve — an absent drive, for instance. There is
+      // no real location to compare against, so nothing is admitted.
+      throw new ToolInputError(
+        `${what} (${absolute}) has no reachable root, so it cannot be checked ` +
+          "against the project directory.",
+      );
+    }
+    missing.push(path.basename(cursor));
+    cursor = parent;
+  }
+}
+
+type Attempt<T> = { ok: true; value: T } | { ok: false; code: string | undefined };
+
+function attempt<T>(run: () => T): Attempt<T> {
+  try {
+    return { ok: true, value: run() };
+  } catch (err) {
+    return { ok: false, code: (err as NodeJS.ErrnoException).code };
+  }
 }
 
 /** `cat -n`-style numbering — the format every one of these models has seen. */

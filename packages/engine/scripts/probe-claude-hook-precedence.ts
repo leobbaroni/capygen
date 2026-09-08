@@ -566,7 +566,7 @@ async function main(): Promise<void> {
       },
       {
         name: "routing-with-allow",
-        question: "does the routed model apply with today's unconditional allow?",
+        question: "does the routed model apply with legacy test-only unconditional allow?",
         permissions: { allow: ["Agent"], deny: [], ask: [] },
         permissionMode: "default",
         authorize: allow,
@@ -618,7 +618,7 @@ async function main(): Promise<void> {
       },
       {
         name: "routing-allow-under-native-deny",
-        question: "does today's unconditional allow widen a native deny on the spawn?",
+        question: "does legacy test-only unconditional allow widen a native deny on the spawn?",
         permissions: { allow: [], deny: ["Agent"], ask: [] },
         permissionMode: "default",
         authorize: allow,
@@ -633,7 +633,7 @@ async function main(): Promise<void> {
         // Recorded as a *finding*, not a requirement: if the spawn runs here,
         // the unconditional allow overrode the user's own deny rule.
         observable: { kind: "routed-model", model: "haiku", expectReached: false },
-        why: "a native deny on the spawn with today's unconditional allow",
+        why: "a native deny on the spawn with legacy test-only unconditional allow",
       },
     ];
     for (const spec of cases) results.push(await runCase(spec, homes, loopback));
@@ -674,7 +674,7 @@ async function main(): Promise<void> {
   };
   /**
    * The neutral routing case means nothing unless its control — the same spawn
-   * with today's unconditional `allow` — actually reached the routed model. If
+   * with legacy test-only unconditional `allow` — actually reached the routed model. If
    * the fixture cannot elicit a sub-agent spawn at all, both are undecided, not
    * evidence against neutral.
    */

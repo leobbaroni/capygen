@@ -11,6 +11,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -101,9 +102,13 @@ describe("read_file", () => {
   });
 
   it("resolves a relative path against the project directory, not process.cwd()", () => {
-    expect(resolvePath(root, "src/a.ts")).toBe(path.resolve(root, "src/a.ts"));
+    // Compared against the *canonical* root: `os.tmpdir()` hands back an 8.3
+    // alias on Windows, and `resolvePath` now returns the real location it
+    // actually checked rather than the spelling it was given.
+    const real = realpathSync.native(root);
+    expect(resolvePath(root, "src/a.ts")).toBe(path.join(real, "src", "a.ts"));
     expect(resolvePath(root, path.join(root, "src", "a.ts"))).toBe(
-      path.normalize(path.join(root, "src", "a.ts")),
+      path.join(real, "src", "a.ts"),
     );
   });
 
@@ -116,7 +121,7 @@ describe("read_file", () => {
     ]) {
       expect(() => resolvePath(root, target)).toThrow(/outside the project directory/);
     }
-    expect(resolvePath(root, ".")).toBe(path.resolve(root));
+    expect(resolvePath(root, ".")).toBe(realpathSync.native(root));
   });
 
   it("reports an out-of-project read as a tool error, not a crash", async () => {
@@ -320,7 +325,7 @@ describe("bash", () => {
     });
     await tool.run({ command: "pwd", cwd: "src" }, ctx({ env: { CLAUDECODE: "1", PATH: "/x" } }));
     const captured = seen as unknown as { cwd: string; env: NodeJS.ProcessEnv };
-    expect(captured.cwd).toBe(path.resolve(root, "src"));
+    expect(captured.cwd).toBe(path.join(realpathSync.native(root), "src"));
     expect(captured.env.CLAUDECODE).toBeUndefined();
     expect(captured.env.PYTHONUTF8).toBe("1");
   });
