@@ -79,10 +79,17 @@ export interface McpSecretsStore {
 
 /** What `createSafeStorageSecretsStore` returns: the Phase 6 provider store,
  *  plus the S0 MCP ref store. */
-export type SafeStorageSecretsStore = SecretsStore & McpSecretsStore;
+export interface UpdaterSecretsStore {
+  setUpdaterToken(value: string): void;
+  getUpdaterToken(): string | null;
+  hasUpdaterToken(): boolean;
+  deleteUpdaterToken(): void;
+}
+export type SafeStorageSecretsStore = SecretsStore & McpSecretsStore & UpdaterSecretsStore;
 
 type SecretsFile = Partial<Record<ApiProvider, string>> & {
   [MCP_NAMESPACE]?: Record<string, string>;
+  updater?: string;
 } & Record<string, unknown>;
 
 type ReadResult =
@@ -131,6 +138,7 @@ function readStore(file: string): ReadResult {
     if (provider in data && typeof data[provider] !== "string") return { kind: "unusable" };
   }
   const nested = data[MCP_NAMESPACE];
+  if (data.updater !== undefined && typeof data.updater !== "string") return { kind: "unusable" };
   if (nested !== undefined && !isValidMcpMap(nested)) return { kind: "unusable" };
   return { kind: "ok", data };
 }
@@ -267,6 +275,26 @@ export function createSafeStorageSecretsStore(
   }
 
   return {
+    setUpdaterToken(value: string): void {
+      if (!value.trim() || value.length > 4096 || /[\r\n]/.test(value)) throw new Error("Invalid updater credential.");
+      requireEncryption("updater credential");
+      const data = readForWrite(filePath);
+      data.updater = encrypt(value.trim(), "updater credential");
+      writeFile(filePath, data);
+    },
+    getUpdaterToken(): string | null {
+      const stored = readForQuery(filePath).updater;
+      if (!stored || !safeStorage.isEncryptionAvailable()) return null;
+      try { return safeStorage.decryptString(Buffer.from(stored, "base64")); }
+      catch { return null; }
+    },
+    hasUpdaterToken(): boolean { return !!readForQuery(filePath).updater; },
+    deleteUpdaterToken(): void {
+      const data = readForWrite(filePath);
+      if (data.updater === undefined) return;
+      delete data.updater;
+      writeFile(filePath, data);
+    },
     set(provider: ApiProvider, value: string): void {
       requireEncryption(`${provider} key`);
       const data = readForWrite(filePath);

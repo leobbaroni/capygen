@@ -21,6 +21,22 @@ import {
 
 const temps: string[] = [];
 
+it("isolates updater ciphertext from provider and MCP namespaces", () => {
+  const filePath = tempFile();
+  const { safeStorage } = fakeSafeStorage();
+  const store = createSafeStorageSecretsStore({ filePath, safeStorage });
+  store.set("anthropic", "provider-fixture");
+  const ref = newMcpSecretRef(); store.setRef(ref, "mcp-fixture");
+  store.setUpdaterToken("updater-fixture");
+  expect(fs.readFileSync(filePath, "utf8")).not.toContain("updater-fixture");
+  expect(store.getUpdaterToken()).toBe("updater-fixture");
+  expect(store.hasUpdaterToken()).toBe(true);
+  store.deleteUpdaterToken();
+  expect(store.getUpdaterToken()).toBeNull();
+  expect(store.get("anthropic")).toBe("provider-fixture");
+  expect(store.getRef(ref)).toBe("mcp-fixture");
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   while (temps.length > 0) {

@@ -10,6 +10,7 @@ allowBuilds:
   '@anthropic-ai/claude-agent-sdk': true
   '@openai/codex': true
   '@openai/codex-sdk': true
+  electron-winstaller: false
 
 minimumReleaseAgeExclude:
   - '@openai/codex-sdk@0.153.4'
