@@ -323,6 +323,8 @@ silently substitute models. Review status and failed Claude attempts are recorde
       Hosts page shows this machine's harness statuses; Terminal attach opens the raw `claude` /
       `codex` CLI in a pane; a sample extension page loads.
       Covers: P18–P20.
+      Implementation: native extension test and packaged raw Codex terminal/speech metadata
+      smoke pass (2026-09-08); user-observed microphone transcription remains pending.
 - [ ] Phase 11: Efficiency pass
       Done when: request-capture tests prove cache_control on system+tools; compaction triggers
       at threshold on a fixture; tool outputs >64 KB truncated with stub; benchmark script
@@ -330,11 +332,15 @@ silently substitute models. Review status and failed Claude attempts are recorde
       Steps: baseline measurement first (CLI via SDK vs our app on identical prompts); then
       caching, compaction, lazy MCP schemas, IPC noise audit.
       Covers: R24, R25, R26, G9.
+      Implementation: bounded API summarizer and SQL text projection fixtures pass; paired
+      benchmark runner is ready, real dedicated-auth measurements remain unavailable.
 - [ ] Phase 12: Packaging, updater, CI, docs, parity audit, release
       Done when: `pnpm build:win` yields installer + portable + latest.yml; release workflow
       publishes on tag; updater finds the release from an older build; README/ARCHITECTURE/
       COMPAT written; adversarial review wave (correctness, security, UX, parity) two clean rounds.
       Covers: R4, G8, G10; checks: A10.
+      Implementation: integrated Windows installer/portable/feed audit and packaged smoke pass;
+      private updater + tag CI written. Actual older-build/private-feed/release proof pending.
 
 ## Verification
 

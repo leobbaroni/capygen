@@ -22,3 +22,4 @@ export * from "./customModeIpc.js";
 export * from "./extensions.js";
 export * from "./extensionIpc.js";
 export * from "./localInputIpc.js";
+export * from "./updatesIpc.js";

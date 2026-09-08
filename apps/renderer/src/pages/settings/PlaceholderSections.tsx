@@ -19,16 +19,8 @@
  *    capygen equivalent is Prerequisites (R3) — redirects there.
  */
 import { Link } from "react-router-dom";
-import { ArrivesLaterNote, SectionIntro } from "@/components/settings/primitives";
-
-export function UpdatesSection() {
-  return (
-    <div data-testid="settings-updates">
-      <SectionIntro title="Updates" description="Automatic / at-launch / manual / never, from GitHub Releases (R4)." />
-      <ArrivesLaterNote phase="Phase 12" what="Packaging and self-update" />
-    </div>
-  );
-}
+import { SectionIntro } from "@/components/settings/primitives";
+export { UpdatesSection } from "./UpdatesSection";
 
 export function AccountSection() {
   return (

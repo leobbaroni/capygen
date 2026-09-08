@@ -16,6 +16,8 @@
 import path from "node:path";
 import fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   BrowserWindow,
   Menu,
@@ -100,6 +102,10 @@ import type { ShareStagingMeta } from "./ipc/sharing.js";
  */
 import { createExtensionIntegration } from "./extensions/integration.js";
 import { registerExtensionScheme } from "./extensions/host.js";
+import { UpdateService } from "./updates/UpdateService.js";
+import { createPrivateUpdateDriver } from "./updates/driver.js";
+import { createUpdateHandlers } from "./ipc/updates.js";
+import { consoleArgv } from "./prereqs/runGate.js";
 const HERE: string = __dirname;
 
 const RENDERER_INDEX = path.join(HERE, "..", "..", "renderer", "dist", "index.html");
@@ -114,6 +120,9 @@ let store: CapygenStore | null = null;
 let log: Logger;
 let ipc: IpcContext | null = null;
 let extensions: ReturnType<typeof createExtensionIntegration> | null = null;
+let updates: UpdateService | null = null;
+let updateTimer: ReturnType<typeof setInterval> | null = null;
+let launchUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 let widgets: WidgetHostHandlers | null = null;
 let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
@@ -490,8 +499,46 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     const sender = senderId === undefined ? null : webContents.fromId(senderId);
     return sender ? BrowserWindow.fromWebContents(sender) : null;
   } });
+  const updateRoot = path.join(app.getPath("userData"), "updates");
+  const updateOwner = () => { const id = ipcSender.getStore(); const contents = id === undefined ? null : webContents.fromId(id); return contents ? BrowserWindow.fromWebContents(contents) : null; };
+  updates = new UpdateService({ root: updateRoot, currentVersion: app.getVersion(), packaged: app.isPackaged,
+    portable: !!process.env.PORTABLE_EXECUTABLE_FILE, secrets: secretsStore, processId: process.pid,
+    driver: (token, progress) => createPrivateUpdateDriver({ root: updateRoot, token, portable: !!process.env.PORTABLE_EXECUTABLE_FILE, progress }),
+    changed: (status) => broadcast("updates.changed", status),
+    idle: () => activeStore.sessions.list().every((row) => row.status !== "running" && row.status !== "waiting" && context.engine.isSessionQuiescent?.(row.id) !== false),
+    confirmInstall: async (command) => {
+      const owner = updateOwner(); if (!owner) return false;
+      const result = await dialog.showMessageBox(owner, { type: "question", title: "Install verified update?", message: "capygen will close, then run this command in a visible PowerShell window.",
+        detail: `${command}\n\nThis is an unsigned build. Its checksum was verified, but no publisher signature is claimed. Nothing runs if you cancel.`, buttons: ["Cancel", "Install update"], defaultId: 0, cancelId: 0 });
+      return result.response === 1 && !owner.isDestroyed();
+    },
+    launchInstall: (command) => new Promise<void>((resolve, reject) => {
+      const launch = consoleArgv(command);
+      const env: Record<string, string> = {};
+      const allowed = new Set(["systemroot", "systemdrive", "windir", "comspec", "path", "pathext", "userprofile", "appdata", "localappdata", "temp", "tmp", "username"]);
+      for (const [key, value] of Object.entries(process.env)) if (value && allowed.has(key.toLowerCase())) env[key] = value;
+      // The confirmed command must not also execute a user's PowerShell profile.
+      const child = spawn(launch.file, ["-NoProfile", ...launch.args], { detached: true, windowsHide: false, stdio: "ignore", env: cleanEnv(env) });
+      child.once("error", () => reject(new Error("Visible installer console could not start")));
+      child.once("spawn", () => { child.unref(); resolve(); });
+    }), quit: () => app.quit(),
+    savePortable: async (source, name, expected) => {
+      const owner = updateOwner(); if (!owner) return false;
+      const selected = await dialog.showSaveDialog(owner, { title: "Save portable replacement", defaultPath: path.join(app.getPath("downloads"), name), filters: [{ name: "Windows application", extensions: ["exe"] }] });
+      if (selected.canceled || !selected.filePath || owner.isDestroyed()) return false;
+      const temporary = path.join(path.dirname(selected.filePath), `.capygen-${randomUUID()}.tmp`);
+      try {
+        await fs.promises.copyFile(source, temporary, fs.constants.COPYFILE_EXCL);
+        let size = 0; const hash = createHash("sha512");
+        for await (const chunk of fs.createReadStream(temporary)) { size += chunk.length; if (size > expected.size) throw new Error("Portable copy size changed"); hash.update(chunk); }
+        if (size !== expected.size || hash.digest("base64") !== expected.sha512) throw new Error("Portable copy checksum failed");
+        await fs.promises.rename(temporary, selected.filePath); return true;
+      } finally { await fs.promises.unlink(temporary).catch(() => {}); }
+    },
+  });
   const context = createIpcContext({
     extensions: extensions.handlers,
+    updates: createUpdateHandlers(updates),
     store: activeStore,
     workspace: {
       worktrees: {
@@ -778,6 +825,11 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
   // chokidar's first scan must not sit between launch and the landing page
   // (G1's 3 s budget).
   context.settings.applyOnStart();
+  if (app.isPackaged) {
+    launchUpdateTimer = setTimeout(() => { const mode = activeStore.globalSettings.all().updates.mode; if (mode === "automatic" || mode === "at-launch") void updates?.check().catch(() => {}); }, 10_000);
+    updateTimer = setInterval(() => { if (activeStore.globalSettings.all().updates.mode === "automatic") void updates?.check().catch(() => {}); }, 15 * 60_000);
+    updateTimer.unref(); launchUpdateTimer.unref();
+  }
   void context.integrations.start().catch((err: unknown) => {
     log.warn("[integrations] could not start the config watchers", err);
   });
@@ -986,6 +1038,9 @@ app.on("will-quit", (event) => {
   shuttingDown = true;
   event.preventDefault();
   void (async () => {
+    if (updateTimer) clearInterval(updateTimer);
+    if (launchUpdateTimer) clearTimeout(launchUpdateTimer);
+    updates?.dispose();
     try { extensions?.dispose(); } catch { log?.warn("[extensions] shutdown cleanup failed"); }
     try { disposePolicy(); }
     catch { log?.warn("[policy] shutdown cleanup failed"); }

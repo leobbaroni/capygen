@@ -88,6 +88,7 @@ export function SettingInput({
   "data-testid": testId,
   "aria-label": ariaLabel,
   className,
+  type = "text",
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -95,10 +96,11 @@ export function SettingInput({
   "data-testid"?: string;
   "aria-label"?: string;
   className?: string;
+  type?: "text" | "password";
 }) {
   return (
     <input
-      type="text"
+      type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}

@@ -18,6 +18,16 @@ absent flags false, two local requests). Resume is unit-tested only; full Codex 
 authoring remains unsupported and unaccepted. Codex/API effort/provider metadata is now
 preserved in harness listings; Claude model/effort metadata now comes from SDK initialization.
 
+Phase 11 implementation now includes a SQL text-only round-table projection, paired benchmark
+runner and bounded same-model API summarization for explicitly configured model capacities.
+Phase 12 implementation includes private updater controls, native-confirmed installation,
+Windows staging/audit and tag-release CI. Integrated native typecheck and 19 focused tests
+passed. Local installer/portable builds are approximately 268 MiB and the actual packaged
+runtime smoke passed (1 test, 10.1s): landing/bridge, updater status, speech helper, both
+bundled CLI versions, PTY echo/raw Codex startup and extension assets. No installer was run
+and no release was published. Benchmark authentication, microphone acceptance and actual
+older-build/private-feed proof remain missing; Phases 10–12 are not accepted.
+
 Current execution is Astra low for hard/medium work while Opus is unavailable, with Luna low
 on easy tasks and lighter reviews/new crucial tests. Root alone stages and commits. No full
 phase acceptance should be inferred from focused checks.
@@ -92,7 +102,8 @@ Preserve the unrelated untracked state.lock. AGENTS.md records the new main-bran
 | 6 Settings hub, two-way config sync, prerequisites | ✅ | `settings.spec.ts` |
 | 7 Projects/worktrees/imports | accepted | `worktrees.spec.ts`, `imports.spec.ts`, scoped MCP fixture |
 | 8 Tasks/Inbox/Usage/Automations | accepted | `activity.spec.ts`, scheduler/Inbox/usage suites |
-| 9, 9C, 10–12 | open; resumed by user | `PLAN.md` |
+| 9, 9C | accepted | Native full gates recorded above |
+| 10–12 | implementation advanced; live acceptance open | `PLAN.md`, focused checks and packaged smoke above |
 
 Historical gate on parent revision `2222cd6` (2026-09-06; handoff committed as `067a7dc`): typecheck 5/5 packages;
 vitest 99 files, 1296 passed, 4 skipped; build ok; Playwright 24 passed, 10 skipped. The skips

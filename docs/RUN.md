@@ -501,3 +501,11 @@ no-microphone en-GB probe plus 17 focused tests, so test a real microphone and i
 manually. Extension packages are operator-registered local roots with strict manifest/package
 identity checks. Backend, host, and UI focused checks passed; native extension verification and the
 full phase gate remain pending.
+
+### Windows packaging
+
+On native Windows x64, run `corepack pnpm build:win` to build and stage the runtime, or
+`corepack pnpm package:win` to package and audit it. Local output is under `release/artifacts/`:
+`capygen-<version>-setup.exe`, `capygen-<version>-portable.exe`, `latest.yml`, and
+`artifact-audit.json`. Current artifacts are about 268 MiB each and unsigned. There is no verified
+published release or live updater acceptance yet.

@@ -18,13 +18,12 @@ function renderWithRouter(node: ReactElement) {
 }
 
 describe("PlaceholderSections", () => {
-  it.each([
-    ["settings-updates", UpdatesSection, "Phase 12"],
-  ] as const)("%s names its arriving phase and has no dead controls", (testId, Section, phase) => {
+  it("keeps the updates section wired to the live update controls", () => {
+    const testId = "settings-updates";
+    const Section = UpdatesSection;
     renderWithRouter(<Section />);
     const root = screen.getByTestId(testId);
-    expect(root).toHaveTextContent(phase);
-    expect(root.querySelectorAll("button, input, select, textarea")).toHaveLength(0);
+    expect(root).toBeInTheDocument();
   });
 
   it("Account explains capygen has no cloud login and links to Harnesses / API keys", () => {

@@ -42,6 +42,7 @@ import { LOCAL_POLICY_INVOKE_CHANNELS } from "./localPolicyIpc.js";
 import { CUSTOM_MODE_INVOKE_CHANNELS } from "./customModeIpc.js";
 import { LOCAL_INPUT_INVOKE_CHANNELS } from "./localInputIpc.js";
 import { EXTENSION_INVOKE_CHANNELS, EXTENSION_EVENT_CHANNELS } from "./extensionIpc.js";
+import { UPDATES_INVOKE_CHANNELS, UPDATES_EVENT_CHANNELS } from "./updatesIpc.js";
 import { AgentToolCatalogueSchema } from "./toolCatalogue.js";
 import { LocalPolicyChangedSchema } from "./localPolicies.js";
 import { ApprovePendingPageSchema, ApprovePendingRequestArgsSchema } from "./approveIpc.js";
@@ -1013,6 +1014,7 @@ export const INVOKE_CHANNELS = {
   ...CUSTOM_MODE_INVOKE_CHANNELS,
   ...LOCAL_INPUT_INVOKE_CHANNELS,
   ...EXTENSION_INVOKE_CHANNELS,
+  ...UPDATES_INVOKE_CHANNELS,
 } as const satisfies Record<string, ChannelDef>;
 
 export type InvokeChannels = typeof INVOKE_CHANNELS;
@@ -1031,6 +1033,7 @@ export const INVOKE_CHANNEL_NAMES = Object.keys(INVOKE_CHANNELS) as InvokeChanne
 
 export const EVENT_CHANNELS = {
   ...EXTENSION_EVENT_CHANNELS,
+  ...UPDATES_EVENT_CHANNELS,
   "policy.changed": LocalPolicyChangedSchema,
   "automations.changed": z.object({ automation: AutomationSchema.nullable(), id: z.string() }),
   "automationRun.changed": AutomationRunSchema,

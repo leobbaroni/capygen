@@ -36,6 +36,7 @@ import { createCustomModeAuthoring } from "../engine/CustomModeAuthoring.js";
 import { DictationService } from "../workspace/DictationService.js";
 import { createLocalInputHandlers } from "./localInput.js";
 import { unavailableExtensionHandlers, type ExtensionHandlers } from "./extensions.js";
+import { createUpdateHandlers, type UpdateHandlers } from "./updates.js";
 import { InboxService } from "../inbox/InboxService.js";
 import { AutomationService } from "../automations/AutomationService.js";
 import { API_ENV_KEYS } from "./harnessList.js";
@@ -131,6 +132,7 @@ export function createInMemorySecretsStore(): SecretsStore {
 
 export interface IpcContextDeps {
   extensions?: ExtensionHandlers;
+  updates?: UpdateHandlers;
   store: CapygenStore;
   broadcast: Broadcast;
   log: EngineLogger;
@@ -526,6 +528,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const dictation = new DictationService();
   const handlers: IpcHandlers = {
     ...(deps.extensions ?? unavailableExtensionHandlers()),
+    ...(deps.updates ?? createUpdateHandlers()),
     ...createLocalInputHandlers({ dictation, terminals: workspace.terminals }),
     "automations.list": (args) => automationService!.list(args),
     "automations.create": (args) => automationService!.create(args),

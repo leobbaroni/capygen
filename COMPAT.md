@@ -711,3 +711,53 @@ accuracy behavior remains user-observed. Extensions use operator-registered loca
 strict manifests, verified roots/assets, fresh per-view grants, bounded bridge traffic, namespaced
 storage, and explicit GitHub PR lookup. Native extension verification remains pending; this does not
 claim full parity.
+
+## Windows packaging and explicit updater (Phase 12 implementation)
+
+The local build pins `electron-builder` 26.15.3 and `electron-updater` 6.8.9.
+`scripts/packaging/stage.mjs` copies the production dependency closures for Claude SDK,
+Codex SDK/vendor executable, node-pty and electron-updater into a physical (`asar:false`)
+runtime tree. Relative worker, SDK/native helper and renderer paths remain concrete.
+The artifact audit hashes required runtime files and font, records source revision/dirty
+state, preserves notices, and writes size/SHA512 metadata for both NSIS and portable EXEs.
+
+The updater uses pinned `NsisUpdater.doDownloadUpdate(DownloadUpdateOptions)` to select
+exactly `capygen-${version}-setup.exe` or `capygen-${version}-portable.exe` from the release.
+It retains the library's authenticated transport/checksum verification and additionally
+verifies the owned retained copy. `autoDownload`, `autoInstallOnAppQuit` and
+`autoRunAppAfterInstall` are false. No `quitAndInstall` call is used.
+`PrivateGitHubProvider` is selected by an explicit safeStorage token with `private` omitted:
+in 6.8.9 `private:true` would prefer inherited GH_TOKEN/GITHUB_TOKEN over that token.
+The repository identity remains explicitly `leobbaroni/capygen`; omitting the option does
+not change repository visibility. builder-util-runtime 9.7.0 strips sensitive headers on
+cross-origin redirects. Transport errors are replaced with fixed messages; SDK logging is
+suppressed. No token reaches renderer status or provider/MCP credential namespaces.
+
+The main process rechecks idle state and SHA512 after native confirmation, starts a visible
+PowerShell `-NoProfile` console with an allowlisted cleaned environment, and exits. The
+console waits at most 60 seconds for that process to close before running the verified
+installer without silent flags. Portable replacement uses a native Save dialog, verifies an
+exclusive temporary copy, then renames it into the selected destination. Cleanup never
+removes that user-saved copy. Owned cache limits are 512 MiB per artifact, 1536 MiB aggregate
+and four artifact slots including reserved download/copy space.
+
+These builds are unsigned: checksums detect mismatches against release metadata but do not
+verify publisher identity. Local build/audit and isolated fixtures do not establish the
+still-pending older-build/private-release or installed-app acceptance.
+
+## API context compaction (Phase 11 implementation)
+
+API agents may set `config.api.contextWindowTokens` to the verified capacity of their
+selected provider/model (integer 1024–10000000). Unknown capacities are not guessed and
+automatic summarization stays unavailable until one is configured. The session captures
+`efficiency.compactionThresholdPct / 100`; a UTF-8 serialized-size/4 heuristic plus output
+reserve triggers at that fraction. This is a context estimate, not billed usage accounting.
+
+At most one summary request runs before a turn's primary request. It uses the same provider
+and model, no tools, a fixed summarization prompt, at most 1024 output tokens and at most
+64 KiB of earlier complete conversation groups. The latest completed group and active group
+remain intact, including tool-call/result pairs. A nonempty, completed, reducing summary
+replaces only the in-memory API prefix; persisted transcript, primary system and tool schemas
+remain unchanged. Failures/cancellation retain history. Reported summary usage is included
+in per-model turn accounting. Claude/Codex retain backend-native compaction behavior; the API
+summarizer does not promise a particular native CLI auto-compaction threshold.

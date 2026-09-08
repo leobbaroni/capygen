@@ -11,10 +11,13 @@
     "build": "corepack pnpm --filter @capygen/renderer build && corepack pnpm --filter @capygen/desktop build",
     "start": "corepack pnpm --dir apps/desktop exec electron .",
     "test": "vitest run",
-    "typecheck": "corepack pnpm -r --if-present typecheck && tsc -p tests/tsconfig.json",
+    "typecheck": "corepack pnpm -r --if-present typecheck && tsc -p tests/tsconfig.json && tsc -p scripts/benchmark/tsconfig.json",
     "e2e": "corepack pnpm build && playwright test",
     "e2e:only": "playwright test",
-    "spike": "corepack pnpm --filter @capygen/engine spike"
+    "spike": "corepack pnpm --filter @capygen/engine spike",
+    "build:win": "corepack pnpm build && node scripts/packaging/stage.mjs && corepack pnpm exec electron-builder --projectDir release/stage --config ../../electron-builder.cjs --win --x64 --publish never && node scripts/packaging/audit.mjs",
+    "package:win": "node scripts/packaging/stage.mjs && corepack pnpm exec electron-builder --projectDir release/stage --config ../../electron-builder.cjs --win --x64 --publish never && node scripts/packaging/audit.mjs",
+    "benchmark:efficiency": "tsx scripts/benchmark/run.mts"
   },
   "devDependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.5",

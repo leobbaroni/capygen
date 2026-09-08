@@ -2597,3 +2597,51 @@ Tests 2815 passed | 4 skipped (2819)
 ```
 
 Twelve live tests are skipped, not passed; dedicated authenticated homes, real efficiency cohort and private packaged updater remain open. The GitHub repository was rechecked private before pushing. Separately added exact packaging dependencies electron-builder 26.15.3 / electron-updater 6.8.9 and dedicated encrypted updater credential storage; no release or installer was launched. Squirrel helper install scripts explicitly denied.
+
+## 2026-09-08 — Phase 11/12 implementation and focused verification
+
+Astra low implemented/integrated; Luna low reviewed new updater/packaging and compaction
+paths and fixed/tested updater controls. Opus was not retried. No model test calls were made.
+Phase 9C acceptance remains the last full gate; these checks do not tick Phases 10–12.
+
+- Round-table SQLite text projection avoids materializing large tool payloads; benchmark
+  runner pre-registers three paired 20-turn cohorts and refuses unavailable auth/accounting.
+- API same-model bounded summarizer now uses explicit verified context capacity and captured
+  threshold; counts summary usage and preserves recent complete tool exchanges.
+- Explicit private updater: safeStorage-only credential, check-only scheduling, cancellation,
+  bounded retained cache, checksum verification and native-confirmed visible installation.
+  Portable output saves through the native dialog and is excluded from cache cleanup.
+- Windows staging now includes BOTH Claude and Codex native dependency closures. Review found
+  Codex missing from the first local packaging pass; required-file audit now enforces it.
+- Added pinned-action Windows CI/tag release workflow (not remotely executed yet), docs and
+  packaged runtime smoke. No release tag, installer launch or live private-feed proof yet.
+
+Native Windows `corepack pnpm typecheck` passed, followed by targeted changed-path tests:
+```
+Test Files  5 passed (5)
+Tests       19 passed (19)
+Duration    4.18s
+```
+Files: UpdateService (6), UpdatesSection (5), apiCompaction (4), benchmarkReport (3),
+textProjection (1). Evidence: `e2e-out/phase11-12-focused.log`. Separate updater IPC inventory
+and desktop/shared typechecks passed; no repeated full unit/Electron gate was run.
+
+`corepack pnpm build:win` passed on the integrated working tree, physical runtime 423 entries:
+```
+capygen-0.1.0-setup.exe     280446405 bytes
+capygen-0.1.0-portable.exe  280156036 bytes
+```
+Artifact audit records unsigned publisher status, source revision + dirty flag, both SHA512
+and SHA256 hashes, native helper/SDK/PTY/font identities. Evidence:
+`e2e-out/phase12-integrated-build.log`, `release/artifacts/artifact-audit.json`.
+Live microphone, dedicated-auth benchmark and older-build/private-release proofs remain open.
+
+Packaged runtime smoke then passed (`scripts/packaging/playwright.config.ts`):
+```
+1 passed (10.1s)
+```
+It launches the real `win-unpacked/capygen.exe` with disposable homes and proves packaged
+status, renderer bridge, updater idle/no credential, compiled speech availability, exact
+bundled Claude and Codex executable versions, actual PTY echo and raw Codex CLI startup,
+and sample extension assets. No prompt or installer was run. This also closes the raw
+terminal startup evidence gap in Phase 10, but does not substitute for microphone acceptance.
