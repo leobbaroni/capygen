@@ -1,10 +1,17 @@
 name: Windows checks and release
+run-name: ${{ github.event.inputs.validation == 'package' && 'Windows packaging diagnostic (unit gate skipped)' || 'Windows checks and release' }}
 on:
   push:
     branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      validation:
+        description: Full gate or packaging diagnostic only (not release acceptance)
+        type: choice
+        default: full
+        options: [full, package]
 permissions:
   contents: read
 concurrency:
@@ -26,6 +33,7 @@ jobs:
           corepack pnpm install --frozen-lockfile
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Check types and deterministic tests
+        if: github.event.inputs.validation != 'package'
         shell: pwsh
         run: |
           corepack pnpm typecheck
@@ -38,6 +46,7 @@ jobs:
           corepack pnpm build:win
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native Electron fixtures (isolated homes, no model credentials)
+        if: github.event.inputs.validation != 'package'
         shell: pwsh
         run: |
           corepack pnpm exec playwright test

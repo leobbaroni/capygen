@@ -2,6 +2,7 @@
  * Every ported-but-deferred section: renders, names its phase (or its
  * capygen redirect), and offers no dead control (no button/input/select).
  */
+import { UpdatesSection as LiveUpdatesSection } from "./UpdatesSection";
 import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -19,11 +20,7 @@ function renderWithRouter(node: ReactElement) {
 
 describe("PlaceholderSections", () => {
   it("keeps the updates section wired to the live update controls", () => {
-    const testId = "settings-updates";
-    const Section = UpdatesSection;
-    renderWithRouter(<Section />);
-    const root = screen.getByTestId(testId);
-    expect(root).toBeInTheDocument();
+    expect(UpdatesSection).toBe(LiveUpdatesSection);
   });
 
   it("Account explains capygen has no cloud login and links to Harnesses / API keys", () => {

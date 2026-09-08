@@ -2672,3 +2672,15 @@ not a deadlock. Two `packages/db/test/usage.test.ts` cases exceeded the default 
 limit on the clean Windows runner (6.1s and 5.5s). Gave only those filesystem/migration cases
 20 seconds and set CI to two Vitest workers; assertions are unchanged. The targeted usage
 suite passes locally. CI cancellation is not recorded as a test pass.
+
+Clean CI at f33e0e0 completed its unit stage: 222 files / 2831 tests passed, two tests failed,
+7 skipped. One placeholder wiring test incorrectly mounted live Updates without an IPC mock;
+it now checks the export identity (the dedicated Updates suite exercises behavior). One
+runtimeStartup database setup hook exceeded 10 seconds; only that hook now gets 30 seconds.
+Both affected suites pass locally (26 tests, 20.04s). CI also reported a worker RPC timeout;
+full CI acceptance remains open. No application behavior changed in these fixture fixes.
+
+Added an explicit manual `validation=package` workflow diagnostic that skips unit/ordinary
+Electron gates and is labeled accordingly. It checks the remaining clean-machine packaging
+and packaged smoke without repeating 2831 already-passing cases. Tag/normal runs retain the
+full gate; a diagnostic success is never a phase/release acceptance claim.

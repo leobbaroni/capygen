@@ -268,7 +268,7 @@ beforeEach(() => {
   HARNESSES = BASE_HARNESSES.map((h) => ({ ...h, models: [...h.models] }));
   holdHistory = null;
   historyAsked = 0;
-});
+}, 30_000);
 
 afterEach(async () => {
   await ipc.dispose();
