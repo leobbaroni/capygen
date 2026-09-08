@@ -2,16 +2,18 @@
 
 One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contract.
 
-Active UX repair queue: [`docs/plans/2026-09-08-ux-repair.md`](docs/plans/2026-09-08-ux-repair.md).
-Later parity phases remain paused while this queue is pending; this link does not tick any phase.
+UX repair evidence: [`docs/plans/2026-09-08-ux-repair.md`](docs/plans/2026-09-08-ux-repair.md).
+The repair is committed at `1a429b3`; the resumed run verifies it before continuing remaining acceptance work.
 
 ## Current State
 
-- Phases 1–8 are accepted; latest checkpoint `f80500c` on `main`.
-- The user resumes all remaining phases (9, 9C, 10–12). Work and verified pushes use `main`.
-- Phase 8 gate: typecheck/build passed; 1883 unit tests passed / 4 skipped;
-  46 Playwright tests passed / 12 skipped. See `PROJECT_LOG.md` for evidence.
-- Dedicated live benchmark and packaged/updater proofs remain open in their assigned phases.
+- Phases 1–9 and 9C are accepted. Work and verified pushes use `main`.
+- Phase 9C gate: typecheck/build passed; 2815 unit tests passed / 4 skipped;
+  54 native Electron tests passed / 12 live tests skipped. See `PROJECT_LOG.md` for evidence.
+- Phases 10–12 remain open. The user has not tested microphone dictation and explicitly
+  deferred the live benchmark on 2026-09-08; continue fixes and automated checks.
+- Packaging and packaged smoke have passed; actual older-build/private-feed, release,
+  full CI and final review evidence remain required for Phase 12 acceptance.
 
 ## Approach
 

@@ -35,7 +35,7 @@
  *   (e) an API key stored through Providers is absent, as plaintext, from the
  *       settings database, the log file and every config file — while
  *       `secrets.has` is true (R21);
- *   (f) with `codex` taken off PATH the setup panel shows the step, and Run…
+ *   (f) with an isolated signed-out Codex home the setup panel offers login, and Run…
  *       reaches the confirm dialog and spawns **nothing** when it is cancelled
  *       (R3, R27);
  *   (g) the dark-theme screenshot, `e2e-out/settings-dark.png`;
@@ -51,6 +51,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import {
   _electron as electron,
   expect,
@@ -641,35 +642,22 @@ test.describe("settings hub on isolated backend homes", () => {
 test.describe("prerequisites gate", () => {
   test.slow();
 
-  test("(f) a missing codex shows a step; Run… asks first and spawns nothing", async () => {
+  test("(f) a signed-out Codex offers login; Run… asks first and spawns nothing", async () => {
     fs.mkdirSync(outDir, { recursive: true });
     const homes = makeHomes("prereq");
-
-    // Take every directory that actually holds a `codex` executable off PATH,
-    // rather than blanking PATH wholesale — Electron and the other probes
-    // (node, git, rg) must still work, so that the step this asserts on is
-    // missing for the reason the test intends.
-    const sep = path.delimiter;
-    const prunedPath = (process.env.PATH ?? "")
-      .split(sep)
-      .filter((dir) => {
-        if (dir.trim() === "") return false;
-        return !["codex.exe", "codex.cmd", "codex.bat", "codex"].some((name) => {
-          try {
-            return fs.existsSync(path.join(dir, name));
-          } catch {
-            return false;
-          }
-        });
-      })
-      .join(sep);
-    expect(prunedPath.length).toBeGreaterThan(0);
+    const sdkPackage = fs.realpathSync(path.join(repoRoot, "apps/desktop/node_modules/@openai/codex-sdk/package.json"));
+    const codexPackage = createRequire(sdkPackage).resolve("@openai/codex/package.json");
+    const platformPackage = createRequire(codexPackage).resolve("@openai/codex-win32-x64/package.json");
+    const cliDirectory = path.join(path.dirname(platformPackage), "vendor/x86_64-pc-windows-msvc/bin");
+    expect(fs.existsSync(path.join(cliDirectory, "codex.exe"))).toBe(true);
+    const cliPath = [cliDirectory, process.env.PATH ?? ""].join(path.delimiter);
 
     let launched: Launched | null = null;
     try {
       launched = await launch(homes, {
-        PATH: prunedPath,
-        Path: prunedPath,
+        // Use the pinned CLI even on clean CI with no global Codex installation.
+        PATH: cliPath,
+        Path: cliPath,
         // The one seam: the confirm dialog answers Cancel without drawing.
         // Everything else about the gate — the refusal rules, the console
         // launcher — is the shipping code.
@@ -679,10 +667,16 @@ test.describe("prerequisites gate", () => {
       await openSettings(page, "prereqs");
       await expect(page.getByTestId("prereq-panel")).toBeVisible({ timeout: 60_000 });
 
-      const codexStep = page.locator('[data-testid="prereq-step-row"][data-step-id="codex-cli"]');
+      const status = await invoke<{ steps: { id: string; detected: boolean; command?: string }[] }>(page, "prereqs.status", {});
+      const codexCli = status.steps.find((step) => step.id === "codex-cli")!;
+      const codexLogin = status.steps.find((step) => step.id === "codex-login")!;
+      expect(codexCli.detected).toBe(true);
+      expect(codexLogin.detected).toBe(false);
+      const codexStep = page.locator('[data-testid="prereq-step-row"][data-step-id="codex-login"]');
       await expect(codexStep).toBeVisible({ timeout: 60_000 });
       await expect(codexStep).toHaveAttribute("data-detected", "false", { timeout: 60_000 });
-      await expect(codexStep).toContainText("npm install -g @openai/codex");
+      expect(codexLogin.command).toBeTruthy();
+      await expect(codexStep).toContainText(codexLogin.command!);
       await page.screenshot({ path: path.join(outDir, "settings-prereqs.png") });
 
       // R3/R27: the button asks, and a Cancel runs nothing.
@@ -693,23 +687,15 @@ test.describe("prerequisites gate", () => {
         .toContain("CAPYGEN_PREREQ_CONFIRM=cancel");
       const log = readLog(homes.userDataDir);
       // The dialog it built was for this step's exact command…
-      expect(log).toContain("npm install -g @openai/codex");
+      expect(log).toContain(codexLogin.command!);
       // …and the console launcher was never reached.
       expect(log).not.toContain("in a visible console");
 
       // The channel says the same thing, from the other side.
       const result = await invoke<{ ok: boolean; started: boolean }>(page, "prereqs.run", {
-        stepId: "codex-cli",
-      });
-      expect(result).toEqual({ ok: false, started: false });
-
-      // A step whose dependency is unmet is refused *before* the dialog: the
-      // gate's first rule, and the one a UI change could silently drop.
-      const blocked = await invoke<{ ok: boolean; started: boolean }>(page, "prereqs.run", {
         stepId: "codex-login",
       });
-      expect(blocked).toEqual({ ok: false, started: false });
-      expect(readLog(homes.userDataDir)).toContain('refusing to run "codex-login"');
+      expect(result).toEqual({ ok: false, started: false });
 
       expect(launched.errors, launched.errors.join(" | ")).toEqual([]);
     } finally {

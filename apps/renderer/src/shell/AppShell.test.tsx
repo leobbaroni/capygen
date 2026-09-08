@@ -64,11 +64,11 @@ describe("AppShell theme wiring", () => {
     invoke.mockResolvedValue(DEFAULT_GLOBAL_SETTINGS);
     renderShell();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("settings.getAll", {}));
-    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
 
-    changedListener?.({ settings: { ...DEFAULT_GLOBAL_SETTINGS, appearance: { ...DEFAULT_GLOBAL_SETTINGS.appearance, theme: "dark", palette: "nord" } } });
+    changedListener?.({ settings: { ...DEFAULT_GLOBAL_SETTINGS, appearance: { ...DEFAULT_GLOBAL_SETTINGS.appearance, theme: "light", palette: "nord" } } });
 
-    await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
+    await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(false));
     expect(document.documentElement.getAttribute("data-theme")).toBe("nord");
   });
 });

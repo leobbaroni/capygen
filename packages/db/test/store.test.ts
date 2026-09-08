@@ -646,7 +646,7 @@ describe("usage events", () => {
 describe("settings", () => {
   it("returns the shipping defaults for an empty table", () => {
     const s = store.settings.all();
-    expect(s.theme).toBe("system");
+    expect(s.theme).toBe("dark");
     expect(s.hopCap).toBe(3);
   });
 
@@ -663,7 +663,7 @@ describe("settings", () => {
   it("ignores unknown keys left behind by a newer build", () => {
     store.settings.setRaw("some_future_key", { a: 1 });
     expect(() => store.settings.all()).not.toThrow();
-    expect(store.settings.all().theme).toBe("system");
+    expect(store.settings.all().theme).toBe("dark");
   });
 
   it("stores raw non-user state such as window geometry", () => {

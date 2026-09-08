@@ -53,9 +53,17 @@ it("persists namespaced values and refuses every quota atomically", async () => 
   expect(await storage.get("acme.one", "key")).toEqual({ value: "one" });
   for (let i = 0; i < 8; i++) await storage.set("acme.large", `key${i}`, "x".repeat(32700));
   await expect(storage.set("acme.large", "overflow", "x".repeat(32700))).rejects.toMatchObject({ code: "quota" });
-  for (let i = 0; i < 128; i++) await storage.set("acme.keys", `key${i}`, i);
-  await expect(storage.set("acme.keys", "overflow", 1)).rejects.toMatchObject({ code: "quota" });
-  expect(await storage.get("acme.keys", "overflow")).toBeNull();
+  // Seed just below the key limit, then exercise both sides through real writes.
+  const keyRoot = await temp();
+  await writeFile(join(keyRoot, "capygen-extension-storage.json"), JSON.stringify({
+    "acme.keys": Object.fromEntries(Array.from({ length: 127 }, (_, i) => [`key${i}`, i])),
+  }));
+  const keys = createExtensionStorage(keyRoot, () => tick += 100);
+  await keys.set("acme.keys", "key127", 127);
+  await expect(keys.set("acme.keys", "overflow", 1)).rejects.toMatchObject({ code: "quota" });
+  const persisted = createExtensionStorage(keyRoot);
+  expect(await persisted.get("acme.keys", "key127")).toBe(127);
+  expect(await persisted.get("acme.keys", "overflow")).toBeNull();
 });
 it("enforces aggregate profile quota without altering prior persisted values", async () => {
   const root = await temp(); const seed: Record<string, Record<string, string>> = {};

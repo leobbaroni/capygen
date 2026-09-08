@@ -19,21 +19,21 @@ describe("AppearanceSection", () => {
   it("renders the shipping theme/palette/font-scale/reduced-motion defaults", async () => {
     render(<AppearanceSection />);
     expect(await screen.findByTestId("settings-appearance")).toBeInTheDocument();
-    expect(screen.getByTestId("select-theme")).toHaveValue("system");
+    expect(screen.getByTestId("select-theme")).toHaveValue("dark");
     expect(screen.getByTestId("select-palette")).toHaveValue("default");
     expect(screen.getByTestId("select-font-scale")).toHaveValue("1");
     expect(screen.getByTestId("toggle-reduced-motion")).toHaveAttribute("aria-checked", "false");
   });
 
-  it("patches appearance.theme to 'dark' when the theme select changes", async () => {
+  it("patches appearance.theme to 'light' when the theme select changes", async () => {
     const user = userEvent.setup();
     render(<AppearanceSection />);
     await screen.findByTestId("settings-appearance");
 
-    await user.selectOptions(screen.getByTestId("select-theme"), "dark");
+    await user.selectOptions(screen.getByTestId("select-theme"), "light");
 
     await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("settings.patch", { patch: { appearance: { theme: "dark" } } }),
+      expect(invoke).toHaveBeenCalledWith("settings.patch", { patch: { appearance: { theme: "light" } } }),
     );
   });
 

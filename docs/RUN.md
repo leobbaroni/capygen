@@ -76,7 +76,9 @@ corepack pnpm start          # launch Electron on the built output
 into `apps/desktop/dist/migrations`, and the brand icons into `apps/desktop/dist/assets`.
 A new migration needs no build change; a new runtime file read by path does.
 
-Packaging (`build:win`, NSIS + portable + updater feed) is Phase 12 and does not exist yet.
+Packaging (`build:win`, NSIS + portable + updater feed) is implemented for Phase 12. Local
+artifact and packaged-smoke checks exist, while older-build updater, private-feed/release and
+full Phase 12 acceptance remain open; see the Windows packaging section below.
 
 ---
 

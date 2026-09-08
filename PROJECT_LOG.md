@@ -2831,3 +2831,52 @@ Running 1 test using 1 worker
 ok custom draft generation, reviewed Apply and restart preserve the working transcript (8.4s)
 1 passed (9.2s)
 ```
+
+### 2026-09-08 — Resume audit and regression fixture repairs
+
+Resumed from main at 1a429b3 after inspecting the current contracts, phase plan,
+handoff, UX repair checklist, working tree and GitHub CI. Phases 9 and 9C were
+already accepted; no work was restarted from the earlier Phase 8 checkpoint.
+The user has not tested microphone dictation and explicitly deferred the live
+benchmark. The native local-extension page placement decision is pending.
+
+The initial full unit gate found five stale assertions: four still expected the
+old system-theme default and one queried the removed dictation-language select.
+The corrected tests retain actual dark-to-light transitions, the backend patch,
+installed-language metadata, transcription payload, no automatic send, and cancellation.
+A later quota fixture timed out doing 128 serial setup writes under full-suite
+load; it now seeds 127 keys, performs the real 128th write, refuses the 129th,
+and reopens storage to verify accepted and refused persistence. No production
+behavior or quota was changed. Astra reviewed Luna's test changes; Luna reviewed
+the root corrections, quota boundary and native fixture changes with no findings.
+
+The native prerequisite fixture previously tried to hide Codex by pruning PATH.
+That no longer models the app: native detection intentionally refreshes Windows
+PATH. It now uses the pinned SDK CLI on PATH and a signed-out isolated home,
+checks the exact login command, and proves Cancel never starts the console.
+Missing-CLI/dependency refusal remain covered by prereqsDetect/prereqsIpc units.
+
+Verification (all homes isolated; no paid prompts, login, install or release):
+```text
+e2e-out/resume-current-typecheck.log: all package/test typechecks passed
+e2e-out/resume-final-test-typecheck.log: tsc -p tests/tsconfig.json exited 0
+e2e-out/resume-current-build.log: renderer and desktop bundles built
+e2e-out/resume-final-unit.log:
+ Test Files  241 passed (241)
+      Tests  2917 passed | 4 skipped (2921)
+   Duration  77.61s
+e2e-out/resume-current-native.log:
+  2 failed (extension navigation; obsolete missing-Codex fixture)
+  12 skipped
+  53 passed (5.8m)
+e2e-out/resume-prereq-native.log:
+  1 passed (13.5s)
+```
+
+The full native gate is not green: replacing Extensions with Tools removed access
+to registered local app pages. The user's choice of placement is pending; the
+failure has not been skipped or bypassed. Full CI run 34276827514 on the old
+revision was cancelled once its known stale assertions were reproduced locally.
+This fixture/documentation commit skips CI to avoid knowingly repeating the
+remaining navigation failure; run full CI after that repair. No phase boxes ticked.
+The pre-existing engine package script/probe and state.lock remain untouched.

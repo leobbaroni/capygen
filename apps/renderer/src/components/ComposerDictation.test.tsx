@@ -17,11 +17,11 @@ beforeEach(() => {
 });
 
 describe("composer local dictation", () => {
-  it("shows the installed language before recording and appends the phrase without sending", async () => {
+  it("exposes en-GB before recording and appends the phrase without sending", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(<Composer onSubmit={onSubmit} />);
-    await waitFor(() => expect(screen.getByLabelText("Dictation language")).toHaveValue("en-GB"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Dictate" })).toHaveAttribute("title", "Dictate locally in en-GB"));
     expect(invoke).not.toHaveBeenCalledWith("dictation.recognize", expect.anything());
     await user.type(screen.getByLabelText("Message"), "Please:");
     await user.click(screen.getByRole("button", { name: "Dictate" }));

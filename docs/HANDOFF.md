@@ -2,6 +2,17 @@
 
 ## Current work
 
+Resumed 2026-09-08 after `1a429b3`: the complete unit suite passes (2917 passed,
+4 skipped) after stale theme/dictation assertions and an oversized quota fixture were
+corrected. Typecheck and build passed. The native suite initially reported 53 passed,
+12 skipped and two failures; the prerequisite cancellation regression now passes in a
+focused run. Local app pages remain unreachable after the Tools redesign, so the extension
+native test is still failing and placement awaits the user's choice. No new phase is accepted.
+The user has not tested microphone dictation and explicitly deferred the live benchmark;
+continue fixes and automated checks. The existing uncommitted Codex isolation probe and
+`state.lock` are preserved. Full CI on the old revision was cancelled after reproducing
+its stale assertions locally; a new full CI run is needed after the navigation issue is resolved.
+
 Phase 9 is accepted at `a319b5b`. Phase 9C passed its full gate on 2026-09-08: typechecks,
 2815 unit tests (4 skipped), build, and 54 native Electron tests (12 live skipped, 2.3m).
 The native Custom Mode test generates a tool-free draft, edits it visually, applies it and
@@ -74,7 +85,7 @@ continuations. Members, Policies and Approve enforce local permissions in native
 Audit migration 0012 snapshots execution site at admission, including concurrent requests
 and disposed captures. Migration 0011 stores local share comments.
 
-Next: Phase 9C Custom Mode, then Phases 10–12. The standalone customMode.ts contract draft
+At this historical Phase 9 checkpoint, next was Phase 9C Custom Mode, then Phases 10–12. The standalone customMode.ts contract draft
 is not integrated or accepted. Codex no-tool authoring isolation remains unproven and must
 stay unavailable. Opus reached its session quota (reset reported 07:40 Lisbon); Astra
 continues integration and Luna handles small tasks/reviews. Root alone stages and commits.
@@ -85,7 +96,9 @@ Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium impl
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied
 before acceptance. Phases 1–6 remain historical acceptance, preserved below.
 
-## Current checkpoint
+## Historical checkpoint — before Phase 9/9C acceptance
+
+The current acceptance status is in the Current work section above.
 
 Phases 7 and 8 are accepted at `f80500c` on `main`. The user has now authorized the
 remaining phases: 9, 9C and 10–12. Current crew: Astra low lead, Opus 5 medium hard/medium,
@@ -199,7 +212,7 @@ No pushes were made; origin is not configured.
 `docs/POLICIES.md` · `docs/adr/0001–0005` · `COMPAT.md` · `docs/RUN.md` · `docs/spikes/*` ·
 `PROJECT_LOG.md` (per-task entries with command output) · `e2e-out/*.png` (latest screenshots).
 
-## Astra review addendum — 2026-09-06
+## Historical Astra review addendum — 2026-09-06
 
 See `docs/reviews/phase1-6.md` for recovered session provenance and confirmed open findings.
 See `docs/plans/phases7-12.md` for the corrective prerequisite batch and next-phase briefs.
@@ -234,7 +247,9 @@ touch the existing row. HTTP/SSE headers use Claude's native `--header` option. 
 servers remain switchable through Claude's `enabledMcpjsonServers` / `disabledMcpjsonServers`
 approval lists in `.claude/settings.local.json`.
 
-Custom Mode is specified in ADR-0006 and the Phase 9C plan; it is not implemented.
+The following notes are from an earlier, superseded checkpoint. At the current checkpoint,
+Custom Mode is accepted (see the current-work summary above); retain this paragraph only as
+historical context for the pre-acceptance state.
 Mascots remain static sharp PNGs. Live app prompts must use Luna low or Sonnet 5
 low, with dedicated test homes; the skipped live proofs are not completion.
 Opus/Fable hit the Claude session limit at approximately 02:35 Lisbon, with reset
@@ -259,7 +274,7 @@ and the 380px screenshot. These
 checks preceded the final Phase 7–8 acceptance gate above. Packaged SDK smoke remains Phase 12 work, and Phase 11 live benchmark evidence awaits dedicated authenticated homes.
 
 
-## Phase 9 work in progress
+## Superseded Phase 9 work-in-progress checkpoint
 
 Reviewed commits on main: share bundle contract `5f72db8`, atomic share storage `c7f23fd`,
 Codex dynamic bridge `202fe4d`, informational MCP menu presentation `c5fbb85`.
@@ -268,8 +283,8 @@ Share codec is reviewed at `13d8ff8` (44 focused tests). Codex desktop delegatio
 routing UI are now reviewed (114 engine/desktop plus five renderer focused tests); native
 dynamic-call blocks retain full-output references, and declaration changes start a fresh
 thread with a bounded inert prose reference. Live model choice remains unproved.
-No new phase is accepted. Sharing IPC/UI, runtime policies/members/approvals and session MCP
-catalogue integration remain in progress. RoundTable's existing whole-history block read
+At that earlier checkpoint no new phase was accepted. Sharing IPC/UI, runtime policies/members/approvals and session MCP
+catalogue integration were in progress. RoundTable's existing whole-history block read
 is a known efficiency follow-up; delegation continuity itself now reads only bounded prose.
 Migration 0010 and the local policy service are reviewed (86 focused tests): separate local
 profiles/rules/audit, per-agent boundaries, exact in-memory grants and cancellation-safe
@@ -282,9 +297,9 @@ accepted implementation. The current Windows machine enumerates an en-GB offline
 recognizer; microphone/accuracy tests remain pending. Font provenance is now documented
 from the embedded CC0 notice in `docs/font-provenance.md`; packaged asset verification
 remains Phase 12 work. Static PNG mascots remain the accepted asset behavior.
-## Current 9C/10 handoff — 2026-09-08
+## Superseded 9C/10 handoff — 2026-09-08
 
-Custom Mode remains unaccepted and the full gate is pending. Native 9C custom-mode and runtime
+At that checkpoint Custom Mode remained unaccepted and its full gate was pending. Native 9C custom-mode and runtime
 diagram/restart checks passed (one test each); paired Codex spawn evidence is limited to definitions
 and local observations, with resume unit-tested only. Dictation’s C# helper compiled/probed without a
 microphone for en-GB and 17 focused tests passed; real microphone behavior remains pending.
