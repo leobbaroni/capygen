@@ -2961,3 +2961,18 @@ same-origin image control versus encoded traversal refusal, and invalid-nonce/un
 rejection through the real MessagePort. Different-model root review tightened the initial
 weak timeout/fetch assertions. Focused native run: 1 passed (6.7s); tests TypeScript passed.
 Only fixture/docs changes followed release candidate 5065c59; runtime release bytes are unchanged.
+
+### 2026-09-09 — Clean CI fixture setup budget
+
+Full Windows CI 34291029187 passed typechecks but failed five beforeEach hooks in four
+DB-backed suites at the default 10s deadline (2915 tests passed, 7 skipped). Every failure
+occurred while initializing a fresh isolated SQLite fixture and its 14 migrations; no test
+assertion or migration error failed. Log: e2e-out/ci-34291029187-failed.log.
+Added a CI-only 30s hook budget to db/desktop Vitest projects. Test-body deadlines, disk-backed
+fixtures, migration durability, isolation and local 10s hook limits remain intact. Independent
+Luna review confirmed the scope. All four affected suites pass with CI=true and two workers:
+47 tests, 4 files, 4.04s locally. The full clean Windows gate will run again; no release is claimed.
+The actual preserved older 0.1.0 app also passed a credential-free updater preflight: packaged
+version 0.1.0, encrypted storage available, idle updater and registered credential/check handlers.
+Publication is additionally awaiting specific user approval after automatic approval review
+rejected the tag action; no tag was created or pushed by that rejected attempt.
