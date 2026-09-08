@@ -36,11 +36,25 @@ test("packaged Windows runtime: bridge, updates, speech, bundled CLI, PTY and as
     }, { channel, payload }) as Promise<T>;
     const status = await invoke<{ phase: string; hasCredential: boolean; message: string }>("updates.status");
     expect(status.hasCredential).toBe(false);
-    expect(status.phase).not.toBe("unavailable");
-    expect(status.message).not.toMatch(/unpackaged|unavailable in this host/i);
-    const speech = await invoke<{ available: boolean; languages: string[] }>("dictation.availability");
-    expect(speech.available).toBe(true);
-    expect(speech.languages.length).toBeGreaterThan(0);
+    expect(["idle", "unavailable"]).toContain(status.phase);
+    expect(status.message).not.toMatch(/packaged Windows builds|unavailable in this host/i);
+    const speech = await invoke<{ available: boolean; languages: string[]; message: string | null }>("dictation.availability");
+    const speechProtocol = await app.evaluate((_electron, { helper, env, cwd }) => {
+      const { execFile } = process.getBuiltinModule("node:child_process") as typeof import("node:child_process");
+      return new Promise<{ available: boolean; languages: string[] }>((resolve, reject) => {
+        const child = execFile(helper, [], { encoding: "utf8", env, cwd, windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+          if (error) { reject(new Error("Packaged speech helper failed to execute")); return; }
+          try { resolve(JSON.parse(stdout.replace(/^\uFEFF/, "").trim())); } catch { reject(new Error("Invalid speech helper protocol")); }
+        });
+        // Keep stdin open: EOF intentionally makes the helper exit with its parent.
+        child.stdin!.write('{"command":"availability"}\n');
+      });
+    }, { helper: path.join(packaged.root, "desktop/dist/speech/capygen-speech.exe"), env: isolatedEnv, cwd: projectDir });
+    expect(typeof speechProtocol.available).toBe("boolean");
+    expect(Array.isArray(speechProtocol.languages)).toBe(true);
+    expect(speech.available).toBe(speechProtocol.available && speechProtocol.languages.length > 0);
+    expect(speech.languages).toEqual(speechProtocol.languages);
+    if (!speech.available) expect(speech.message).toMatch(/installed speech languages/i);
     for (const relative of ["desktop/dist/speech/capygen-speech.exe", "desktop/dist/assets/extensions/sample/capygen-extension.json", "desktop/dist/assets/extensions/sample/index.html", "desktop/dist/assets/extensions/sample/sample.js", "desktop/dist/assets/extensions/sample/sample.css"]) {
       expect(fs.existsSync(path.join(packaged.root, relative)), relative).toBe(true);
     }

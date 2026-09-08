@@ -2684,3 +2684,14 @@ Added an explicit manual `validation=package` workflow diagnostic that skips uni
 Electron gates and is labeled accordingly. It checks the remaining clean-machine packaging
 and packaged smoke without repeating 2831 already-passing cases. Tag/normal runs retain the
 full gate; a diagnostic success is never a phase/release acceptance claim.
+
+Packaging diagnostic 34199227835 built both Windows EXEs on the clean runner, then exposed
+an audit-script pnpm lookup bug: createRequire used the symlink location of electron-updater
+and could not find its js-yaml dependency. It now anchors to fs.realpathSync(package.json);
+the local artifact audit passes without adding another dependency.
+
+Packaged smoke no longer assumes the runner has speech languages installed or beats the
+startup update timer. It directly executes the compiled speech helper's NDJSON protocol,
+compares its installed-language result with IPC, and requires the appropriate unavailable
+message when none exist. The stdin pipe remains open (EOF intentionally ends the helper).
+Local packaged smoke passes again: 1 passed (10.5s), no microphone/model/installer use.
