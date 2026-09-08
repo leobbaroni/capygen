@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx scripts/dev.ts",
+    "dev": "tsx scripts/dev.mts",
     "build": "corepack pnpm --filter @capygen/renderer build && corepack pnpm --filter @capygen/desktop build",
     "start": "corepack pnpm --dir apps/desktop exec electron .",
     "test": "vitest run",

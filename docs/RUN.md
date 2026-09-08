@@ -43,7 +43,7 @@ Prerequisites for the *live* paths (unit tests and the offline e2e need none of 
 corepack pnpm dev
 ```
 
-`scripts/dev.ts` bundles main+preload, starts Vite on <http://localhost:5273> (which stages the
+`scripts/dev.mts` bundles main+preload, starts Vite on <http://localhost:5273> (which stages the
 brand assets first) and launches Electron against it via `CAPYGEN_DEV_URL`. The renderer
 hot-reloads; **main-process and preload changes do not** — stop and re-run `dev` after editing
 anything under `apps/desktop/src/`.

@@ -8,8 +8,9 @@ corrected. Typecheck and build passed. The native suite initially reported 53 pa
 12 skipped and two failures; the prerequisite cancellation regression now passes in a
 focused run. Local app pages remain unreachable after the Tools redesign, so the extension
 native test is still failing and placement awaits the user's choice. No new phase is accepted.
-The user has not tested microphone dictation and explicitly deferred the live benchmark;
-continue fixes and automated checks. The existing uncommitted Codex isolation probe and
+Microphone acceptance awaits the user's test result. The user subsequently reauthorized
+the Phase 11 live benchmark; dedicated test login is pending. Continue fixes and automated checks.
+The existing uncommitted Codex isolation probe and
 `state.lock` are preserved. Full CI on the old revision was cancelled after reproducing
 its stale assertions locally; a new full CI run is needed after the navigation issue is resolved.
 

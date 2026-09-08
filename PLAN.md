@@ -10,8 +10,8 @@ The repair is committed at `1a429b3`; the resumed run verifies it before continu
 - Phases 1–9 and 9C are accepted. Work and verified pushes use `main`.
 - Phase 9C gate: typecheck/build passed; 2815 unit tests passed / 4 skipped;
   54 native Electron tests passed / 12 live tests skipped. See `PROJECT_LOG.md` for evidence.
-- Phases 10–12 remain open. The user has not tested microphone dictation and explicitly
-  deferred the live benchmark on 2026-09-08; continue fixes and automated checks.
+- Phases 10–12 remain open. Microphone acceptance awaits the user's test result.
+  The user reauthorized Phase 11 live benchmark work on 2026-09-08; dedicated test login is pending.
 - Packaging and packaged smoke have passed; actual older-build/private-feed, release,
   full CI and final review evidence remain required for Phase 12 acceptance.
 

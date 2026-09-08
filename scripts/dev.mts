@@ -11,20 +11,26 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
+import { cleanEnv } from "../packages/engine/src/env.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEV_URL = "http://localhost:5273";
 const children: ChildProcess[] = [];
 
-function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): ChildProcess {
+function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = {}): ChildProcess {
+  const env = cleanEnv({ ...process.env, ...options.env });
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "ELECTRON_RUN_AS_NODE") delete env[key];
+  }
   const child = spawn(command, args, {
     cwd: options.cwd ?? repoRoot,
     // Windows: pnpm/electron resolve through .CMD shims, which need a shell.
-    shell: process.platform === "win32",
+    shell: options.shell ?? process.platform === "win32",
     stdio: "inherit",
     windowsHide: true,
-    env: { ...process.env, ...options.env },
+    env,
   });
   children.push(child);
   return child;
@@ -77,7 +83,10 @@ run("corepack", ["pnpm", "--filter", "@capygen/renderer", "dev"]);
 await waitForServer(DEV_URL);
 
 console.log(`[dev] starting electron against ${DEV_URL}`);
-const electron = run("corepack", ["pnpm", "--dir", "apps/desktop", "exec", "electron", "."], {
+const desktopDir = path.join(repoRoot, "apps/desktop");
+const electronPath = createRequire(path.join(desktopDir, "package.json"))("electron") as string;
+const electron = run(electronPath, [desktopDir], {
+  shell: false,
   env: { CAPYGEN_DEV_URL: DEV_URL },
 });
 electron.on("exit", (code) => shutdown(code ?? 0));

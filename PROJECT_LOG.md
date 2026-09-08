@@ -2880,3 +2880,28 @@ revision was cancelled once its known stale assertions were reproduced locally.
 This fixture/documentation commit skips CI to avoid knowingly repeating the
 remaining navigation failure; run full CI after that repair. No phase boxes ticked.
 The pre-existing engine package script/probe and state.lock remain untouched.
+
+### 2026-09-08 — Desktop development launcher repaired and actually launched
+
+The Desktop shortcut failed because root scripts/dev.ts was compiled as CommonJS,
+rejecting its top-level await. Renamed it to dev.mts and updated the package script
+and RUN reference. The next real launch exposed Electron starting through the pnpm
+shim in Node mode; the runner now resolves the installed desktop Electron binary
+and spawns it directly without a shell, with the cleaned child environment and
+ELECTRON_RUN_AS_NODE removed. No dependencies or global settings changed.
+
+Reproduction: e2e-out/desktop-launch-repro.log records the original transform error;
+desktop-shortcut-stderr.log records the intermediate Electron app-undefined failure.
+Actual Desktop Capygen Dev.lnk was then launched with isolated app/Claude/Codex homes.
+The app created its native window and loaded http://localhost:5273. Windows accessibility
+inspection confirmed the live landing heading, composer, model picker and sidebar;
+it also observed the user exercising the microphone. No agent prompt was submitted.
+Screenshot capture through Windows Graphics Capture was unavailable (unsupported
+SetIsBorderRequired interface); accessibility and the app's own startup log were used.
+The test profile is e2e-out/desktop-shortcut-abe3989f36664723b6d361d7e4d9b35d.
+Independent Luna review found no issues in the entry point, native launch or env change.
+
+The user reauthorized Phase 11 and then requested finishing all remaining phases,
+reporting poor real microphone recognition and mismatched composer text/selection.
+Those repairs are next; microphone and full phase acceptance remain open. No full
+suite was repeated for this launcher-only change; real startup is its failure signal.
