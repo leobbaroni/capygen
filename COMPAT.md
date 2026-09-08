@@ -697,3 +697,17 @@ efforts are unavailable, not wildcard support. Ordered rules use first-match pre
 Migration 0013 uses SQLite RENAME COLUMN, ADD COLUMN and DROP COLUMN transactionally to
 widen the session mode constraint; the pinned native node:sqlite test preserves foreign
 keys/history. No session-table rebuild or foreign-key disabling is used.
+
+`harness.list` model options preserve bounded unique Codex `supportedReasoningEfforts` from
+`model/list`, and API options retain their originating provider per row. Claude model options
+intentionally carry no invented dynamic effort data. Custom Mode availability still requires
+live backend capability validation before Apply.
+### Dictation and local extension contracts (Phase 9C/10, 2026-09-08)
+
+Windows dictation uses the packaged C# 5/.NET Framework helper with bounded NDJSON, explicit
+recognition, request-bound cancellation, parent-stdin EOF handling, and a 16,000-character ceiling.
+It is local-only. The en-GB no-microphone probe and 17 focused tests passed; real microphone and
+accuracy behavior remains user-observed. Extensions use operator-registered local packages with
+strict manifests, verified roots/assets, fresh per-view grants, bounded bridge traffic, namespaced
+storage, and explicit GitHub PR lookup. Native extension verification remains pending; this does not
+claim full parity.

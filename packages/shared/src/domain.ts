@@ -11,7 +11,7 @@
 import "./zodRuntime.js";
 import { z } from "zod";
 import { LocalPolicyAttributionSchema } from "./localPolicies.js";
-import { CrewTargetSchema, CrewTaskKindSchema, CrewDifficultySchema, CrewIdSchema } from "./customMode.js";
+import { CrewTargetSchema, CrewTaskKindSchema, CrewDifficultySchema, CrewIdSchema, CustomModeDocumentSchema } from "./customMode.js";
 
 /** Milliseconds since the epoch. Every timestamp in capygen is this. */
 export const TimestampSchema = z.number().int().nonnegative();
@@ -21,7 +21,7 @@ export const BackendSchema = z.enum(["claude", "codex", "api"]);
 export type Backend = z.infer<typeof BackendSchema>;
 
 /** How the agents in a session relate to each other (CONTEXT.md §Session). */
-export const SessionModeSchema = z.enum(["solo", "round-table"]);
+export const SessionModeSchema = z.enum(["solo", "round-table", "custom"]);
 export type SessionMode = z.infer<typeof SessionModeSchema>;
 
 export const SessionStatusSchema = z.enum(["idle", "running", "waiting", "error"]);
@@ -401,6 +401,9 @@ export const SessionSettingsSchema = z
      *  user or a `chat.continue` (R11). */
     hopCap: z.number().int().min(1).max(20).default(3),
     routing: SessionRoutingSchema.optional(),
+    crew: CustomModeDocumentSchema.optional(),
+    /** Main-created roster bindings; workers run as delegated children. */
+    crewBindings: z.record(CrewIdSchema, z.string().min(1)).optional(),
     /** Whether @-mentioned agents may all respond concurrently instead of in
      *  mention order (R11's "delivered ... in mention order" is the default). */
     parallelAgents: z.boolean().default(false),
@@ -1032,6 +1035,8 @@ export type SlashCommand = z.infer<typeof SlashCommandSchema>;
 export const HarnessModelOptionSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
+  efforts: z.array(z.string().min(1).max(40)).max(16).optional(),
+  providers: z.array(ApiProviderSchema).max(3).optional(),
 });
 export type HarnessModelOption = z.infer<typeof HarnessModelOptionSchema>;
 

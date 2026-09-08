@@ -1,4 +1,26 @@
-# capygen — handoff (2026-09-08, Phase 9 accepted)
+# capygen — handoff (2026-09-08, Phase 9C accepted; Phases 10–12 in progress)
+
+## Current work
+
+Phase 9 is accepted at `a319b5b`. Phase 9C passed its full gate on 2026-09-08: typechecks,
+2815 unit tests (4 skipped), build, and 54 native Electron tests (12 live skipped, 2.3m).
+The native Custom Mode test generates a tool-free draft, edits it visually, applies it and
+restores policy/history after restart. Runtime fixtures cover diagram routes, bounded debate
+and rejection of dispatch during restart. Migration 0014 preserves historical agents.
+Phase 10's extension sample also passed native storage/reopen/network-isolation acceptance;
+compiled speech metadata reports en-GB without opening a microphone. Real microphone
+acceptance remains user-observed. Phases 11/12 measurement and packaged/private-feed proofs
+remain open. See PROJECT_LOG for exact gate evidence and earlier failures/fixes.
+
+The strict delegation foundation is pushed at `da3f06d`; the real Codex paired tool-definition
+proof is recorded in `native-spawn-paired-proof.json` (spawn_agent present, baseline and
+absent flags false, two local requests). Resume is unit-tested only; full Codex no-tool
+authoring remains unsupported and unaccepted. Codex/API effort/provider metadata is now
+preserved in harness listings; Claude model/effort metadata now comes from SDK initialization.
+
+Current execution is Astra low for hard/medium work while Opus is unavailable, with Luna low
+on easy tasks and lighter reviews/new crucial tests. Root alone stages and commits. No full
+phase acceptance should be inferred from focused checks.
 
 ## Phase 9 acceptance — 2026-09-08
 
@@ -224,3 +246,13 @@ accepted implementation. The current Windows machine enumerates an en-GB offline
 recognizer; microphone/accuracy tests remain pending. Font provenance is now documented
 from the embedded CC0 notice in `docs/font-provenance.md`; packaged asset verification
 remains Phase 12 work. Static PNG mascots remain the accepted asset behavior.
+## Current 9C/10 handoff — 2026-09-08
+
+Custom Mode remains unaccepted and the full gate is pending. Native 9C custom-mode and runtime
+diagram/restart checks passed (one test each); paired Codex spawn evidence is limited to definitions
+and local observations, with resume unit-tested only. Dictation’s C# helper compiled/probed without a
+microphone for en-GB and 17 focused tests passed; real microphone behavior remains pending.
+
+Extension backend (7), host (1), and UI (1) focused tests passed; native extension verification has
+not run. Session summaries use authoritative unread/provisional/worktree values and otherwise `null`.
+Cross-extension page navigation is intentional: the target receives a fresh instance and target grants.

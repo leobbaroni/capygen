@@ -493,3 +493,11 @@ These fixtures use owned homes, local providers and dummy credentials. Live auth
 skips remain separate; they are not evidence of a successful live model run. The workspace
 server fixture requests an OS-assigned loopback port and does not require stopping another
 service on the machine.
+### Dictation and extensions
+
+On Windows, the composer microphone action starts local speech only after explicit user action. The
+helper is built from checked-in C#; no compiler or runtime is downloaded. Current evidence is a
+no-microphone en-GB probe plus 17 focused tests, so test a real microphone and installed language
+manually. Extension packages are operator-registered local roots with strict manifest/package
+identity checks. Backend, host, and UI focused checks passed; native extension verification and the
+full phase gate remain pending.

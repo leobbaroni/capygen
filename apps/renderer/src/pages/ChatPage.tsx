@@ -34,6 +34,7 @@ import { ChainStoppedBar } from "@/components/ChainStoppedBar";
 import { Composer } from "@/components/Composer";
 import { ModePicker } from "@/components/ModePicker";
 import { SessionSettingsSheet } from "@/components/SessionSettingsSheet";
+import { CustomModeEditor } from "@/components/CustomModeEditor";
 import { SessionUsageMeter } from "@/components/SessionUsageMeter";
 import { Transcript } from "@/components/Transcript";
 import { TurnRail } from "@/components/TurnRail";
@@ -135,6 +136,7 @@ export function ChatPage() {
   const [pinned, setPinned] = useState(true);
   const [agentsPaneOpen, setAgentsPaneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [customModeOpen, setCustomModeOpen] = useState(false);
   /** The mode a round-table→solo switch is asking the user to confirm, or
    *  `null` when no confirm is pending (every other switch applies at once). */
   const [modeConfirmTarget, setModeConfirmTarget] = useState<SessionMode | null>(null);
@@ -170,6 +172,7 @@ export function ChatPage() {
    *  back to solo keeps history either way — the confirm is only so the
    *  switch itself is never a surprise, not a data-loss warning. */
   function requestModeChange(next: SessionMode): void {
+    if (next === "custom") { setCustomModeOpen(true); return; }
     if (next === "solo" && session?.mode === "round-table" && agents.length > 1) {
       setModeConfirmTarget(next);
       return;
@@ -230,7 +233,7 @@ export function ChatPage() {
             />
           ) : null}
           <SessionUsageMeter />
-          <ModePicker mode={session?.mode ?? "solo"} onChange={requestModeChange} testId="chat-mode-picker" />
+          <ModePicker mode={session?.mode ?? "solo"} onChange={requestModeChange} testId="chat-mode-picker" allowCustom disabled={busy} />
           <div className="relative">
             <Button
               variant="ghost"
@@ -249,6 +252,7 @@ export function ChatPage() {
                 settings={session.settings}
                 onChange={(patch) => void updateSessionSettings(sessionId, patch)}
                 mcp={mcpPanel}
+                onCustomMode={() => { setSettingsOpen(false); setCustomModeOpen(true); }}
               />
             ) : null}
           </div>
@@ -389,6 +393,12 @@ export function ChatPage() {
         />
       ) : null}
 
+      <Dialog open={customModeOpen} onOpenChange={setCustomModeOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+          <DialogHeader><DialogTitle>Custom mode</DialogTitle></DialogHeader>
+          <CustomModeEditor sessionId={sessionId} onApplied={() => { void openSession(sessionId); setCustomModeOpen(false); }} />
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={modeConfirmTarget !== null}
         onOpenChange={(o) => {

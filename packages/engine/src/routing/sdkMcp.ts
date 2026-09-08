@@ -71,6 +71,7 @@ export async function loadClaudeSdkMcpApi(): Promise<ClaudeSdkMcpApi> {
 
 export interface DelegateMcpServerDeps {
   run: (req: DelegateRequest) => Promise<DelegateResult>;
+  debate?: (request: { trigger: unknown; topic: string }) => { ok: true } | { ok: false; reason: string };
   loadSdk?: () => Promise<ClaudeSdkMcpApi>;
   log?: { warn: (...args: unknown[]) => void };
 }
@@ -121,13 +122,23 @@ export async function createDelegateMcpServer(
         };
       },
     );
+    const debateTool = deps.debate ? sdk.tool(
+      "crew_debate",
+      "Queue a configured core or major debate after this turn, then return to the lead.",
+      { trigger: z.enum(["core", "major"]), topic: z.string().min(1).max(4000) } as unknown as Record<string, unknown>,
+      async (args: Record<string, unknown>) => {
+        const result = deps.debate!({ trigger: args.trigger, topic: typeof args.topic === "string" ? args.topic : "" });
+        return { content: [{ type: "text", text: result.ok ? "Debate queued after this turn. Finish your response." : result.reason }],
+          ...(result.ok ? {} : { isError: true }) };
+      },
+    ) : null;
     const server = sdk.createSdkMcpServer({
       name: CAPYGEN_MCP_SERVER,
       version: "1.0.0",
       instructions:
         "capygen's own tools. delegate_task runs one task on the backend/model capygen's " +
         "sub-agent routing policy chose for this agent.",
-      tools: [delegateTool],
+      tools: [delegateTool, ...(debateTool ? [debateTool] : [])],
     });
     return { [CAPYGEN_MCP_SERVER]: server };
   } catch (err) {

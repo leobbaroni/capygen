@@ -34,7 +34,9 @@ const ok = (servers: { name: string; tools: string[] }[]): AgentToolCatalogue =>
 beforeEach(() => {
   shell.bridge = true;
   invoke.mockReset();
-  invoke.mockImplementation(() => Promise.resolve(ok([{ name: "docs", tools: ["search"] }])));
+  invoke.mockImplementation((channel: string) => channel === "dictation.availability"
+    ? Promise.resolve({ available: false, languages: [], message: "fixture" })
+    : Promise.resolve(ok([{ name: "docs", tools: ["search"] }])));
 });
 
 describe("useAgentCatalogue", () => {

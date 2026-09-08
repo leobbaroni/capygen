@@ -8,7 +8,7 @@
  * happens on a change — `ChatPage` shows a confirm before switching an
  * existing round-table session with more than one agent back to solo.
  */
-import { UserIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { UserIcon, UsersIcon, SettingsIcon, type LucideIcon } from "lucide-react";
 import type { SessionMode } from "@capygen/shared";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ export interface ModePickerProps {
   onChange: (mode: SessionMode) => void;
   disabled?: boolean;
   testId?: string;
+  allowCustom?: boolean;
 }
 
 export function ModePicker({
@@ -29,6 +30,7 @@ export function ModePicker({
   onChange,
   disabled = false,
   testId = "mode-picker",
+  allowCustom = false,
 }: ModePickerProps) {
   return (
     <div
@@ -37,7 +39,7 @@ export function ModePicker({
       data-testid={testId}
       className="flex shrink-0 items-center gap-0.5 rounded-full border border-border-weak bg-muted/40 p-0.5"
     >
-      {OPTIONS.map(({ mode: option, label, icon: Icon }) => (
+      {[...OPTIONS, ...(allowCustom || mode === "custom" ? [{ mode: "custom" as const, label: "Custom", icon: SettingsIcon }] : [])].map(({ mode: option, label, icon: Icon }) => (
         <button
           key={option}
           type="button"

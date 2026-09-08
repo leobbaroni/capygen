@@ -56,6 +56,7 @@ export const WORKSPACE_CHANNELS = [
   "worktrees.register",
   "worktrees.remove",
   "terminal.create",
+  "terminal.attach",
   "terminal.write",
   "terminal.resize",
   "terminal.kill",
@@ -201,6 +202,7 @@ export function createWorkspaceIpc(deps: WorkspaceIpcDeps): WorkspaceIpc {
     "worktrees.remove": (args) => worktrees.remove(args),
 
     "terminal.create": (args) => terminals.create(args),
+    "terminal.attach": (args) => terminals.attach(args),
     "terminal.write": (args) => terminals.write(args),
     "terminal.resize": (args) => terminals.resize(args),
     "terminal.kill": (args) => terminals.kill(args),

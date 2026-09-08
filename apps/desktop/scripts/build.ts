@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { buildSpeechHelper } from "./buildSpeechHelper.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(here, "..");
@@ -22,11 +23,13 @@ const watch = process.argv.includes("--watch");
 
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
+await buildSpeechHelper(outDir);
 
 await build({
   entryPoints: {
     main: path.join(appDir, "src", "main.ts"),
     preload: path.join(appDir, "src", "preload.ts"),
+    "extension-preload": path.join(appDir, "src", "extensions", "preload.ts"),
     // [7-P1] The import-parser child (docs/plans/phase7-imports.md). Its own
     // entry because it runs as a separate process — an Electron utility child
     // in the app, a plain `fork` in its tests — and it must never pull Electron
@@ -84,6 +87,7 @@ for (const file of fs.readdirSync(migrationsSrc)) {
 // `assets/icons/` — the brand set, not a downsized mascot frame.
 const assetsOut = path.join(outDir, "assets");
 fs.mkdirSync(assetsOut, { recursive: true });
+fs.cpSync(path.join(repoRoot, "assets", "extensions"), path.join(assetsOut, "extensions"), { recursive: true });
 for (const icon of ["tray.png", "icon.png"]) {
   const from = path.join(repoRoot, "assets", "icons", icon);
   if (!fs.existsSync(from)) throw new Error(`build: missing brand icon ${from}`);

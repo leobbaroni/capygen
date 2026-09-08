@@ -13,10 +13,15 @@ import { createSessionRunner, type HarnessExtras } from "../src/engine/SessionRu
 
 // No real SDK import occurs in this test. Capture exactly the handler the
 // shipping SDK MCP adapter registers, then call it as the native parent would.
-vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  tool: (name: string, _description: string, _schema: unknown, handler: unknown) => ({ name, handler }),
-  createSdkMcpServer: (options: { tools: unknown[] }) => options,
-}));
+vi.mock("../../../packages/engine/src/routing/sdkMcp.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../../packages/engine/src/routing/sdkMcp.js")>();
+  return { ...original, createDelegateMcpServer: (deps: Parameters<typeof original.createDelegateMcpServer>[0]) => original.createDelegateMcpServer({
+    ...deps, loadSdk: async () => ({
+      tool: (name: string, _description: string, _schema: unknown, handler: unknown) => ({ name, handler }),
+      createSdkMcpServer: (options: { tools?: unknown[] }) => options,
+    }),
+  }) };
+});
 
 type RegisteredTool = { name: string; handler: (args: Record<string, unknown>) => Promise<{ isError?: boolean }> };
 let root: string;

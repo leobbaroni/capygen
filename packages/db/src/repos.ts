@@ -38,6 +38,7 @@ import {
   deriveMentionName,
   mergeGlobalSettingsPatch,
   newId,
+  parseCustomModeDocument,
   resetGlobalSettingsSection,
   translateDefaultModelAlias,
   deriveDefaultModel,
@@ -285,6 +286,7 @@ export class SessionsRepo {
     title?: string;
     agents: AgentDraft[];
   }): { session: Session; agents: Agent[] } {
+    if (input.mode === "custom") throw new Error("Custom mode requires applyCrew");
     return this.db.transaction(() => {
       const ts = now();
       const sessionId = newId("session");
@@ -380,6 +382,7 @@ export class SessionsRepo {
     const session = this.get(sessionId);
     if (!session) throw new Error(`unknown session: ${sessionId}`);
     this.assertLiveMutable(sessionId);
+    this.assertOrdinaryRoster(sessionId);
     const ts = now();
     const displayName = input.displayName ?? input.mentionName ?? defaultAgentDisplayName(input.backend);
     const mentionName = this.uniqueMentionNameInSession(
@@ -416,6 +419,8 @@ export class SessionsRepo {
     const existing = this.agent(agentId);
     if (!existing) throw new Error(`unknown agent: ${agentId}`);
     this.assertLiveMutable(existing.sessionId);
+    this.assertActiveAgent(agentId);
+    this.assertOrdinaryRoster(existing.sessionId);
     if (patch.role === "lead") {
       throw new Error("agents.update cannot grant the lead role directly; use agents.setLead");
     }
@@ -453,6 +458,8 @@ export class SessionsRepo {
     const existing = this.agent(agentId);
     if (!existing) return false;
     this.assertLiveMutable(existing.sessionId);
+    this.assertActiveAgent(agentId);
+    this.assertOrdinaryRoster(existing.sessionId);
     this.db.run("DELETE FROM agents WHERE id = ?", agentId);
     this.db.run(
       "UPDATE sessions SET lead_agent_id = NULL, updated_at = ? WHERE id = ? AND lead_agent_id = ?",
@@ -472,8 +479,10 @@ export class SessionsRepo {
         throw new Error(`agent ${agentId} is not in session ${sessionId}`);
       }
       this.assertLiveMutable(sessionId);
+      this.assertActiveAgent(agentId);
+      this.assertOrdinaryRoster(sessionId);
       this.db.run(
-        "UPDATE agents SET role = 'member' WHERE session_id = ? AND role = 'lead' AND id <> ?",
+        "UPDATE agents SET role = 'member' WHERE session_id = ? AND active = 1 AND role = 'lead' AND id <> ?",
         sessionId,
         agentId,
       );
@@ -495,7 +504,12 @@ export class SessionsRepo {
    *  history") — agents and the transcript are untouched. */
   setMode(sessionId: string, mode: SessionMode): Session {
     this.assertLiveMutable(sessionId);
-    this.db.run("UPDATE sessions SET mode = ?, updated_at = ? WHERE id = ?", mode, now(), sessionId);
+    if (mode === "custom") throw new Error("Custom mode requires applyCrew");
+    const existing = this.get(sessionId);
+    if (!existing) throw new Error(`unknown session: ${sessionId}`);
+    const { crew: _crew, crewBindings: _bindings, ...settings } = existing.settings;
+    this.db.run("UPDATE sessions SET mode = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+      mode, toJson(settings), now(), sessionId);
     const session = this.get(sessionId);
     if (!session) throw new Error(`unknown session: ${sessionId}`);
     return session;
@@ -503,6 +517,9 @@ export class SessionsRepo {
 
   /** Merge-patch a session's round-table settings (`sessions.updateSettings`). */
   updateSettings(sessionId: string, patch: SessionSettingsPatch): Session {
+    if (Object.hasOwn(patch, "crew") || Object.hasOwn(patch, "crewBindings")) {
+      throw new Error("Crew settings require applyCrew");
+    }
     const existing = this.get(sessionId);
     if (!existing) throw new Error(`unknown session: ${sessionId}`);
     this.assertLiveMutable(sessionId);
@@ -518,6 +535,69 @@ export class SessionsRepo {
     return session;
   }
 
+  private assertOrdinaryRoster(sessionId: string): void {
+    if (this.get(sessionId)?.mode === "custom") {
+      throw new Error("Custom roster changes require applyCrew");
+    }
+  }
+
+  private assertActiveAgent(agentId: string): void {
+    const row = this.db.get<{ active: number }>("SELECT active FROM agents WHERE id = ?", agentId);
+    if (row?.active !== 1) throw new Error(`agent ${agentId} is inactive`);
+  }
+
+  /** Replace the current roster without changing historical rows or their foreign keys. */
+  applyCrew(sessionId: string, input: unknown): { session: Session; agents: Agent[] } {
+    return this.db.transaction(() => {
+      const parsed = parseCustomModeDocument(input);
+      if (!parsed.ok) throw new Error(parsed.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+      const crew = parsed.document;
+      const existing = this.get(sessionId);
+      if (!existing) throw new Error(`unknown session: ${sessionId}`);
+      this.assertLiveMutable(sessionId);
+      if (existing.status !== "idle") throw new Error("Crew apply requires an idle session");
+      if (this.db.get("SELECT id FROM turns WHERE session_id = ? AND status IN ('pending', 'streaming') LIMIT 1", sessionId)) {
+        throw new Error("Crew apply refuses pending or active turns");
+      }
+      const interactions = this.db.all<Row>(
+        "SELECT * FROM blocks WHERE session_id = ? AND kind IN ('permission', 'question', 'elicitation')", sessionId);
+      for (const row of interactions) {
+        const block = rowToBlock(row);
+        if ((block.kind === "permission" && block.decision === null)
+          || (block.kind === "question" && block.status !== "cancelled" && (block.status === "pending" || block.answers === null))
+          || (block.kind === "elicitation" && block.status === "pending")) {
+          throw new Error("Crew apply refuses pending interactions");
+        }
+      }
+      this.db.run("UPDATE agents SET active = 0 WHERE session_id = ? AND active = 1", sessionId);
+      const crewBindings: Record<string, string> = {};
+      const agents: Agent[] = [];
+      const usedMentions = new Set<string>();
+      for (const member of crew.roster) {
+        if (member.role === "worker") continue;
+        const mentionName = uniqueMentionName(usedMentions, deriveMentionName(member.label));
+        usedMentions.add(mentionName);
+        const agent = AgentSchema.parse({
+          id: newId("agent"), sessionId, name: member.label, displayName: member.label,
+          mentionName, backend: member.target.backend, model: member.target.model,
+          role: member.role, order: agents.length, createdAt: now(),
+          config: { [member.target.backend]: {
+            ...(member.target.backend === "claude"
+              ? { effort: member.target.effort } : { reasoningEffort: member.target.effort }),
+            ...(member.target.provider === undefined ? {} : { provider: member.target.provider }),
+          } },
+        });
+        this.insertAgent(agent);
+        crewBindings[member.id] = agent.id;
+        agents.push(agent);
+      }
+      const settings = SessionSettingsSchema.parse({ ...existing.settings, crew, crewBindings });
+      this.db.run("UPDATE sessions SET mode = 'custom', lead_agent_id = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        agents.find((agent) => agent.role === "lead")!.id, toJson(settings), now(), sessionId);
+      return { session: this.get(sessionId)!, agents };
+    });
+  }
+
   /** Effective mention name for every agent currently in `sessionId` — a
    *  legacy row with a NULL `mention_name` column counts as
    *  `deriveMentionName(name)`, exactly what `rowToAgent` reads it as. */
@@ -527,7 +607,7 @@ export class SessionsRepo {
     excludeAgentId?: string,
   ): string {
     const rows = this.db.all<{ id: string; name: string; mention_name: string | null }>(
-      "SELECT id, name, mention_name FROM agents WHERE session_id = ?",
+      "SELECT id, name, mention_name FROM agents WHERE session_id = ? AND active = 1",
       sessionId,
     );
     const used = new Set(
@@ -540,7 +620,7 @@ export class SessionsRepo {
 
   private nextAgentOrder(sessionId: string): number {
     const row = this.db.get<{ n: number | null }>(
-      "SELECT MAX(order_index) AS n FROM agents WHERE session_id = ?",
+      "SELECT MAX(order_index) AS n FROM agents WHERE session_id = ? AND active = 1",
       sessionId,
     );
     return row?.n === null || row?.n === undefined ? 0 : Number(row.n) + 1;
@@ -566,6 +646,12 @@ export class SessionsRepo {
   }
 
   agents(sessionId: string): Agent[] {
+    return this.db
+      .all<Row>("SELECT * FROM agents WHERE session_id = ? AND active = 1 ORDER BY created_at, rowid", sessionId)
+      .map(rowToAgent);
+  }
+
+  historicalAgents(sessionId: string): Agent[] {
     return this.db
       .all<Row>("SELECT * FROM agents WHERE session_id = ? ORDER BY created_at, rowid", sessionId)
       .map(rowToAgent);

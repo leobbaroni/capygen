@@ -186,3 +186,5 @@ export {
   type ImportWarning,
   type ClaudeChainReconstructor,
 } from "./imports/index.js";
+
+export * from "./claude/modelCatalogue.js";

@@ -69,7 +69,7 @@ export function loadApiHistory(
     if (list) list.push(block);
     else byTurn.set(block.turnId, [block]);
   }
-  const agentName = new Map(store.sessions.agents(session.sessionId).map((a) => [a.id, a.name]));
+  const agentName = new Map(store.sessions.historicalAgents(session.sessionId).map((a) => [a.id, a.name]));
 
   const messages: ChatMessage[] = [];
   const pushUser = (content: ChatContent[]): void => {

@@ -38,15 +38,15 @@ capygen/
 Run: `corepack pnpm i` · `pnpm dev` (Vite + Electron) · `pnpm test` (vitest) · `pnpm e2e`
 (Playwright Electron) · `pnpm build:win` (electron-builder NSIS + portable).
 
-## Crew (current user instruction, 2026-09-07)
+## Crew (current user instruction, 2026-09-08)
 
 | Role | Model | Responsibility |
 |---|---|---|
-| Lead / orchestrator / designer / decision maker | **GPT-6-Astra**, low (`gpt-6-astra`) | orchestration, plans, design, core decisions, task briefs, final acceptance |
-| Hard and medium tasks | **Opus 5**, medium (`opus`) | implementation and substantive reviews |
+| Lead / orchestrator / designer / decision maker | **GPT-6-Astra**, low (`gpt-6-astra`) | orchestration, plans, design, hard/medium implementation, core decisions, task briefs, final acceptance |
+| Hard and medium tasks | **GPT-6-Astra**, low (`gpt-6-astra`) while Opus is unavailable | implementation and substantive reviews |
 | Easy tasks | **GPT-5.6-Luna**, low (`gpt-5.6-luna`) | mechanical work, inventories, established UI plumbing |
 | Core decisions | **GPT-6-Astra**, low | owns architecture and policy decisions; no Fable debate |
-| Independent review | different model from implementer | verify concrete findings and fixes before phase acceptance |
+| Independent review | different model from implementer when available | lighter reviews and new crucial tests; root performs full-gate and phase acceptance |
 
 The original Fable/Opus/Sonnet crew built Phases 1–6. Its workflow scripts remain historical
 records, not a current model-routing configuration. Preflight actual availability and never
@@ -305,7 +305,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       pages render and gate tool permissions locally.
       Steps: port pages; local policy engine (allow/deny/ask per tool pattern); share bundles.
       Covers: P14–P17.
-- [ ] Phase 9C: Custom Mode (user addition, R33–R34)
+- [x] Phase 9C: Custom Mode (user addition, R33–R34)
       Done when: a selected agent generates a reviewable mode from a prompt; visual and JSON
       editors round-trip the same complete policy; validation rejects malformed/unavailable
       assignments; Apply persists the mode; task/difficulty routes and conditional same-chat
@@ -314,6 +314,10 @@ silently substitute models. Review status and failed Claude attempts are recorde
       Steps: Astra contract review; versioned declarative policy schema; generator draft
       and preview; visual/text editors; route/debate runtime; persistence and e2e.
       Dependencies: Phase 9 permissions and cross-backend delegation proof.
+      Accepted 2026-09-08: native isolated draft generation → visual edit → Apply → restart
+      preserves policy/history; classified diagram routes and bounded same-chat debate pass
+      focused runtime fixtures. Full gate: typecheck/build pass, 2815 unit tests passed / 4
+      skipped, 54 native Electron tests passed / 12 live skipped (2.3m).
 - [ ] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
       Done when: mic button dictates into the composer (Windows Speech or whisper.cpp local);
       Hosts page shows this machine's harness statuses; Terminal attach opens the raw `claude` /

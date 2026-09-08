@@ -15,6 +15,8 @@ import {
   assertNoInlineAgentMcpCredentials,
   redactInlineAgentMcpCredentials,
   APPROVE_INPUT_SUMMARY_MAX,
+  parseCustomModeDocument,
+  validateCrewAvailability,
   type Agent,
   type PermissionRequest,
   type AgentDraft,
@@ -29,6 +31,11 @@ import {
 } from "@capygen/shared";
 import { createSessionRunner, type SessionPolicyHooks } from "../engine/SessionRunner.js";
 import { errorBlock } from "../engine/persist.js";
+import { crewCapabilities } from "../engine/crewCapabilities.js";
+import { createCustomModeAuthoring } from "../engine/CustomModeAuthoring.js";
+import { DictationService } from "../workspace/DictationService.js";
+import { createLocalInputHandlers } from "./localInput.js";
+import { unavailableExtensionHandlers, type ExtensionHandlers } from "./extensions.js";
 import { InboxService } from "../inbox/InboxService.js";
 import { AutomationService } from "../automations/AutomationService.js";
 import { API_ENV_KEYS } from "./harnessList.js";
@@ -123,6 +130,7 @@ export function createInMemorySecretsStore(): SecretsStore {
 }
 
 export interface IpcContextDeps {
+  extensions?: ExtensionHandlers;
   store: CapygenStore;
   broadcast: Broadcast;
   log: EngineLogger;
@@ -422,6 +430,7 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   const runnerConfig = {
     settings: () => settingsService.all(),
     catalogue,
+    crewCapabilities: () => crewCapabilities(deps.catalogue?.() ?? []),
     validateModel: (selection: {
       backend: import("@capygen/shared").Backend;
       model?: string | null;
@@ -459,6 +468,8 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     ...runnerConfig,
     ...(deps.policyHooks ? { policy: deps.policyHooks } : {}),
   });
+  const authoring = createCustomModeAuthoring({ store, keys: engineDeps.keys,
+    capabilities: () => crewCapabilities(deps.catalogue?.() ?? []) });
 
   function materializeImportedAgent(draft: AgentDraft): AgentDraft {
     // An imported continuation persists this object as a normal live agent,
@@ -512,7 +523,10 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     ? createLocalPolicyHandlers(deps.localPolicies)
     : unavailableLocalPolicies();
 
+  const dictation = new DictationService();
   const handlers: IpcHandlers = {
+    ...(deps.extensions ?? unavailableExtensionHandlers()),
+    ...createLocalInputHandlers({ dictation, terminals: workspace.terminals }),
     "automations.list": (args) => automationService!.list(args),
     "automations.create": (args) => automationService!.create(args),
     "automations.update": (args) => automationService!.update(args.id, args.patch),
@@ -535,6 +549,47 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     ...importHandlers,
     ...sharingHandlers,
     ...localPolicyHandlers,
+    "customMode.generate": async (args) => {
+      const source = store.sessions.get(args.sessionId);
+      if (!source || source.origin !== "live") throw new Error("Choose a live session for mode authoring.");
+      const decision = deps.policyHooks?.checkDispatch(args.sessionId, `${source.leadAgentId ?? "crew"}#authoring`, {
+        projectId: source.projectId, backend: args.target.backend, readOnly: false, declaresDynamicTools: false,
+      });
+      if (decision && !decision.allowed) throw new Error(decision.message);
+      return authoring.generate(args);
+    },
+    "customMode.cancel": (args) => ({ ok: authoring.cancel(args.requestId) }),
+    "customMode.capabilities": () => {
+      const harnesses = deps.catalogue?.() ?? [];
+      const capabilities = crewCapabilities(harnesses);
+      return harnesses.map((harness) => ({ ...harness, models: harness.models.map((model) => ({
+        ...model, efforts: [...(capabilities.find((row) => row.backend === harness.backend && row.model === model.id)?.efforts ?? [])],
+      })) }));
+    },
+    "customMode.apply": async (args) => {
+      const parsed = parseCustomModeDocument(args.crew);
+      if (!parsed.ok) throw new Error(parsed.issues.map((issue) => issue.message).join("; "));
+      const issues = validateCrewAvailability(parsed.document, crewCapabilities(deps.catalogue?.() ?? []));
+      if (issues.length) throw new Error(issues.map((issue) => issue.message).join("; "));
+      if (!engine.isSessionQuiescent?.(args.sessionId) || !engine.restartSessionCrew) {
+        throw new Error("Custom Mode requires an idle session with no queued work.");
+      }
+      for (const member of parsed.document.roster) {
+        requireRunnable({ backend: member.target.backend, model: member.target.model,
+          config: { [member.target.backend]: {
+            ...(member.target.backend === "claude" ? { effort: member.target.effort } : { reasoningEffort: member.target.effort }),
+            ...(member.target.provider ? { provider: member.target.provider } : {}),
+          } } });
+      }
+      const previous = store.sessions.agents(args.sessionId).map((agent) => agent.id);
+      const applied = store.sessions.applyCrew(args.sessionId, parsed.document);
+      emitAgents(args.sessionId);
+      emitSession(args.sessionId);
+      let restartError: string | null = null;
+      try { await engine.restartSessionCrew(args.sessionId, previous); }
+      catch { restartError = "The crew was saved, but its runtime could not restart. Retry Apply when the backend is available."; }
+      return { session: applied.session, agents: applied.agents.map(publicAgent), restartError };
+    },
     "projects.pick": async (): Promise<Project | null> => {
       const dir = await deps.pickDirectory();
       if (!dir) return null;
@@ -619,9 +674,16 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
 
     /** ADR-0002: "can be switched later without losing history" — agents and
      *  the transcript are untouched. */
-    "sessions.setMode": (args) => {
+    "sessions.setMode": async (args) => {
+      const previous = store.sessions.get(args.sessionId);
+      if (previous?.mode === "custom" && !engine.isSessionQuiescent?.(args.sessionId)) {
+        throw new Error("Finish or cancel the current custom crew work before changing mode.");
+      }
       const session = store.sessions.setMode(args.sessionId, args.mode);
       broadcast("session.updated", session);
+      if (previous?.mode === "custom") {
+        await engine.restartSessionCrew?.(args.sessionId, store.sessions.agents(args.sessionId).map((agent) => agent.id));
+      }
       return session;
     },
 
@@ -1185,6 +1247,8 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     settings: settingsService,
     dispose: async () => {
       automationService?.dispose();
+      await authoring.dispose();
+      dictation.dispose();
       // The engine first: a harness still writing a turn's final status must
       // not find the workspace services gone underneath it.
       await engine.dispose();

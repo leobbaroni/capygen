@@ -43,9 +43,9 @@
  * (packages/shared/src/ipc.ts): taking one, showing a chip and then dropping
  * it on send is worse than saying it is not available yet. The chip list and
  * `addFiles` stay so the panes phase only has to re-enable the button. The
- * mic toggles the store's `listening` flag, which is real: it drives the
- * mascot's `listening` state (`hooks/useMascotState.ts`) even though actual
- * speech-to-text is Phase 10 (R18/P18).
+ * mic starts a bounded local Windows Speech capture, updating the mascot
+ * while listening. A completed phrase enters only the editable draft;
+ * cancellation/navigation discards late transcripts.
  *
  * `@mention` autocomplete (SPEC item B2.2, ADR-0002): typing `@` anywhere —
  * not only at the start of a line, unlike the slash menu — filters `agents`
@@ -83,7 +83,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
 import { activeMentionQuery, insertMention, type MentionQuery } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/store/appStore";
+import { useComposerDictation } from "@/hooks/useComposerDictation";
 
 export interface AgentChoice {
   backend: Backend;
@@ -180,8 +180,11 @@ export function Composer({
   const [sendError, setSendError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const listening = useAppStore((s) => s.listening);
-  const setListening = useAppStore((s) => s.setListening);
+  const dictation = useComposerDictation((text) => {
+    setValue(current => `${current}${current && !/\s$/.test(current) ? " " : ""}${text}`);
+    ref.current?.focus();
+  });
+  const listening = dictation.active;
 
   // G1: the composer is focused and usable the moment the window paints.
   useEffect(() => {
@@ -196,9 +199,7 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [value]);
 
-  // Never leave the mascot stuck "listening" if this composer unmounts
-  // (route change) while the mic is toggled on.
-  useEffect(() => () => setListening(false), [setListening]);
+  useEffect(() => { if (disabled) dictation.cancel(); }, [disabled, dictation.cancel]);
 
   const slashActive =
     value.startsWith("/") &&
@@ -259,6 +260,7 @@ export function Composer({
   async function sendText(text: string): Promise<void> {
     const trimmed = text.trim();
     if (trimmed === "" || disabled) return;
+    dictation.cancel();
     const keptFiles = files;
     setValue("");
     setFiles([]);
@@ -524,15 +526,22 @@ export function Composer({
             type="button"
             variant={listening ? "secondary" : "ghost"}
             size="icon-sm"
-            disabled={disabled}
-            onClick={() => setListening(!listening)}
-            title={listening ? "Stop dictation" : "Dictate"}
-            aria-label={listening ? "Stop dictation" : "Dictate"}
+            disabled={!listening && (disabled || !dictation.language)}
+            onClick={() => listening ? dictation.cancel() : void dictation.start()}
+            title={listening ? "Cancel dictation" : dictation.unavailable ?? `Dictate locally in ${dictation.language}`}
+            aria-label={listening ? "Cancel dictation" : "Dictate"}
             aria-pressed={listening}
             data-testid={`${testId}-mic`}
           >
             <MicIcon className={cn("size-4", listening && "text-destructive")} />
           </Button>
+          {dictation.languages.length > 0 ? (
+            <select aria-label="Dictation language" value={dictation.language}
+              onChange={event => dictation.setLanguage(event.target.value)} disabled={listening}
+              className="max-w-24 rounded bg-transparent px-1 text-xs text-muted-foreground">
+              {dictation.languages.map(language => <option key={language} value={language}>{language}</option>)}
+            </select>
+          ) : null}
         </div>
 
         <div className="flex min-w-0 items-center gap-1.5">
@@ -641,6 +650,15 @@ export function Composer({
         </div>
       </div>
 
+      {dictation.active ? (
+        <p role="status" className="px-4 pb-2 text-xs text-muted-foreground">
+          {dictation.state === "checking" ? "Checking local speech…" : "Listening locally… Speak one phrase, then pause. Cancel discards it."}
+        </p>
+      ) : null}
+      {dictation.error ? (
+        <p role="alert" data-testid={`${testId}-dictation-error`} className="px-4 pb-2 text-xs text-destructive">{dictation.error}</p>
+      ) : null}
+      {dictation.unavailable ? <p className="px-4 pb-2 text-xs text-muted-foreground">{dictation.unavailable}</p> : null}
       {tray ? (
         <div className="flex flex-wrap items-center gap-1 border-t border-border-weak px-2 py-1.5">
           {tray}

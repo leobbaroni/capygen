@@ -6,10 +6,9 @@
  * One `terminal.create` per tab, the session's project as `cwd` (SPEC R16 —
  * "the session's cwd"); data/exit events keep each tab's xterm instance in
  * sync; resizing re-fits and pushes `terminal.resize`; closing a tab kills
- * its pty. "Open claude / codex here" writes the CLI command straight into
- * the active tab's pty — full terminal-attach parity (SPEC P19) is a later
- * phase; this is the same shortcut a person typing the command themselves
- * would get.
+ * its pty. "Open claude / codex here" creates a dedicated raw CLI terminal
+ * in the project through terminal.attach (SPEC P19). It does not write into
+ * whatever process is currently running in another tab.
  *
  * [C] Mounting **adopts before it creates**. A pty outlives this component:
  * closing the Terminal tab, toggling the toolbar button, or closing the whole
@@ -101,7 +100,7 @@ export function TerminalPane({ params, api }: WorkspacePaneProps) {
       setTabs(
         existing.map((info, index) => {
           tabCounter = Math.max(tabCounter, index + 1);
-          return { id: info.id, title: `Terminal ${index + 1}`, exitCode: undefined };
+          return { id: info.id, title: info.title.endsWith(" CLI") ? info.title : `Terminal ${index + 1}`, exitCode: undefined };
         }),
       );
       setActiveId(existing[0]!.id);
@@ -142,9 +141,17 @@ export function TerminalPane({ params, api }: WorkspacePaneProps) {
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, exitCode } : t)));
   }
 
-  function quickOpen(command: "claude" | "codex"): void {
-    if (!activeId) return;
-    void ipc().invoke("terminal.write", { id: activeId, data: `${command}\r` }).catch(() => undefined);
+  async function quickOpen(backend: "claude" | "codex"): Promise<void> {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const info = await ipc().invoke("terminal.attach", { projectId, sessionId, backend, cols: 80, rows: 24 });
+      setTabs(prev => [...prev, { id: info.id, title: info.title, exitCode: undefined }]);
+      setActiveId(info.id);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally { creatingRef.current = false; }
   }
 
   return (
@@ -209,8 +216,7 @@ export function TerminalPane({ params, api }: WorkspacePaneProps) {
         <div className="mx-1 h-4 w-px shrink-0 bg-border-weak" aria-hidden="true" />
         <button
           type="button"
-          onClick={() => quickOpen("claude")}
-          disabled={!activeId}
+          onClick={() => void quickOpen("claude")}
           data-testid="terminal-open-claude"
           className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
         >
@@ -218,8 +224,7 @@ export function TerminalPane({ params, api }: WorkspacePaneProps) {
         </button>
         <button
           type="button"
-          onClick={() => quickOpen("codex")}
-          disabled={!activeId}
+          onClick={() => void quickOpen("codex")}
           data-testid="terminal-open-codex"
           className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
         >

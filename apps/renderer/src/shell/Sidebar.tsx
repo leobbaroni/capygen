@@ -16,6 +16,7 @@ import { Wordmark } from "@/brand/Wordmark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
+import { ExtensionNavigation } from "./ExtensionNavigation";
 import { hasBridge, ipc } from "@/lib/ipc";
 
 export interface SidebarProps {
@@ -100,6 +101,7 @@ export function Sidebar({ sessions, activeSessionId }: SidebarProps) {
             {label}{to === "/inbox" && unreadCount > 0 && <span data-testid="inbox-badge" className="rounded-full bg-primary px-1.5 text-primary-foreground">{unreadCount}</span>}
           </NavLink>)}
         </nav>
+        <ExtensionNavigation />
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input

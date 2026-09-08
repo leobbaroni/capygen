@@ -36,6 +36,7 @@ import { cleanEnv } from "@capygen/engine";
 import { newId, type TerminalInfo } from "@capygen/shared";
 import { projectRoot, resolveExistingInside } from "./paths.js";
 import type { Broadcast, EngineLogger } from "../engine/types.js";
+import { rawHarnessShellArgs, resolveRawHarnessCommand, type RawHarnessBackend } from "./rawHarnessTerminal.js";
 
 /** Output is coalesced over this window before one `terminal.data` goes out —
  *  a build's output is thousands of tiny writes and each one is an IPC hop
@@ -78,6 +79,8 @@ export interface TerminalServiceDeps {
   env?: () => Record<string, string>;
   /** Overridable in tests; the default runs `taskkill /T /F /PID`. */
   killTree?: (pid: number) => void;
+  /** Main-owned command resolution; renderer supplies only a backend enum. */
+  resolveHarnessCommand?: (backend: RawHarnessBackend) => string;
 }
 
 interface LiveTerminal {
@@ -102,14 +105,39 @@ export class TerminalService {
     cols: number;
     rows: number;
   }): Promise<TerminalInfo> {
+    return this.createTerminal(args);
+  }
+
+  /** A fresh visible terminal, never a command written into an unknown running process. */
+  async attach(args: {
+    projectId: string;
+    sessionId: string | null;
+    backend: RawHarnessBackend;
+    cols: number;
+    rows: number;
+  }): Promise<TerminalInfo> {
+    if (args.backend !== "claude" && args.backend !== "codex") throw new Error("Unsupported raw CLI backend.");
+    return this.createTerminal(args, args.backend);
+  }
+
+  private async createTerminal(args: {
+    projectId: string;
+    sessionId: string | null;
+    cwd?: string;
+    cols: number;
+    rows: number;
+  }, backend?: RawHarnessBackend): Promise<TerminalInfo> {
     const { root } = projectRoot(this.deps.store, args.projectId);
     const cwd = args.cwd ? resolveExistingInside(root, args.cwd) : root;
     const shell = (this.deps.resolveShell ?? resolveDefaultShell)();
     const env = (this.deps.env ?? defaultEnv)();
+    const launchArgs = backend
+      ? rawHarnessShellArgs(shell, (this.deps.resolveHarnessCommand ?? resolveRawHarnessCommand)(backend))
+      : shellArgs(shell);
     const spawner = await this.resolveSpawner();
 
     const id = newId("terminal");
-    const pty = spawner(shell, shellArgs(shell), {
+    const pty = spawner(shell, launchArgs, {
       name: "xterm-256color",
       cols: args.cols,
       rows: args.rows,
@@ -122,7 +150,7 @@ export class TerminalService {
       id,
       projectId: args.projectId,
       sessionId: args.sessionId,
-      title: path.basename(shell),
+      title: backend ? `${backend} CLI` : path.basename(shell),
       cwd,
       shell,
       cols: args.cols,

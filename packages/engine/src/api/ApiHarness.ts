@@ -122,6 +122,8 @@ export const DEFAULT_MAX_TOKENS = 8_192;
 export const DEFAULT_MAX_ITERATIONS = 24;
 
 export interface ApiHarnessDeps {
+  /** No tools, history, MCP, or application prompt; exactly one provider call. */
+  authoringSystemPrompt?: string;
   /** Injected by the desktop; the engine never reads a key from disk (R21). */
   keys?: KeyProvider;
   env?: EnvRecord;
@@ -252,7 +254,7 @@ export class ApiHarness implements Harness {
     this.session = session;
     this.agent = agent;
     this.config = resolveConfig(agent, this.deps);
-    this.system = buildSystemPrompt({
+    this.system = this.deps.authoringSystemPrompt ?? buildSystemPrompt({
       cwd: session.projectPath,
       platform: process.platform,
       agentName: agent.name,
@@ -261,7 +263,7 @@ export class ApiHarness implements Harness {
       // prompt does — nothing per-turn reaches `buildSystemPrompt`.
       ...(agent.promptAddition ? { extra: agent.promptAddition } : {}),
     });
-    const history = await this.deps.loadHistory?.(session, agent);
+    const history = this.deps.authoringSystemPrompt !== undefined ? [] : await this.deps.loadHistory?.(session, agent);
     this.messages = Array.isArray(history) ? [...history] : [];
     this.log.info(
       `[api] agent ${agent.agentId} → ${this.config.provider}/${this.config.model}` +
@@ -369,7 +371,7 @@ export class ApiHarness implements Harness {
     const provider = await this.ensureProvider(config);
     const tools = await this.ensureTools();
     const byName = toolMap(tools);
-    const maxIterations = this.deps.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+    const maxIterations = this.deps.authoringSystemPrompt !== undefined ? 1 : this.deps.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
       if (turn.interrupted) break;
@@ -400,6 +402,7 @@ export class ApiHarness implements Harness {
         return;
       }
 
+      if (this.deps.authoringSystemPrompt !== undefined) break;
       const results: ChatContent[] = [];
       for (const call of calls) {
         if (turn.interrupted) break;
@@ -894,6 +897,7 @@ export class ApiHarness implements Harness {
    * byte-identical between turns.
    */
   private async ensureTools(): Promise<ToolDefinition[]> {
+    if (this.deps.authoringSystemPrompt !== undefined) { this.toolSchemas = []; return []; }
     if (this.tools) return this.tools;
     const tools = builtinTools(this.deps.tools ?? {});
     if (this.deps.extraTools?.length) tools.push(...this.deps.extraTools);

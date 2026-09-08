@@ -154,7 +154,7 @@ export function planShareExport(
     mode: session.mode,
     startedAt: new Date(session.createdAt).toISOString(),
     endedAt: new Date(session.updatedAt).toISOString(),
-    agents: store.sessions.agents(sessionId).map((agent) => ({
+    agents: store.sessions.historicalAgents(sessionId).map((agent) => ({
       label: agent.name, backend: agent.backend, model: agent.model,
     })),
   };

@@ -120,6 +120,9 @@ export interface Engine {
    * navigated away from and back to.
    */
   hasPendingChain(sessionId: string): boolean;
+  /** Crew Apply requires no active turn, queued chain or unanswered interaction. */
+  isSessionQuiescent?(sessionId: string): boolean;
+  restartSessionCrew?(sessionId: string, previousAgentIds: string[]): Promise<void>;
   /** Cancel the in-flight turn for a session. Resolves true if one was running. */
   interrupt(sessionId: string): boolean | Promise<boolean>;
   /** Route a permission card's answer back to the waiting backend. */

@@ -107,6 +107,10 @@ export interface SubagentRoute {
 }
 
 export interface ClaudeHarnessDeps {
+  /** Bounded no-tools policy authoring; never a Claude Code preset. */
+  authoringSystemPrompt?: string;
+  /** Custom Mode routes every spawn through structured delegate_task (ADR-0006). */
+  disableNativeSubagents?: boolean;
   /** Injected in tests; the real `query` is loaded lazily when absent. */
   query?: ClaudeQueryFn;
   loadQuery?: () => Promise<ClaudeQueryFn>;
@@ -608,6 +612,20 @@ export class ClaudeHarness implements Harness {
     // (SPEC R23/R24). Left unset when unconfigured, so the CLI's own default
     // applies rather than us pinning one.
     if (config.effort) options.effort = config.effort;
+    if (this.deps.authoringSystemPrompt !== undefined) {
+      options.systemPrompt = this.deps.authoringSystemPrompt;
+      options.tools = [];
+      options.settingSources = [];
+      options.strictMcpConfig = true;
+      options.mcpServers = {};
+      options.hooks = {};
+      options.maxTurns = 1;
+      options.canUseTool = async () => ({ behavior: "deny", message: "Tools are disabled for policy authoring" });
+      options.stderr = () => {};
+      delete options.resume;
+      delete options.skills;
+      delete options.allowedTools;
+    }
     return options;
   }
 
@@ -1261,6 +1279,20 @@ export class ClaudeHarness implements Harness {
     const anchor = toolUseId ?? str(raw.tool_use_id) ?? newId("request");
     const toolName = str(raw.tool_name) ?? "";
     const isSpawn = SUBAGENT_TOOL_NAMES.has(toolName);
+
+    // A policy-routed spawn needs structured classification that native Agent /
+    // Task inputs do not provide. Deny before legacy fail-open routing and before
+    // local/native allow decisions; an observed spawn notification is too late.
+    if (isSpawn && this.deps.disableNativeSubagents) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "Custom Mode disables native subagents. Use delegate_task with task kind and difficulty so the crew policy can route the work.",
+        },
+      };
+    }
 
     /**
      * [review] The SDK's own hook signal *and* this turn's cancellation.
@@ -1961,7 +1993,7 @@ interface ClaudeAgentConfig {
  * renamed or removed upstream, this stops compiling instead of silently
  * sending a value the CLI rejects.
  */
-const EFFORT_LEVELS = [
+export const CLAUDE_SUPPORTED_EFFORTS = [
   "low",
   "medium",
   "high",
@@ -1993,7 +2025,7 @@ export function readClaudeConfig(config: unknown): ClaudeAgentConfig {
   // unknown `permissionMode` is, so a typo degrades to the model's own default
   // instead of failing the session.
   const effort = str(root.effort);
-  if (effort !== undefined && (EFFORT_LEVELS as readonly string[]).includes(effort)) {
+  if (effort !== undefined && (CLAUDE_SUPPORTED_EFFORTS as readonly string[]).includes(effort)) {
     out.effort = effort as NonNullable<ClaudeOptions["effort"]>;
   }
   if (typeof root.strictMcpConfig === "boolean") out.strictMcpConfig = root.strictMcpConfig;

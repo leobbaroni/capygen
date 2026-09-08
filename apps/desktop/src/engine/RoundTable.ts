@@ -43,6 +43,7 @@ import {
   IMPORTED_REFERENCE_SPEAKER_LABEL,
   chainStoppedMessage,
   hopAllowed,
+  planCrewDebate,
   nextHopTargets,
   resolveTargets,
   speakerLabel,
@@ -50,7 +51,7 @@ import {
   type SpeakerInfo,
   type TranscriptTurn,
 } from "@capygen/engine";
-import type { SessionMode, Turn, TurnStatus } from "@capygen/shared";
+import { parseCustomModeDocument, type SessionMode, type Turn, type TurnStatus } from "@capygen/shared";
 import { errorBlock, finishTurn, openAgentTurn, recordUserTurn, systemTurn } from "./persist.js";
 import { roundTableAgents } from "./routing.js";
 import type { EngineDeps } from "./types.js";
@@ -106,6 +107,7 @@ interface Entry {
   messageFrom: string | null;
   /** The turn `message` came from — kept out of the delta so it is not doubled. */
   sourceTurnId: string;
+  debate?: { targets: RoundTableAgent[]; topic: string };
 }
 
 interface DesktopTranscriptTurn extends TranscriptTurn {
@@ -131,7 +133,17 @@ interface PendingChain {
   targets: RoundTableAgent[];
 }
 
+export interface DebateRequest {
+  sessionId: string;
+  turnId: string;
+  agentId: string;
+  trigger: unknown;
+  topic: string;
+}
+export type DebateResult = { ok: true } | { ok: false; reason: string };
+
 export interface RoundTable {
+  requestDebate(args: DebateRequest): DebateResult;
   dispatch(args: DispatchArgs): DispatchResult;
   continueChain(sessionId: string): { ok: boolean; agentTurnId: string | null };
   /**
@@ -145,6 +157,7 @@ export interface RoundTable {
    * `sessions.get` reports instead.
    */
   hasPending(sessionId: string): boolean;
+  isRunning(sessionId: string): boolean;
   /** Drop any queued hop for this session (interrupt, or the user speaking). */
   cancel(sessionId: string): void;
   /** Wait for every chain this session has in flight — shutdown only. */
@@ -157,6 +170,9 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
   /** Sessions whose chain was cancelled; the driver checks between rounds. */
   const cancelled = new Set<string>();
   const running = new Set<Promise<void>>();
+  const runningSessions = new Map<string, number>();
+  const executing = new Map<string, Entry>();
+  const debateIntents = new Map<string, { targets: RoundTableAgent[]; topic: string }>();
 
   function sessionSettings(sessionId: string): {
     hopCap: number;
@@ -176,7 +192,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
   function speakerMap(sessionId: string): Map<string, SpeakerInfo> {
     const map = new Map<string, SpeakerInfo>();
-    for (const agent of store.sessions.agents(sessionId)) {
+    for (const agent of store.sessions.historicalAgents(sessionId)) {
       map.set(agent.id, { mentionName: agent.mentionName, backend: agent.backend });
     }
     return map;
@@ -327,13 +343,16 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
   async function runOne(entry: Entry): Promise<{ entry: Entry; status: TurnStatus }> {
     const text = promptFor(entry);
-    const result = await deps.runTurn({
-      sessionId: entry.turn.sessionId,
-      turnId: entry.turn.id,
-      agentId: entry.agent.id,
-      text,
-    });
-    return { entry, status: result.status };
+    executing.set(entry.turn.id, entry);
+    try {
+      const result = await deps.runTurn({
+        sessionId: entry.turn.sessionId, turnId: entry.turn.id,
+        agentId: entry.agent.id, text,
+      });
+      return { entry, status: result.status };
+    } finally {
+      executing.delete(entry.turn.id);
+    }
   }
 
   /**
@@ -354,7 +373,7 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
       const { hopCap, parallel, mode } = sessionSettings(sessionId);
       const settled: { entry: Entry; status: TurnStatus }[] = [];
-      if (parallel) {
+      if (parallel && mode !== "custom") {
         // One lane per agent, lanes run concurrently. Two hops addressed to
         // the *same* agent in one round (two speakers both mentioning it) must
         // not run at once: a harness takes one turn at a time and the runner
@@ -400,6 +419,8 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
       const blocked: PendingChain[] = [];
       const agents = roundTableAgents(store, sessionId);
       for (const { entry, status } of settled) {
+        const intent = debateIntents.get(entry.turn.id);
+        debateIntents.delete(entry.turn.id);
         if (status !== "done") {
           // A failed hop stops its own chain and says so; a failed *first*
           // answer is just a failed turn, and the error block already says it.
@@ -409,6 +430,25 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
               turnId: entry.turn.id,
               reason: "error",
             });
+          }
+          continue;
+        }
+        if (mode === "custom") {
+          const debate = intent ?? entry.debate;
+          if (debate && debate.targets.length > 0 && hopAllowed(entry.turn.hopIndex + debate.targets.length, hopCap)) {
+            const [target, ...remaining] = debate.targets;
+            // Open one row at a time: every debater and the explicit lead return
+            // receives a successive hop and the preceding turn as its parent.
+            const [queued] = openEntries(sessionId, [target!], {
+              hopIndex: entry.turn.hopIndex + 1, parentTurnId: entry.turn.id,
+              triggeredByTurnId: entry.turn.triggeredByTurnId ?? entry.turn.id,
+              message: remaining.length === 0
+                ? `Decide the outcome of this debate: ${debate.topic}`
+                : `Contribute your assessment to this debate: ${debate.topic}`,
+              messageFrom: entry.agent.id, sourceTurnId: "",
+            });
+            queued!.debate = { targets: remaining, topic: debate.topic };
+            next.push(queued!);
           }
           continue;
         }
@@ -468,15 +508,49 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
   }
 
   function start(sessionId: string, entries: Entry[]): void {
+    runningSessions.set(sessionId, (runningSessions.get(sessionId) ?? 0) + 1);
     const task = drive(sessionId, entries)
       .catch((err: unknown) => {
         log.error(`[roundtable] chain for ${sessionId} failed`, err);
       })
-      .finally(() => running.delete(task));
+      .finally(() => {
+        running.delete(task);
+        for (const turnId of debateIntents.keys()) {
+          if (store.turns.get(turnId)?.sessionId === sessionId) debateIntents.delete(turnId);
+        }
+        const remaining = (runningSessions.get(sessionId) ?? 1) - 1;
+        if (remaining > 0) runningSessions.set(sessionId, remaining);
+        else runningSessions.delete(sessionId);
+      });
     running.add(task);
   }
 
   return {
+    requestDebate(args: DebateRequest): DebateResult {
+      const session = store.sessions.get(args.sessionId);
+      const entry = executing.get(args.turnId);
+      if (!session || session.mode !== "custom" || !entry
+        || entry.turn.sessionId !== args.sessionId || entry.agent.id !== args.agentId
+        || session.leadAgentId !== args.agentId || cancelled.has(args.sessionId)) {
+        return { ok: false, reason: "Only the currently executing custom lead turn may request a debate." };
+      }
+      if (debateIntents.has(args.turnId)) return { ok: false, reason: "This turn already requested a debate." };
+      if (typeof args.topic !== "string" || !args.topic.trim() || args.topic.length > 4000) {
+        return { ok: false, reason: "A debate topic must contain 1–4000 characters." };
+      }
+      const parsed = parseCustomModeDocument(session.settings.crew);
+      if (!parsed.ok) return { ok: false, reason: "The custom crew policy is invalid." };
+      const plan = planCrewDebate(parsed.document, args.trigger, entry.turn.hopIndex, session.settings.hopCap);
+      if (!plan.ok) return plan;
+      const agents = roundTableAgents(store, args.sessionId);
+      const targets = plan.rosterIds.map((id) => agents.find((agent) => agent.id === session.settings.crewBindings?.[id]));
+      if (targets.some((agent) => !agent) || new Set(targets.map((agent) => agent!.id)).size !== targets.length
+        || targets.at(-1)?.id !== session.leadAgentId) {
+        return { ok: false, reason: "The debate roster bindings are unavailable or invalid. Apply the crew again." };
+      }
+      debateIntents.set(args.turnId, { targets: targets as RoundTableAgent[], topic: args.topic.trim() });
+      return { ok: true };
+    },
     dispatch(args: DispatchArgs): DispatchResult {
       const session = store.sessions.get(args.sessionId);
       if (!session) throw new Error(`unknown session: ${args.sessionId}`);
@@ -491,8 +565,8 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
         text: args.text,
         agents,
         leadAgentId: session.leadAgentId,
-        ...(args.agentId ? { explicitAgentId: args.agentId } : {}),
-        mode: session.mode,
+        ...(args.agentId && session.mode !== "custom" ? { explicitAgentId: args.agentId } : {}),
+        mode: session.mode === "custom" ? "solo" : session.mode,
       });
       if (targets.unknown.length > 0) {
         log.info(
@@ -587,8 +661,11 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
 
       const turns = store.turns.list(sessionId);
       const last = [...turns].reverse().find((t) => t.role === "agent" && t.agentId) ?? null;
-      const agentId = last?.agentId ?? session.leadAgentId;
+      const agentId = session.mode === "custom" ? session.leadAgentId : last?.agentId ?? session.leadAgentId;
       if (!last || !agentId) return { ok: false, agentTurnId: null };
+      if (session.mode === "custom" && !hopAllowed(last.hopIndex + 1, session.settings.hopCap)) {
+        return { ok: false, agentTurnId: null };
+      }
       const agents = roundTableAgents(store, sessionId);
       const agent = agents.find((a) => a.id === agentId);
       if (!agent) return { ok: false, agentTurnId: null };
@@ -608,9 +685,13 @@ export function createRoundTable(deps: RoundTableDeps): RoundTable {
     hasPending(sessionId: string): boolean {
       return (pending.get(sessionId)?.length ?? 0) > 0;
     },
+    isRunning: (sessionId) => runningSessions.has(sessionId),
 
     cancel(sessionId: string): void {
       pending.delete(sessionId);
+      for (const [turnId, entry] of executing) {
+        if (entry.turn.sessionId === sessionId) debateIntents.delete(turnId);
+      }
       cancelled.add(sessionId);
     },
 

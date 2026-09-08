@@ -28,7 +28,8 @@ const SIGNED_IN: CodexProbeResult = {
   signedIn: true,
   account: { type: "chatgpt", planType: "pro" },
   models: [
-    { id: "gpt-5.5", displayName: "GPT-5.5", isDefault: true },
+    { id: "gpt-5.5", displayName: "GPT-5.5", isDefault: true,
+      supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "low" }, { reasoningEffort: "medium" }] },
     { id: "gpt-5.2", displayName: "GPT-5.2" },
     { id: "internal", displayName: "hidden one", hidden: true },
   ],
@@ -36,6 +37,7 @@ const SIGNED_IN: CodexProbeResult = {
 
 function lister(over: Partial<HarnessListerDeps> = {}): () => Promise<unknown[]> {
   return createHarnessLister({
+    probeClaudeBackend: async () => ({ models: [{ id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", efforts: ["low"] }] }),
     defaultModel: () => "claude-sonnet-4-5",
     probe: OK,
     probeCodexBackend: async () => SIGNED_IN,
@@ -177,7 +179,7 @@ describe("codex availability", () => {
       available: true,
       defaultModel: "gpt-5.5",
       models: [
-        { id: "gpt-5.5", label: "GPT-5.5" },
+        { id: "gpt-5.5", label: "GPT-5.5", efforts: ["low", "medium"] },
         { id: "gpt-5.2", label: "GPT-5.2" },
       ],
     });
@@ -223,7 +225,7 @@ describe("api availability", () => {
     const has = vi.fn((provider: string) => provider === "openai");
     const api = await row("api", { env: {}, secrets: { has } });
     expect(api.available).toBe(true);
-    expect((api.models as { id: string }[]).map((m) => m.id)).toContain("gpt-5");
+    expect(api.models).toContainEqual(expect.objectContaining({ id: "gpt-5", providers: ["openai"] }));
     // Every provider is asked, and only ever with `has`.
     expect(has.mock.calls.map((c) => c[0])).toEqual(["anthropic", "openai", "openrouter"]);
   });
@@ -243,6 +245,7 @@ describe("caching", () => {
     const probeCodexBackend = vi.fn(async () => SIGNED_IN);
     let clock = 1_000;
     const list = createHarnessLister({
+    probeClaudeBackend: async () => ({ models: [{ id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", efforts: ["low"] }] }),
       defaultModel: () => "m",
       probe: OK,
       probeCodexBackend,
@@ -309,6 +312,7 @@ describe("snapshot()", () => {
     const pending: ((value: CodexProbeResult | Error) => void)[] = [];
     const state = { codexProbes: 0 };
     const list = createHarnessLister({
+    probeClaudeBackend: async () => ({ models: [{ id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", efforts: ["low"] }] }),
       defaultModel: () => "claude-sonnet-4-5",
       probe: OK,
       probeCodexBackend: () => {
@@ -364,6 +368,7 @@ describe("snapshot()", () => {
     // throws on the second call.
     let calls = 0;
     const list = createHarnessLister({
+    probeClaudeBackend: async () => ({ models: [{ id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", efforts: ["low"] }] }),
       defaultModel: () => "claude-sonnet-4-5",
       probe: async (command, args) => {
         calls += 1;
@@ -413,5 +418,19 @@ describe("snapshot()", () => {
       "codex",
       "api",
     ]);
+  });
+});
+
+describe("Claude initialized model catalogue", () => {
+  it("offers exact current IDs and efforts and replaces a stale default", async () => {
+    expect(await row("claude", { probeClaudeBackend: async () => ({ models: [
+      { id: "claude-sonnet-current", label: "Current Sonnet", efforts: ["low", "high"] },
+    ] }) })).toMatchObject({ available: true, defaultModel: "claude-sonnet-current", models: [
+      { id: "claude-sonnet-current", label: "Current Sonnet", efforts: ["low", "high"] },
+    ] });
+  });
+  it("does not invent available models when metadata cannot be read", async () => {
+    expect(await row("claude", { probeClaudeBackend: async () => ({ models: [], reason: "Metadata unavailable" }) }))
+      .toMatchObject({ available: false, models: [], defaultModel: "", reason: "Metadata unavailable" });
   });
 });

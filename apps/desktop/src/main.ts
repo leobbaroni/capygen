@@ -98,6 +98,8 @@ import type { ShareStagingMeta } from "./ipc/sharing.js";
  * `dist/main.cjs`), so `__dirname` is the portable way to reach the sibling
  * preload, the copied migrations and the tray icon.
  */
+import { createExtensionIntegration } from "./extensions/integration.js";
+import { registerExtensionScheme } from "./extensions/host.js";
 const HERE: string = __dirname;
 
 const RENDERER_INDEX = path.join(HERE, "..", "..", "renderer", "dist", "index.html");
@@ -111,6 +113,7 @@ const APP_ICON = path.join(HERE, "assets", "icon.png");
 let store: CapygenStore | null = null;
 let log: Logger;
 let ipc: IpcContext | null = null;
+let extensions: ReturnType<typeof createExtensionIntegration> | null = null;
 let widgets: WidgetHostHandlers | null = null;
 let mcpPools: McpPoolRegistry | null = null;
 let tray: TrayIntegration | null = null;
@@ -172,7 +175,7 @@ const configHomes = applyConfigHomes(process.env);
  * before `app.whenReady()`; `protocol.handle` is installed once the store is
  * open (`registerIpc`).
  */
-protocol.registerSchemesAsPrivileged([WIDGET_SCHEME_PRIVILEGES]);
+registerExtensionScheme([WIDGET_SCHEME_PRIVILEGES]);
 
 // ---------------------------------------------------------------------------
 // windows
@@ -482,7 +485,13 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     probe: sharedCliProbe,
   });
 
+  extensions = createExtensionIntegration({ store: activeStore, profileDirectory: app.getPath("userData"), window: () => {
+    const senderId = ipcSender.getStore();
+    const sender = senderId === undefined ? null : webContents.fromId(senderId);
+    return sender ? BrowserWindow.fromWebContents(sender) : null;
+  } });
   const context = createIpcContext({
+    extensions: extensions.handlers,
     store: activeStore,
     workspace: {
       worktrees: {
@@ -977,6 +986,7 @@ app.on("will-quit", (event) => {
   shuttingDown = true;
   event.preventDefault();
   void (async () => {
+    try { extensions?.dispose(); } catch { log?.warn("[extensions] shutdown cleanup failed"); }
     try { disposePolicy(); }
     catch { log?.warn("[policy] shutdown cleanup failed"); }
     try { await disposeSharing(); }

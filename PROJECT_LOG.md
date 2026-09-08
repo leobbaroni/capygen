@@ -2554,3 +2554,46 @@ show route evidence on expansion. Luna reviewed root engine changes; Astra revie
 and corrected incomplete test fixtures. Native typecheck and 94 focused tests passed across
 routing/custom delegation and transcript cards (5.43s), custom-delegation-final.log.
 Desktop activation, atomic Apply, authoring and debate queue integration are still pending.
+## 2026-09-08 — current Phase 9C checkpoints
+
+Phase 9 remains accepted at `a319b5b`; Phase 9C remains unaccepted. The strict delegation
+foundation was pushed at `da3f06d`. Current uncommitted Custom Mode work covers atomic Apply,
+active/historical agents via migration 0014, debate queue, authoring/editor tests, and native
+Codex suppression tests. The schema/mode migration is in flight; no full-gate or phase
+acceptance claim is made.
+
+The real Codex paired tool-definition proof is recorded in `native-spawn-paired-proof.json`:
+`spawn_agent` was present, baseline and absent flags were false, and two local requests were
+observed. Resume is unit-tested only; full Codex no-tool authoring remains unsupported.
+Harness metadata preservation passed focused native checks: Codex efforts and API provider
+provenance are retained; Claude dynamic effort probing remains open. Current crew is Astra
+low for hard/medium work while Opus is unavailable, Luna low for easy work and lighter
+reviews/new crucial tests. Root stages and commits; the full gate and phase acceptance remain
+pending.
+## 2026-09-08 — 9C/10 evidence update
+
+Native Custom Mode checks passed (`logcustom-mode-native`, 1 test, 6.3s), including the runtime
+diagram/restart regression (1 test). Dictation’s checked-in C# helper compiled and completed the
+no-microphone en-GB probe; 17 focused tests passed. Extension backend/host/UI focused tests passed
+(7 + 1 + 1). Native extension verification remains pending. Summary projections use authoritative
+values and otherwise `null` for unread, provisional-title, and worktree branch. Cross-extension page
+navigation is intentional with fresh target grants. These are focused checks only; no phase acceptance
+or full-gate claim is made.
+
+## 2026-09-08 — Phase 9C accepted; local capability integration
+
+Custom Mode now supports isolated selected-agent draft generation, complete visual/JSON editing, reviewed atomic Apply, strict classified worker routes, bounded same-chat debate and persisted restart/history. Different-model crucial reviews found no remaining high/medium issues. Native extension sample storage/reopen and ambient network/popup refusal also pass; speech compiles to a C#5 helper, but no microphone acceptance is claimed.
+
+Initial full gate exposed channel inventory/workspace attachment omissions and outdated test mocks. Fixed the workspace handler and inventories; the SDK adapter test now injects its existing SDK seam because pnpm peer resolution gives desktop/engine distinct SDK module identities. Native focused fixes: 20 + 68 tests passed.
+
+Final native Windows command: `corepack pnpm typecheck && corepack pnpm test && corepack pnpm build && corepack pnpm exec playwright test`. Log: `e2e-out/phase9c-acceptance-final-gate.log` (exit 0). Output tails:
+```text
+apps/desktop typecheck: Done
+Test Files 220 passed (220)
+Tests 2815 passed | 4 skipped (2819)
+[build] desktop bundle written to .../apps/desktop/dist
+12 skipped
+54 passed (2.3m)
+```
+
+Twelve live tests are skipped, not passed; dedicated authenticated homes, real efficiency cohort and private packaged updater remain open. The GitHub repository was rechecked private before pushing. Separately added exact packaging dependencies electron-builder 26.15.3 / electron-updater 6.8.9 and dedicated encrypted updater credential storage; no release or installer was launched. Squirrel helper install scripts explicitly denied.

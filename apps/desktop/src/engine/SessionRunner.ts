@@ -22,6 +22,9 @@ import {
   createHarnessForBackend,
   createSubagentRouter,
   delegateTaskTool,
+  crewDebateTool,
+  CREW_DEBATE_TOOL,
+  CREW_DEBATE_SCHEMA,
   effectiveBackendConfig,
   resolveModel,
   resolvePermissionMode,
@@ -42,6 +45,8 @@ import {
 import type { AgentToolCatalogue } from "@capygen/shared";
 import {
   newId,
+  validateCrewAvailability,
+  type CrewCapability,
   type Agent,
   type AgentDescribe,
   type AgentRuntimeInfo,
@@ -146,6 +151,7 @@ function stableJson(value: unknown): string {
  * argument, which is why it is separate from `HarnessAgent`.
  */
 export interface HarnessExtras {
+  disableNativeSubagents?: boolean;
   /** Claude's `PreToolUse` model rewrite for a same-backend route. */
   routeSubagent?: (req: SubagentRouteRequest) => SubagentRoute | null | undefined;
   /** Claude's in-process `delegate_task` MCP server for a cross-backend one. */
@@ -275,6 +281,7 @@ export interface SessionRunnerDeps extends EngineDeps {
   settings?: () => GlobalSettings;
   /** Each backend's own catalogue default; never probes (see `handlers.ts`). */
   catalogue?: ModelCatalogue;
+  crewCapabilities?: () => readonly CrewCapability[];
   /**
    * [7-P1] The same check `sessions.create`/`agents.*` run before they write.
    *
@@ -469,6 +476,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       createHarnessForBackend(agent.backend, {
         claude: {
           log,
+          ...(extras.disableNativeSubagents ? { disableNativeSubagents: true } : {}),
           ...(extras.routeSubagent ? { routeSubagent: extras.routeSubagent } : {}),
           ...(extras.mcpServers ? { mcpServers: extras.mcpServers } : {}),
           ...(extras.resolvedMcpServers
@@ -478,6 +486,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         },
         codex: {
           log,
+          ...(extras.disableNativeSubagents ? { disableNativeSubagents: true } : {}),
           ...(extras.resolvedMcpServers
             ? { resolvedMcpServers: extras.resolvedMcpServers }
             : {}),
@@ -537,6 +546,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    * and take `interrupt` with it.
    */
   const active = new Map<string, ActiveTurn>();
+  const restartingCrews = new Set<string>();
   /** requestId → the harness waiting for that answer. */
   const awaiting = new Map<string, Harness>();
   /** Every `consume()` still running, so `dispose()` can wait for their writes. */
@@ -596,9 +606,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     agent: Agent,
     harnessAgent: HarnessAgent,
   ): HarnessExtras {
-    const extras: HarnessExtras = {};
+    const extras: HarnessExtras = session.mode === "custom" ? { disableNativeSubagents: true } : {};
+    const custom = session.mode === "custom";
+    if (custom && agent.id !== session.leadAgentId) return extras;
 
-    if (agent.backend === "claude") {
+    if (agent.backend === "claude" && !custom) {
       // Same-backend routes only: `createSubagentRouter` returns nothing for a
       // cross-backend decision, because the hook's one lever is the model and
       // a foreign model id would fail the spawn instead of redirecting it.
@@ -613,7 +625,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     }
 
     const target = delegationTarget(store, session.id, agent.id);
-    if (!target) return extras;
+    if (!target && !custom) return extras;
 
     const project = store.projects.get(session.projectId);
     const run = createDelegateRunner({
@@ -621,6 +633,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       parent: harnessAgent,
       // Re-read per call, not captured: see the comment above.
       target: () => delegationTarget(store, session.id, agent.id),
+      ...(custom ? { customCrew: () => {
+        const current = store.sessions.get(session.id);
+        const crew = current?.mode === "custom" ? current.settings.crew : null;
+        return crew && !validateCrewAvailability(crew, deps.crewCapabilities?.() ?? []).length ? crew : null;
+      } } : {}),
       // [7-P1] The factory is handed the **same** child agent `start()` gets,
       // so the two cannot describe different runs. It used to build a second
       // one from the parent here, carrying the parent's whole config and its
@@ -631,7 +648,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         // grants and permission mode do not reach it, and neither does the
         // parent's *permission to run* — a session reassigned to a viewer must
         // not keep spawning children through a turn that started earlier.
-        const childExtras: HarnessExtras = {};
+        const childExtras: HarnessExtras = custom ? { disableNativeSubagents: true } : {};
         if (!deps.policy) return makeHarness(child, childExtras);
 
         const childConfig = (child.config as Record<string, unknown> | null | undefined)?.[
@@ -743,10 +760,20 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       log,
     });
 
-    if (agent.backend === "claude") extras.mcpServers = () => createDelegateMcpServer({ run, log });
-    if (agent.backend === "api") extras.extraTools = [delegateTaskTool(run)];
+    const debate = custom ? (request: { trigger: unknown; topic: string }) => {
+      const turnId = active.get(agentKey(session.id, agent.id))?.turnId;
+      if (!turnId) return { ok: false as const, reason: "No active lead turn can request debate." };
+      return roundTable.requestDebate({ ...request, sessionId: session.id, agentId: agent.id, turnId });
+    } : undefined;
+    const routedTools = [delegateTaskTool(run), ...(debate ? [crewDebateTool(debate)] : [])];
+    if (agent.backend === "claude") extras.mcpServers = async () => {
+      const servers = await createDelegateMcpServer({ run, log, ...(debate ? { debate } : {}) });
+      if (custom && !servers) throw new Error("Custom Mode delegation tools could not initialize.");
+      return servers;
+    };
+    if (agent.backend === "api") extras.extraTools = routedTools;
     if (agent.backend === "codex") {
-      extras.dynamicTools = [delegateTaskTool(run)];
+      extras.dynamicTools = routedTools;
       /**
        * R25 for a delegated answer, with a foreign key that has to hold.
        *
@@ -773,8 +800,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       };
     }
     log.info(
-      `[engine] ${agent.mentionName} delegates sub-agents to ${target.backend}/` +
-        `${target.model || "(backend default)"}`,
+      custom ? `[engine] ${agent.mentionName} uses classified Custom Mode delegation` :
+        `[engine] ${agent.mentionName} delegates sub-agents to ${target!.backend}/${target!.model || "(backend default)"}`,
     );
     return extras;
   }
@@ -1065,7 +1092,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    */
   function preflightFor(session: Session, agent: Agent): PolicyPreflight {
     const declaresTools =
-      agent.backend === "codex" && delegationTarget(store, session.id, agent.id) !== null;
+      agent.backend === "codex" && (session.mode === "custom" ? agent.id === session.leadAgentId : delegationTarget(store, session.id, agent.id) !== null);
     const resolved = effectiveHarnessAgent(agent);
     const config = "error" in resolved
       ? null
@@ -1102,6 +1129,9 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     session: Session,
     agent: Agent,
   ): { harness: Harness; ready: Promise<void>; notice?: string; continuity?: string } {
+    if (!store.sessions.agents(session.id).some((current) => current.id === agent.id)) {
+      throw new Error("This agent belongs to a historical roster and cannot run.");
+    }
     const key = agentKey(session.id, agent.id);
     const existing = harnesses.get(key);
     if (existing) return { harness: existing, ready: starting.get(key) ?? Promise.resolve() };
@@ -1123,11 +1153,11 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // fixed — one `delegate_task` with one schema — so it is derived from the
     // routing decision alone, without building the runner.
     const declaresTools =
-      agent.backend === "codex" && delegationTarget(store, session.id, agent.id) !== null;
+      agent.backend === "codex" && (session.mode === "custom" ? agent.id === session.leadAgentId : delegationTarget(store, session.id, agent.id) !== null);
     const captured = effectiveHarnessAgent(agent, {
       ...(promptAddition ? { promptAddition } : {}),
       ...(declaresTools
-        ? { dynamicTools: [{ name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA }] }
+        ? { dynamicTools: [{ name: DELEGATE_TASK_TOOL, parameters: DELEGATE_TASK_SCHEMA }, ...(session.mode === "custom" ? [{ name: CREW_DEBATE_TOOL, parameters: CREW_DEBATE_SCHEMA }] : [])] }
         : {}),
     });
     if ("error" in captured) {
@@ -1836,6 +1866,7 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   }
 
   function assertWritableSession(sessionId: string): void {
+    if (restartingCrews.has(sessionId)) throw new Error("The crew is restarting; retry when it is ready.");
     const session = store.sessions.get(sessionId);
     if (session?.origin === "import") {
       throw new Error(
@@ -1867,11 +1898,35 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       return roundTable.dispatch(args);
     },
 
-    continueChain: (sessionId) => roundTable.continueChain(sessionId),
+    continueChain: (sessionId) => { assertWritableSession(sessionId); return roundTable.continueChain(sessionId); },
 
     catalogueAgent,
 
     hasPendingChain: (sessionId) => roundTable.hasPending(sessionId),
+    isSessionQuiescent: (sessionId) =>
+      !restartingCrews.has(sessionId) &&
+      !roundTable.isRunning(sessionId) && !roundTable.hasPending(sessionId)
+      && ![...active.keys()].some((key) => key.startsWith(`${sessionId}:`))
+      && !store.turns.list(sessionId).some((turn) => turn.status === "pending" || turn.status === "streaming"),
+    async restartSessionCrew(sessionId, previousAgentIds) {
+      if (restartingCrews.has(sessionId) || roundTable.isRunning(sessionId) || roundTable.hasPending(sessionId)
+        || [...active.keys()].some((key) => key.startsWith(`${sessionId}:`))) {
+        throw new Error("The session is busy; retry the crew restart when it is idle.");
+      }
+      restartingCrews.add(sessionId);
+      try {
+      const previousKeys = previousAgentIds.map((id) => agentKey(sessionId, id));
+      for (const key of previousKeys) evict(key);
+      for (const id of previousAgentIds) store.settings.setRaw(backendSessionKey(id), null);
+      await Promise.all(previousKeys.map((key) => disposing.get(key)));
+      const session = store.sessions.get(sessionId);
+      if (!session) throw new Error("The session no longer exists.");
+      for (const agent of store.sessions.agents(sessionId)) {
+        store.settings.setRaw(backendSessionKey(agent.id), null);
+        await harnessFor(session, agent).ready;
+      }
+      } finally { restartingCrews.delete(sessionId); }
+    },
 
     /**
      * [7-P1] An agent's model or config changed (`agents.update`). An idle

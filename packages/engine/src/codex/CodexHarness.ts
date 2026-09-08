@@ -171,6 +171,8 @@ export interface CodexHarnessDeps {
    * pays nothing for this existing.
    */
   dynamicTools?: readonly ToolDefinition[];
+  /** Suppress native collaboration tools for Custom Mode (ADR-0006). */
+  disableNativeSubagents?: boolean;
   /** capygen's own restrictions (ADR-0007) at the boundaries Codex offers. */
   authorizeLocal?: LocalAuthorize;
   /**
@@ -729,7 +731,16 @@ export class CodexHarness implements Harness {
       ...(agent.promptAddition ? { developerInstructions: agent.promptAddition } : {}),
       // Merged into the thread's own table. `mcp_servers` is the file's own
       // key, so this reads exactly the way the user's `config.toml` does.
-      ...(mcpOverride ? { config: { mcp_servers: mcpOverride } } : {}),
+      ...(mcpOverride || this.deps.disableNativeSubagents ? {
+        config: {
+          ...(mcpOverride ? { mcp_servers: mcpOverride } : {}),
+          // Both keys are stable features in pinned Codex 0.153.4. Override
+          // explicitly on start AND resume, including inherited true values.
+          ...(this.deps.disableNativeSubagents
+            ? { features: { multi_agent: false, multi_agent_v2: false } }
+            : {}),
+        },
+      } : {}),
     };
 
     const tools = this.validatedDynamicTools();

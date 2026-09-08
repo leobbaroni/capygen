@@ -195,8 +195,13 @@ describe("IPC contract", () => {
       "policy.grants.revoke",
       "policy.audit.list",
       "policy.boundaries.availability",
+      "customMode.generate", "customMode.cancel", "customMode.capabilities", "customMode.apply",
+      "dictation.availability", "dictation.recognize", "dictation.cancel", "terminal.attach",
+      "extensions.theme", "extensions.list", "extensions.pick", "extensions.register",
+      "extensions.unregister", "extensions.refresh", "extensions.open", "extensions.bounds", "extensions.close",
     ]);
     expect(EVENT_CHANNEL_NAMES).toEqual([
+      "extensions.changed", "extensions.navigate",
       "policy.changed",
       "automations.changed", "automationRun.changed", "inbox.changed",
       "chat.block",

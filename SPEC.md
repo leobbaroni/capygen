@@ -354,3 +354,9 @@ origin/main. Astra low leads/designs/decides; Opus 5 medium handles hard/medium 
 Luna low handles simple work. Different-model review remains required; no Fable debate.
 This supersedes the prior development crew and Phase 8 stop point, without changing
 R1–R34, the editable Custom Mode example, static PNG mascots or live test-model restrictions.
+
+## Execution correction — 2026-09-08, usage and temporary availability
+
+While Opus is unavailable, Astra low implements hard/medium work directly or through Astra
+agents. Luna low handles easy work and writing. Reviews and tests focus on new, crucial
+behavior; avoid repeated broad checks, with the full gate reserved for phase acceptance.

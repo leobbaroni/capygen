@@ -105,13 +105,13 @@ beforeEach(() => {
   ipcInvoke.mockReset();
   ipcOn.mockClear();
   ipcInvoke.mockImplementation((channel: string, args: Record<string, unknown>) => {
-    if (channel === "terminal.create") {
+    if (channel === "terminal.create" || channel === "terminal.attach") {
       createCount += 1;
       return Promise.resolve({
         id: `term-${createCount}`,
         projectId: args.projectId,
         sessionId: args.sessionId ?? null,
-        title: `Terminal ${createCount}`,
+        title: channel === "terminal.attach" ? `${args.backend} CLI` : `Terminal ${createCount}`,
         cwd: "C:/proj",
         shell: "pwsh.exe",
         cols: 80,
@@ -278,7 +278,7 @@ describe("TerminalPane (SPEC R16)", () => {
     await waitFor(() => expect(screen.queryByTestId("terminal-tab")).not.toBeInTheDocument());
   });
 
-  it("'claude here' types the CLI command into the active terminal", async () => {
+  it("'claude here' opens a dedicated raw terminal", async () => {
     const user = userEvent.setup();
     render(<TerminalPane {...props} />);
     await waitFor(() => expect(xtermState.instances).toHaveLength(1));
@@ -286,6 +286,8 @@ describe("TerminalPane (SPEC R16)", () => {
 
     await user.click(screen.getByTestId("terminal-open-claude"));
 
-    expect(ipcInvoke).toHaveBeenCalledWith("terminal.write", { id: "term-1", data: "claude\r" });
+    expect(ipcInvoke).toHaveBeenCalledWith("terminal.attach", { projectId: props.params.projectId, sessionId: props.params.sessionId, backend: "claude", cols: 80, rows: 24 });
+    expect(ipcInvoke).not.toHaveBeenCalledWith("terminal.write", expect.anything());
+    await waitFor(() => expect(screen.getByText("claude CLI")).toBeInTheDocument());
   });
 });

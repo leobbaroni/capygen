@@ -27,6 +27,7 @@ export interface SessionSettingsSheetProps {
    * the runtime state behind that section.
    */
   mcp?: SessionMcpPanelProps | null;
+  onCustomMode?: () => void;
 }
 
 export function SessionSettingsSheet({
@@ -35,6 +36,7 @@ export function SessionSettingsSheet({
   settings,
   onChange,
   mcp,
+  onCustomMode,
 }: SessionSettingsSheetProps) {
   if (!open) return null;
   const routingBackend = settings.routing?.subagents?.backend ?? "";
@@ -60,7 +62,7 @@ export function SessionSettingsSheet({
       className="absolute top-full right-0 z-30 mt-1 w-72 rounded-lg border border-border bg-popover p-3 text-sm text-popover-foreground shadow-menu"
     >
       <div className="flex items-center justify-between pb-2">
-        <span className="font-medium text-foreground">Round-table settings</span>
+        <span className="font-medium text-foreground">Session settings</span>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -71,6 +73,7 @@ export function SessionSettingsSheet({
           ×
         </Button>
       </div>
+      {onCustomMode && <Button variant="outline" className="mb-3 w-full" onClick={onCustomMode}>Custom mode</Button>}
 
       <label className="flex items-center justify-between gap-2 py-1.5">
         <span className="text-muted-foreground">

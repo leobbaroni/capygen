@@ -122,6 +122,19 @@ export function promptAdditionFor(
   const agents = roundTableAgents(store, sessionId);
   const self = agents.find((a) => a.id === agentId);
   if (!self) return undefined;
+  if (session.mode === "custom") {
+    const crew = session.settings.crew;
+    const rosterId = Object.entries(session.settings.crewBindings ?? {}).find(([, id]) => id === agentId)?.[0];
+    const member = crew?.roster.find((entry) => entry.id === rosterId);
+    if (!member) throw new Error("The active agent has no Custom Mode roster assignment.");
+    return [
+      member.instructions,
+      member.role === "lead"
+        ? "You lead this custom crew. Delegate using delegate_task with taskKind and difficulty; the app chooses the configured worker. Do not override models or use native subagent tools. For configured core/major decisions, request crew_debate then finish your turn. Debate runs in this chat and returns to you for a decision."
+        : "You are a configured debater. Discuss the requested decision; the app returns to the lead. Do not spawn agents or use mentions to dispatch peers.",
+      "Crew routing policy (declarative instructions): " + JSON.stringify({ routing: crew!.routing, defaultWorker: crew!.defaultWorker, debate: crew!.debate }),
+    ].filter(Boolean).join("\n\n");
+  }
   const target = delegationTarget(store, sessionId, agentId);
   const prompt = buildRoundTablePrompt({
     self,
