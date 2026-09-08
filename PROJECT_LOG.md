@@ -2658,3 +2658,11 @@ could bypass child-only confinement. Root now rejects a linked root before resto
 cleanup, and keeps the operation lock across the check. A native Windows junction fixture
 preserves external pending metadata and refuses the driver download (7 service tests passed;
 then the changed junction case alone was rechecked before the final desktop/package rebuild).
+
+Final local artifacts were rebuilt after the API capacity UI and linked-root guard:
+setup 280446778 bytes; portable 280156490 bytes, both audited unsigned. The manifest records
+89db42e plus dirty=true and hashes the compiled runtime containing the later guard.
+The first packaged runtime smoke remains valid for the unchanged launch/SDK/PTY paths;
+only the changed guard case, desktop typecheck/build and artifact audit were repeated.
+Clean-checkout CI at 89db42e is still running. The following documentation push uses
+[skip ci] to avoid restarting that broad run for the separately verified tiny guard change.
