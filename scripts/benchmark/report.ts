@@ -21,6 +21,8 @@ export interface LaneMeasurement {
   effort: string;
   turns: TurnMeasurement[];
   error: string | null;
+  /** Numeric accounting only; no messages, configuration or credentials. */
+  observedModelUsage?: { model: string; counters: Record<string, number | null> }[];
 }
 export interface PairMeasurement { pair: number; order: readonly Lane[]; lanes: LaneMeasurement[] }
 export interface Cohort {

@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 1,
+  "cohortId": "2026-09-08T22-58-02-215Z-4d16a6c4-3923-440f-a8c8-2774394fd0b0",
+  "revision": "ce2e6dc9c958f6c5ccc1020b05cf7a741e5ef46c",
+  "sourceHash": "e9ffe314ae4b860be25dd88626fe0cc835e8a71707aabae72d1ee0cce8cb3ddf",
+  "fixtureHash": "9b3a204cc92f698e6076bdb6c5e1372b19f31d1461267a8fe74028a27d90bc1f",
+  "promptsHash": "233ea4c96122812a7a1564b316703bc187013d6c3ba7a26385ad47ee1f11406b",
+  "createdAt": "2026-09-08T22:58:02.295Z",
+  "pairs": [
+    {
+      "pair": 1,
+      "order": [
+        "baseline",
+        "app"
+      ],
+      "lanes": [
+        {
+          "lane": "baseline",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "939e6c3bca74dddc5a5d05501e2e102f7a09f2abfd2c5fe8220cb2daa65f6fd4",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [
+            {
+              "turn": 1,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 1200,
+                "cacheRead": 76718,
+                "cacheWrite": 5960,
+                "output": 299,
+                "reasoning": 0,
+                "costUsd": 0.044573600000000005
+              },
+              "durationMs": 9780
+            },
+            {
+              "turn": 2,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 27826,
+                "cacheWrite": 138,
+                "output": 30,
+                "reasoning": 0,
+                "costUsd": 0.006421200000000002
+              },
+              "durationMs": 1659
+            },
+            {
+              "turn": 3,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 27964,
+                "cacheWrite": 98,
+                "output": 176,
+                "reasoning": 76,
+                "costUsd": 0.0077488
+              },
+              "durationMs": 2783
+            },
+            {
+              "turn": 4,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28062,
+                "cacheWrite": 241,
+                "output": 97,
+                "reasoning": 0,
+                "costUsd": 0.007550399999999999
+              },
+              "durationMs": 2076
+            },
+            {
+              "turn": 5,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28303,
+                "cacheWrite": 167,
+                "output": 131,
+                "reasoning": 56,
+                "costUsd": 0.007642599999999999
+              },
+              "durationMs": 2436
+            },
+            {
+              "turn": 6,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28470,
+                "cacheWrite": 197,
+                "output": 168,
+                "reasoning": 61,
+                "costUsd": 0.008165999999999993
+              },
+              "durationMs": 3375
+            },
+            {
+              "turn": 7,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28667,
+                "cacheWrite": 389,
+                "output": 166,
+                "reasoning": 84,
+                "costUsd": 0.0089534
+              },
+              "durationMs": 2699
+            },
+            {
+              "turn": 8,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29056,
+                "cacheWrite": 233,
+                "output": 186,
+                "reasoning": 66,
+                "costUsd": 0.008607199999999995
+              },
+              "durationMs": 2778
+            },
+            {
+              "turn": 9,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29289,
+                "cacheWrite": 255,
+                "output": 250,
+                "reasoning": 91,
+                "costUsd": 0.009381799999999996
+              },
+              "durationMs": 3634
+            },
+            {
+              "turn": 10,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29544,
+                "cacheWrite": 313,
+                "output": 237,
+                "reasoning": 77,
+                "costUsd": 0.009534799999999996
+              },
+              "durationMs": 3276
+            },
+            {
+              "turn": 11,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29857,
+                "cacheWrite": 301,
+                "output": 167,
+                "reasoning": 54,
+                "costUsd": 0.008849400000000007
+              },
+              "durationMs": 3125
+            },
+            {
+              "turn": 12,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30158,
+                "cacheWrite": 235,
+                "output": 194,
+                "reasoning": 0,
+                "costUsd": 0.008915599999999996
+              },
+              "durationMs": 6718
+            },
+            {
+              "turn": 13,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30393,
+                "cacheWrite": 418,
+                "output": 58,
+                "reasoning": 0,
+                "costUsd": 0.008334599999999998
+              },
+              "durationMs": 2130
+            },
+            {
+              "turn": 14,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30811,
+                "cacheWrite": 127,
+                "output": 186,
+                "reasoning": 82,
+                "costUsd": 0.008534199999999992
+              },
+              "durationMs": 2873
+            },
+            {
+              "turn": 15,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30938,
+                "cacheWrite": 256,
+                "output": 142,
+                "reasoning": 0,
+                "costUsd": 0.008635599999999993
+              },
+              "durationMs": 2717
+            },
+            {
+              "turn": 16,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31194,
+                "cacheWrite": 209,
+                "output": 256,
+                "reasoning": 0,
+                "costUsd": 0.009638800000000003
+              },
+              "durationMs": 4258
+            },
+            {
+              "turn": 17,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31403,
+                "cacheWrite": 325,
+                "output": 421,
+                "reasoning": 0,
+                "costUsd": 0.011794599999999988
+              },
+              "durationMs": 6100
+            },
+            {
+              "turn": 18,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31728,
+                "cacheWrite": 490,
+                "output": 130,
+                "reasoning": 0,
+                "costUsd": 0.009609599999999996
+              },
+              "durationMs": 2741
+            },
+            {
+              "turn": 19,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 32218,
+                "cacheWrite": 354,
+                "output": 251,
+                "reasoning": 0,
+                "costUsd": 0.01037360000000001
+              },
+              "durationMs": 3384
+            },
+            {
+              "turn": 20,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 32572,
+                "cacheWrite": 327,
+                "output": 263,
+                "reasoning": 123,
+                "costUsd": 0.010456400000000005
+              },
+              "durationMs": 4524
+            }
+          ],
+          "error": null,
+          "observedModelUsage": [
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 1238,
+                "outputTokens": 3808,
+                "cacheReadInputTokens": 645171,
+                "cacheCreationInputTokens": 11033,
+                "thinkingTokens": 770,
+                "costUSD": 0.21372219999999997
+              }
+            }
+          ]
+        },
+        {
+          "lane": "app",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": null,
+          "cliVersion": null,
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [],
+          "error": "Lane failed, timed out, or was cancelled. Authentication and complete usage are required; no valid ratio is claimed."
+        }
+      ]
+    }
+  ],
+  "unavailableReason": "A failed lane invalidated this pre-registered cohort; partial results retained without selective reruns.",
+  "report": {
+    "verdict": "unavailable",
+    "issues": [
+      "A failed lane invalidated this pre-registered cohort; partial results retained without selective reruns.",
+      "Three registered pairs are required",
+      "Pair 1: cohort settings/effective metadata changed",
+      "Pair 1 app: incomplete or invalid turns",
+      "Pair 1 app: model/effort/version mismatch",
+      "Pair 1: effective tools/MCP/permissions/settings mismatch"
+    ],
+    "pairs": [
+      {
+        "pair": 1,
+        "baseline": 661250,
+        "app": 0,
+        "ratio": 0,
+        "baselineCostUsd": 0.21372219999999997,
+        "appCostUsd": 0,
+        "baselineCachedInputFraction": 0.9813352356557689,
+        "appCachedInputFraction": null,
+        "baselineDurationMs": 73066,
+        "appDurationMs": 0
+      }
+    ],
+    "pooledRatio": null,
+    "mean": null,
+    "sampleStandardDeviation": null,
+    "range": null
+  },
+  "accounting": "Claude SDK modelUsage cumulative per conversation; input excludes cache read/write; reasoning is a subset of output. Unknown values invalidate the cohort.",
+  "laneImplementations": {
+    "baseline": "Direct streaming Agent SDK invoking its pinned native CLI",
+    "app": "Production createSessionRunner.dispatch solo path and ClaudeHarness; in-process persistence, no renderer"
+  },
+  "requestedSettings": {
+    "model": "claude-sonnet-5",
+    "effort": "low",
+    "permissionMode": "plan",
+    "settingSources": [],
+    "strictMcpConfig": true,
+    "allowedTools": [
+      "Read"
+    ]
+  },
+  "nativeModelEnvironment": {
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5",
+    "CLAUDE_CODE_EFFORT_LEVEL": "low"
+  },
+  "localToolPolicy": "Read INVENTORY.md only; all other tools denied before native permission handling in both lanes",
+  "order": [
+    [
+      "baseline",
+      "app"
+    ],
+    [
+      "app",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "app"
+    ]
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "cohortId": "2026-09-08T22-55-06-158Z-6ee7d5b0-63f1-4960-9935-9a9278c7bdd0",
+  "revision": "ce2e6dc9c958f6c5ccc1020b05cf7a741e5ef46c",
+  "sourceHash": "651b15a006deb70292d87e7c3691df2aac20d162fafe44e476d156b418acd586",
+  "fixtureHash": "9b3a204cc92f698e6076bdb6c5e1372b19f31d1461267a8fe74028a27d90bc1f",
+  "promptsHash": "233ea4c96122812a7a1564b316703bc187013d6c3ba7a26385ad47ee1f11406b",
+  "createdAt": "2026-09-08T22:55:06.246Z",
+  "pairs": [
+    {
+      "pair": 1,
+      "order": [
+        "baseline",
+        "app"
+      ],
+      "lanes": [
+        {
+          "lane": "baseline",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "939e6c3bca74dddc5a5d05501e2e102f7a09f2abfd2c5fe8220cb2daa65f6fd4",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [],
+          "error": "Unknown, reset, or unexpected-model usage",
+          "observedModelUsage": [
+            {
+              "model": "claude-haiku-4-5-20251001",
+              "counters": {
+                "inputTokens": 913,
+                "outputTokens": 16,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0,
+                "thinkingTokens": 0,
+                "costUSD": 0.000993
+              }
+            },
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 6,
+                "outputTokens": 408,
+                "cacheReadInputTokens": 76729,
+                "cacheCreationInputTokens": 6084,
+                "thinkingTokens": 0,
+                "costUSD": 0.0437738
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unavailableReason": "A failed lane invalidated this pre-registered cohort; partial results retained without selective reruns.",
+  "report": {
+    "verdict": "unavailable",
+    "issues": [
+      "A failed lane invalidated this pre-registered cohort; partial results retained without selective reruns.",
+      "Three registered pairs are required",
+      "Pair 1: missing/duplicate lane"
+    ],
+    "pairs": [],
+    "pooledRatio": null,
+    "mean": null,
+    "sampleStandardDeviation": null,
+    "range": null
+  },
+  "accounting": "Claude SDK modelUsage cumulative per conversation; input excludes cache read/write; reasoning is a subset of output. Unknown values invalidate the cohort.",
+  "laneImplementations": {
+    "baseline": "Direct streaming Agent SDK invoking its pinned native CLI",
+    "app": "Production createSessionRunner.dispatch solo path and ClaudeHarness; in-process persistence, no renderer"
+  },
+  "requestedSettings": {
+    "model": "claude-sonnet-5",
+    "effort": "low",
+    "permissionMode": "plan",
+    "settingSources": [],
+    "strictMcpConfig": true,
+    "allowedTools": [
+      "Read"
+    ]
+  },
+  "localToolPolicy": "Read INVENTORY.md only; all other tools denied before native permission handling in both lanes",
+  "order": [
+    [
+      "baseline",
+      "app"
+    ],
+    [
+      "app",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "app"
+    ]
+  ]
+}

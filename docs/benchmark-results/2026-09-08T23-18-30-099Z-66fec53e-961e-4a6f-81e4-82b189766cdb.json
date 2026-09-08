@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "cohortId": "2026-09-08T23-18-30-099Z-66fec53e-961e-4a6f-81e4-82b189766cdb",
+  "revision": "ce2e6dc9c958f6c5ccc1020b05cf7a741e5ef46c",
+  "sourceHash": "0300fac24165c1f696cc31adbd3ec5318d7a077c0bd785ec6d059513ea52c779",
+  "fixtureHash": "9b3a204cc92f698e6076bdb6c5e1372b19f31d1461267a8fe74028a27d90bc1f",
+  "promptsHash": "233ea4c96122812a7a1564b316703bc187013d6c3ba7a26385ad47ee1f11406b",
+  "createdAt": "2026-09-08T23:18:30.181Z",
+  "pairs": [
+    {
+      "pair": 1,
+      "order": [
+        "baseline",
+        "app"
+      ],
+      "lanes": [
+        {
+          "lane": "baseline",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "6529195fdf6830cd872f19969972a3e1746f4ff96f680da0ec670d4465c02c91",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [
+            {
+              "turn": 1,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 1200,
+                "cacheRead": 72359,
+                "cacheWrite": 36641,
+                "output": 371,
+                "reasoning": 0,
+                "costUsd": 0.1671458
+              },
+              "durationMs": 6854
+            }
+          ],
+          "error": null,
+          "observedModelUsage": [
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 1200,
+                "outputTokens": 371,
+                "cacheReadInputTokens": 72359,
+                "cacheCreationInputTokens": 36641,
+                "thinkingTokens": 0,
+                "costUSD": 0.1671458
+              }
+            }
+          ]
+        },
+        {
+          "lane": "app",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "6529195fdf6830cd872f19969972a3e1746f4ff96f680da0ec670d4465c02c91",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [
+            {
+              "turn": 1,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 1200,
+                "cacheRead": 97934,
+                "cacheWrite": 11781,
+                "output": 355,
+                "reasoning": 0,
+                "costUsd": 0.0726608
+              },
+              "durationMs": 10128
+            }
+          ],
+          "error": null,
+          "observedModelUsage": [
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 1200,
+                "outputTokens": 355,
+                "cacheReadInputTokens": 97934,
+                "cacheCreationInputTokens": 11781,
+                "thinkingTokens": 0,
+                "costUSD": 0.0726608
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unavailableReason": "Diagnostic first pair turn only; not an acceptance cohort.",
+  "report": {
+    "verdict": "unavailable",
+    "issues": [
+      "Diagnostic first pair turn only; not an acceptance cohort.",
+      "Three registered pairs are required",
+      "Pair 1 baseline: incomplete or invalid turns",
+      "Pair 1 app: incomplete or invalid turns"
+    ],
+    "pairs": [
+      {
+        "pair": 1,
+        "baseline": 110571,
+        "app": 111270,
+        "ratio": 1.0063217299291858,
+        "baselineCostUsd": 0.1671458,
+        "appCostUsd": 0.0726608,
+        "baselineCachedInputFraction": 0.6566152450090744,
+        "appCachedInputFraction": 0.8829644322228734,
+        "baselineDurationMs": 6854,
+        "appDurationMs": 10128
+      }
+    ],
+    "pooledRatio": null,
+    "mean": null,
+    "sampleStandardDeviation": null,
+    "range": null
+  },
+  "accounting": "Claude SDK modelUsage cumulative per conversation; input excludes cache read/write; reasoning is a subset of output. Unknown values invalidate the cohort.",
+  "laneImplementations": {
+    "baseline": "Direct streaming Agent SDK invoking its pinned native CLI",
+    "app": "Production createSessionRunner.dispatch solo path and ClaudeHarness; in-process persistence, no renderer"
+  },
+  "requestedSettings": {
+    "model": "claude-sonnet-5",
+    "effort": "low",
+    "permissionMode": "plan",
+    "settingSources": [],
+    "strictMcpConfig": true,
+    "allowedTools": [
+      "Read"
+    ]
+  },
+  "nativeModelEnvironment": {
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5",
+    "CLAUDE_CODE_EFFORT_LEVEL": "low"
+  },
+  "localToolPolicy": "Read INVENTORY.md only; all other tools denied before native permission handling in both lanes",
+  "order": [
+    [
+      "baseline",
+      "app"
+    ],
+    [
+      "app",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "app"
+    ]
+  ]
+}

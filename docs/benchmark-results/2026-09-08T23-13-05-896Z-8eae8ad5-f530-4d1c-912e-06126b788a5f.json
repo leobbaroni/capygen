@@ -1,0 +1,659 @@
+{
+  "schemaVersion": 1,
+  "cohortId": "2026-09-08T23-13-05-896Z-8eae8ad5-f530-4d1c-912e-06126b788a5f",
+  "revision": "ce2e6dc9c958f6c5ccc1020b05cf7a741e5ef46c",
+  "sourceHash": "ef825e4dd817200975398ed48066bfe6357c4dc164fa26237d5da5fc74ec7e2e",
+  "fixtureHash": "9b3a204cc92f698e6076bdb6c5e1372b19f31d1461267a8fe74028a27d90bc1f",
+  "promptsHash": "233ea4c96122812a7a1564b316703bc187013d6c3ba7a26385ad47ee1f11406b",
+  "createdAt": "2026-09-08T23:13:06.256Z",
+  "pairs": [
+    {
+      "pair": 1,
+      "order": [
+        "baseline",
+        "app"
+      ],
+      "lanes": [
+        {
+          "lane": "baseline",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "6529195fdf6830cd872f19969972a3e1746f4ff96f680da0ec670d4465c02c91",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [
+            {
+              "turn": 1,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 1200,
+                "cacheRead": 76983,
+                "cacheWrite": 6159,
+                "output": 364,
+                "reasoning": 0,
+                "costUsd": 0.046072600000000005
+              },
+              "durationMs": 11712
+            },
+            {
+              "turn": 2,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28025,
+                "cacheWrite": 140,
+                "output": 30,
+                "reasoning": 0,
+                "costUsd": 0.0064690000000000025
+              },
+              "durationMs": 1789
+            },
+            {
+              "turn": 3,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28165,
+                "cacheWrite": 98,
+                "output": 179,
+                "reasoning": 79,
+                "costUsd": 0.007819
+              },
+              "durationMs": 2943
+            },
+            {
+              "turn": 4,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28263,
+                "cacheWrite": 244,
+                "output": 87,
+                "reasoning": 0,
+                "costUsd": 0.007502600000000005
+              },
+              "durationMs": 2332
+            },
+            {
+              "turn": 5,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28507,
+                "cacheWrite": 157,
+                "output": 97,
+                "reasoning": 0,
+                "costUsd": 0.0073034000000000016
+              },
+              "durationMs": 2643
+            },
+            {
+              "turn": 6,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28664,
+                "cacheWrite": 163,
+                "output": 183,
+                "reasoning": 58,
+                "costUsd": 0.008218799999999998
+              },
+              "durationMs": 3359
+            },
+            {
+              "turn": 7,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 28827,
+                "cacheWrite": 402,
+                "output": 199,
+                "reasoning": 105,
+                "costUsd": 0.009367399999999998
+              },
+              "durationMs": 3736
+            },
+            {
+              "turn": 8,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29229,
+                "cacheWrite": 265,
+                "output": 150,
+                "reasoning": 0,
+                "costUsd": 0.008409799999999995
+              },
+              "durationMs": 2681
+            },
+            {
+              "turn": 9,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29494,
+                "cacheWrite": 219,
+                "output": 276,
+                "reasoning": 94,
+                "costUsd": 0.0095388
+              },
+              "durationMs": 4225
+            },
+            {
+              "turn": 10,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 29713,
+                "cacheWrite": 339,
+                "output": 214,
+                "reasoning": 70,
+                "costUsd": 0.009442599999999995
+              },
+              "durationMs": 3407
+            },
+            {
+              "turn": 11,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30052,
+                "cacheWrite": 278,
+                "output": 113,
+                "reasoning": 0,
+                "costUsd": 0.008256399999999997
+              },
+              "durationMs": 2473
+            },
+            {
+              "turn": 12,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30330,
+                "cacheWrite": 181,
+                "output": 234,
+                "reasoning": 0,
+                "costUsd": 0.009134000000000003
+              },
+              "durationMs": 4073
+            },
+            {
+              "turn": 13,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30511,
+                "cacheWrite": 456,
+                "output": 43,
+                "reasoning": 0,
+                "costUsd": 0.008360200000000012
+              },
+              "durationMs": 2285
+            },
+            {
+              "turn": 14,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 30967,
+                "cacheWrite": 112,
+                "output": 196,
+                "reasoning": 89,
+                "costUsd": 0.008605400000000013
+              },
+              "durationMs": 3123
+            },
+            {
+              "turn": 15,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31079,
+                "cacheWrite": 266,
+                "output": 126,
+                "reasoning": 0,
+                "costUsd": 0.00854379999999999
+              },
+              "durationMs": 2715
+            },
+            {
+              "turn": 16,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31345,
+                "cacheWrite": 193,
+                "output": 319,
+                "reasoning": 0,
+                "costUsd": 0.010234999999999994
+              },
+              "durationMs": 5433
+            },
+            {
+              "turn": 17,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31538,
+                "cacheWrite": 388,
+                "output": 408,
+                "reasoning": 0,
+                "costUsd": 0.011943599999999999
+              },
+              "durationMs": 6020
+            },
+            {
+              "turn": 18,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 31926,
+                "cacheWrite": 477,
+                "output": 135,
+                "reasoning": 0,
+                "costUsd": 0.009647199999999995
+              },
+              "durationMs": 2939
+            },
+            {
+              "turn": 19,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 32403,
+                "cacheWrite": 357,
+                "output": 279,
+                "reasoning": 0,
+                "costUsd": 0.010702600000000007
+              },
+              "durationMs": 3817
+            },
+            {
+              "turn": 20,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 32760,
+                "cacheWrite": 355,
+                "output": 308,
+                "reasoning": 79,
+                "costUsd": 0.01105600000000001
+              },
+              "durationMs": 4264
+            }
+          ],
+          "error": null,
+          "observedModelUsage": [
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 1238,
+                "outputTokens": 3940,
+                "cacheReadInputTokens": 648781,
+                "cacheCreationInputTokens": 11249,
+                "thinkingTokens": 574,
+                "costUSD": 0.21662820000000002
+              }
+            }
+          ]
+        },
+        {
+          "lane": "app",
+          "settingsHash": "0a9b8a042a6d44ea558451fea18430ffb34f4055a19b04811eadd5cc63e092a5",
+          "effectiveHash": "6529195fdf6830cd872f19969972a3e1746f4ff96f680da0ec670d4465c02c91",
+          "cliVersion": "2.1.261",
+          "sdkVersion": "0.3.261",
+          "model": "claude-sonnet-5",
+          "effort": "low",
+          "turns": [
+            {
+              "turn": 1,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 1198,
+                "cacheRead": 61271,
+                "cacheWrite": 11537,
+                "output": 207,
+                "reasoning": 0,
+                "costUsd": 0.0628682
+              },
+              "durationMs": 6370
+            },
+            {
+              "turn": 2,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 36667,
+                "cacheWrite": 123,
+                "output": 30,
+                "reasoning": 0,
+                "costUsd": 0.008129399999999995
+              },
+              "durationMs": 1424
+            },
+            {
+              "turn": 3,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 36790,
+                "cacheWrite": 98,
+                "output": 91,
+                "reasoning": 0,
+                "costUsd": 0.008664000000000005
+              },
+              "durationMs": 2201
+            },
+            {
+              "turn": 4,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 36888,
+                "cacheWrite": 156,
+                "output": 61,
+                "reasoning": 0,
+                "costUsd": 0.008615600000000001
+              },
+              "durationMs": 1711
+            },
+            {
+              "turn": 5,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 37044,
+                "cacheWrite": 131,
+                "output": 65,
+                "reasoning": 22,
+                "costUsd": 0.008586800000000006
+              },
+              "durationMs": 1981
+            },
+            {
+              "turn": 6,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 37175,
+                "cacheWrite": 131,
+                "output": 164,
+                "reasoning": 72,
+                "costUsd": 0.009603
+              },
+              "durationMs": 3106
+            },
+            {
+              "turn": 7,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 37306,
+                "cacheWrite": 384,
+                "output": 147,
+                "reasoning": 94,
+                "costUsd": 0.0104712
+              },
+              "durationMs": 2477
+            },
+            {
+              "turn": 8,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 37690,
+                "cacheWrite": 213,
+                "output": 104,
+                "reasoning": 0,
+                "costUsd": 0.009434000000000012
+              },
+              "durationMs": 1968
+            },
+            {
+              "turn": 9,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 37903,
+                "cacheWrite": 173,
+                "output": 153,
+                "reasoning": 53,
+                "costUsd": 0.009806599999999999
+              },
+              "durationMs": 2352
+            },
+            {
+              "turn": 10,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 38076,
+                "cacheWrite": 216,
+                "output": 185,
+                "reasoning": 66,
+                "costUsd": 0.010333200000000015
+              },
+              "durationMs": 2959
+            },
+            {
+              "turn": 11,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 38292,
+                "cacheWrite": 249,
+                "output": 111,
+                "reasoning": 0,
+                "costUsd": 0.00976840000000001
+              },
+              "durationMs": 2012
+            },
+            {
+              "turn": 12,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 38541,
+                "cacheWrite": 179,
+                "output": 156,
+                "reasoning": 0,
+                "costUsd": 0.009988200000000003
+              },
+              "durationMs": 2950
+            },
+            {
+              "turn": 13,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 38720,
+                "cacheWrite": 379,
+                "output": 41,
+                "reasoning": 0,
+                "costUsd": 0.009673999999999988
+              },
+              "durationMs": 1925
+            },
+            {
+              "turn": 14,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 39099,
+                "cacheWrite": 110,
+                "output": 66,
+                "reasoning": 0,
+                "costUsd": 0.00892380000000001
+              },
+              "durationMs": 2211
+            },
+            {
+              "turn": 15,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 39209,
+                "cacheWrite": 136,
+                "output": 81,
+                "reasoning": 0,
+                "costUsd": 0.009199800000000008
+              },
+              "durationMs": 2232
+            },
+            {
+              "turn": 16,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 39345,
+                "cacheWrite": 148,
+                "output": 189,
+                "reasoning": 0,
+                "costUsd": 0.010355000000000003
+              },
+              "durationMs": 3566
+            },
+            {
+              "turn": 17,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 39493,
+                "cacheWrite": 258,
+                "output": 269,
+                "reasoning": 0,
+                "costUsd": 0.011624600000000013
+              },
+              "durationMs": 3957
+            },
+            {
+              "turn": 18,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 39751,
+                "cacheWrite": 338,
+                "output": 119,
+                "reasoning": 0,
+                "costUsd": 0.010496200000000011
+              },
+              "durationMs": 2493
+            },
+            {
+              "turn": 19,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 40089,
+                "cacheWrite": 342,
+                "output": 223,
+                "reasoning": 0,
+                "costUsd": 0.011619800000000013
+              },
+              "durationMs": 3092
+            },
+            {
+              "turn": 20,
+              "status": "done",
+              "usage": {
+                "uncachedInput": 2,
+                "cacheRead": 40431,
+                "cacheWrite": 299,
+                "output": 575,
+                "reasoning": 451,
+                "costUsd": 0.0150362
+              },
+              "durationMs": 6794
+            }
+          ],
+          "error": null,
+          "observedModelUsage": [
+            {
+              "model": "claude-sonnet-5",
+              "counters": {
+                "inputTokens": 1236,
+                "outputTokens": 3037,
+                "cacheReadInputTokens": 789780,
+                "cacheCreationInputTokens": 15600,
+                "thinkingTokens": 758,
+                "costUSD": 0.2531980000000001
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "order": [
+        "app",
+        "baseline"
+      ],
+      "lanes": []
+    }
+  ],
+  "unavailableReason": "Benchmark setup failed; no ratio claimed. Check dedicated test identity and build prerequisites.",
+  "report": {
+    "verdict": "unavailable",
+    "issues": [
+      "Benchmark setup failed; no ratio claimed. Check dedicated test identity and build prerequisites.",
+      "Three registered pairs are required",
+      "Pair 2: missing/duplicate lane"
+    ],
+    "pairs": [
+      {
+        "pair": 1,
+        "baseline": 665208,
+        "app": 809653,
+        "ratio": 1.2171426080263616,
+        "baselineCostUsd": 0.21662820000000002,
+        "appCostUsd": 0.2531980000000001,
+        "baselineCachedInputFraction": 0.9811165820816976,
+        "appCachedInputFraction": 0.9791276146270345,
+        "baselineDurationMs": 75969,
+        "appDurationMs": 57781
+      }
+    ],
+    "pooledRatio": null,
+    "mean": null,
+    "sampleStandardDeviation": null,
+    "range": null
+  },
+  "accounting": "Claude SDK modelUsage cumulative per conversation; input excludes cache read/write; reasoning is a subset of output. Unknown values invalidate the cohort.",
+  "laneImplementations": {
+    "baseline": "Direct streaming Agent SDK invoking its pinned native CLI",
+    "app": "Production createSessionRunner.dispatch solo path and ClaudeHarness; in-process persistence, no renderer"
+  },
+  "requestedSettings": {
+    "model": "claude-sonnet-5",
+    "effort": "low",
+    "permissionMode": "plan",
+    "settingSources": [],
+    "strictMcpConfig": true,
+    "allowedTools": [
+      "Read"
+    ]
+  },
+  "nativeModelEnvironment": {
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5",
+    "CLAUDE_CODE_EFFORT_LEVEL": "low"
+  },
+  "localToolPolicy": "Read INVENTORY.md only; all other tools denied before native permission handling in both lanes",
+  "order": [
+    [
+      "baseline",
+      "app"
+    ],
+    [
+      "app",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "app"
+    ]
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "cohortId": "2026-09-08T06-30-36-446Z-f17bd70f-398d-4a2d-bfda-43b7ea177f11",
+  "revision": "120b38d5cd0d3df3a49722930e2c4898bef91501",
+  "sourceHash": "f4fd67218006eb767a39718d91cbb3d72d69e225a790ca943c570d176e15082d",
+  "fixtureHash": "9b3a204cc92f698e6076bdb6c5e1372b19f31d1461267a8fe74028a27d90bc1f",
+  "promptsHash": "233ea4c96122812a7a1564b316703bc187013d6c3ba7a26385ad47ee1f11406b",
+  "createdAt": "2026-09-08T06:30:36.597Z",
+  "pairs": [],
+  "unavailableReason": "Live measurement not requested. No model call was made; invoke --live only with dedicated authenticated test homes.",
+  "report": {
+    "verdict": "unavailable",
+    "issues": [
+      "Live measurement not requested. No model call was made; invoke --live only with dedicated authenticated test homes.",
+      "Three registered pairs are required"
+    ],
+    "pairs": [],
+    "pooledRatio": null,
+    "mean": null,
+    "sampleStandardDeviation": null,
+    "range": null
+  },
+  "accounting": "Claude SDK modelUsage cumulative per conversation; input excludes cache read/write; reasoning is a subset of output. Unknown values invalidate the cohort.",
+  "laneImplementations": {
+    "baseline": "Direct streaming Agent SDK invoking its pinned native CLI",
+    "app": "Production createSessionRunner.dispatch solo path and ClaudeHarness; in-process persistence, no renderer"
+  },
+  "requestedSettings": {
+    "model": "claude-sonnet-5",
+    "effort": "low",
+    "permissionMode": "plan",
+    "settingSources": [],
+    "strictMcpConfig": true,
+    "allowedTools": [
+      "Read"
+    ]
+  },
+  "localToolPolicy": "Read INVENTORY.md only; all other tools denied before native permission handling in both lanes",
+  "order": [
+    [
+      "baseline",
+      "app"
+    ],
+    [
+      "app",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "app"
+    ]
+  ]
+}
