@@ -4,6 +4,7 @@ import { SkillsSection } from "./settings/SkillsSection";
 import { PluginsSection } from "./settings/PluginsSection";
 import { McpSection } from "./settings/McpSection";
 import { ToolsSection } from "./settings/ToolsSection";
+import { ExtensionsPage } from "./ExtensionsPage";
 import { cn } from "@/lib/utils";
 
 const sections = [
@@ -11,6 +12,7 @@ const sections = [
   { id: "plugins", label: "Plugins", body: PluginsSection },
   { id: "mcp", label: "MCP servers", body: McpSection },
   { id: "permissions", label: "Tool permissions", body: ToolsSection },
+  { id: "pages", label: "App pages", body: ExtensionsPage },
 ];
 
 /** All editors write through to the harness's canonical configuration files. */

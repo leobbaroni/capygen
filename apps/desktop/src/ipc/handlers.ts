@@ -37,7 +37,7 @@ import { createSessionRunner, type SessionPolicyHooks } from "../engine/SessionR
 import { errorBlock } from "../engine/persist.js";
 import { crewCapabilities } from "../engine/crewCapabilities.js";
 import { createCustomModeAuthoring } from "../engine/CustomModeAuthoring.js";
-import { DictationService } from "../workspace/DictationService.js";
+import { DictationService, type DictationServiceDeps } from "../workspace/DictationService.js";
 import { createLocalInputHandlers } from "./localInput.js";
 import { unavailableExtensionHandlers, type ExtensionHandlers } from "./extensions.js";
 import { createUpdateHandlers, type UpdateHandlers } from "./updates.js";
@@ -136,6 +136,7 @@ export function createInMemorySecretsStore(): SecretsStore {
 }
 
 export interface IpcContextDeps {
+  dictation?: DictationServiceDeps;
   extensions?: ExtensionHandlers;
   updates?: UpdateHandlers;
   store: CapygenStore;
@@ -539,11 +540,11 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     ? createLocalPolicyHandlers(deps.localPolicies)
     : unavailableLocalPolicies();
 
-  const dictation = new DictationService();
+  const dictation = new DictationService(deps.dictation);
   const handlers: IpcHandlers = {
     ...(deps.extensions ?? unavailableExtensionHandlers()),
     ...(deps.updates ?? createUpdateHandlers()),
-    ...createLocalInputHandlers({ dictation, terminals: workspace.terminals }),
+    ...createLocalInputHandlers({ dictation, terminals: workspace.terminals, broadcast }),
     "automations.list": (args) => automationService!.list(args),
     "automations.create": (args) => automationService!.create(args),
     "automations.update": (args) => automationService!.update(args.id, args.patch),

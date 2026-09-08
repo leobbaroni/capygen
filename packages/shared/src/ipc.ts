@@ -1163,6 +1163,7 @@ export const EVENT_CHANNELS = {
   /** The setup panel's steps changed (a step finished, or a fresh probe
    *  found something newly detected). */
   "prereqs.changed": z.object({ steps: z.array(PrereqStepSchema) }),
+  "dictation.progress": z.object({ requestId: z.string().min(1).max(128), state: z.enum(["transcribing"]) }),
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventChannels = typeof EVENT_CHANNELS;

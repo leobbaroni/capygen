@@ -43,7 +43,7 @@ export function App() {
           <Route path="/automations" element={<AutomationsPage />} />
           <Route path="/tools" element={<ToolsPage />} />
           <Route path="/tools/:category" element={<ToolsPage />} />
-          <Route path="/extensions" element={<Navigate to="/tools" replace />} />
+          <Route path="/extensions" element={<Navigate to="/tools/pages" replace />} />
           <Route path="/settings/integrations" element={<Navigate to="/tools" replace />} />
           <Route path="/extensions/page/:extensionId/:pageId" element={<ExtensionPage />} />
           <Route path="/hosts" element={<HostsPage />} />

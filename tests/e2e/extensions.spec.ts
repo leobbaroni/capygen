@@ -24,6 +24,8 @@ test("extension sample uses a confined port, persists storage and refuses ambien
     const launch = () => electron.launch({ args: [path.join(repo, "apps/desktop"), `--user-data-dir=${profile}`], cwd: repo, env });
     app = await launch(); let page = await app.firstWindow();
     const open = async (): Promise<Page> => {
+      await page.getByRole("link", { name: "Tools", exact: true }).click();
+      await page.getByRole("link", { name: "App pages", exact: true }).click();
       await page.getByRole("link", { name: "Extension sample", exact: true }).click();
       await expect.poll(() => app!.context().pages().some((candidate) => candidate.url().startsWith("capygen-extension:"))).toBe(true);
       const extension = app!.context().pages().find((candidate) => candidate.url().startsWith("capygen-extension:"))!;

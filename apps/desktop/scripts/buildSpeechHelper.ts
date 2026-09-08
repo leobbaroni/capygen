@@ -24,6 +24,11 @@ export async function buildSpeechHelper(outDir: string): Promise<string> {
   await promisify(execFile)(compiler, [
     "/nologo", "/langversion:5", "/platform:x64", "/target:exe", "/optimize+",
     `/reference:${speech}`, "/reference:System.Web.Extensions.dll", `/out:${output}`, source,
+    fileURLToPath(new URL("../src/workspace/speech/AudioCapture.cs", import.meta.url)),
   ], { windowsHide: true, env: cleanEnv(process.env), timeout: 30_000, maxBuffer: 64 * 1024 });
+  fs.copyFileSync(fileURLToPath(new URL("../src/workspace/speech/install-whisper.ps1", import.meta.url)), path.join(directory, "install-whisper.ps1"));
+  for (const name of ["LICENSE-whisper.cpp.txt", "LICENSE-whisper-model.txt"]) {
+    fs.copyFileSync(fileURLToPath(new URL(`../src/workspace/speech/${name}`, import.meta.url)), path.join(directory, name));
+  }
   return output;
 }

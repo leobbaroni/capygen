@@ -563,6 +563,7 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
     },
   });
   const context = createIpcContext({
+    dictation: { whisperDirectory: path.join(app.getPath("userData"), "speech") },
     extensions: extensions.handlers,
     updates: createUpdateHandlers(updates),
     store: activeStore,

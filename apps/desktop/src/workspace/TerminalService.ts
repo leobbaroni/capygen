@@ -323,7 +323,8 @@ function defaultEnv(): Record<string, string> {
   }
   // xterm.js is a 256-colour terminal; without this many CLIs fall back to
   // monochrome inside a pty they cannot probe.
-  env.TERM = env.TERM ?? "xterm-256color";
+  for (const key of Object.keys(env)) if (key.toUpperCase() === "TERM") delete env[key];
+  env.TERM = "xterm-256color";
   return env;
 }
 

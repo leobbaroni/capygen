@@ -73,6 +73,7 @@ import {
   ArrowUpIcon,
   ChevronDownIcon,
   MicIcon,
+  LoaderCircleIcon,
   PaperclipIcon,
   SquareIcon,
   XIcon,
@@ -569,7 +570,7 @@ export function Composer({
           spellCheck={false}
           data-testid={`${testId}-input`}
           aria-label="Message"
-          className={cn("relative max-h-[220px] min-h-[24px] overflow-y-auto caret-foreground", value && "!text-transparent")}
+          className={cn("relative block max-h-[220px] min-h-[24px] overflow-y-auto caret-foreground", value && "!text-transparent")}
         />
         </div>
       </div>
@@ -665,12 +666,12 @@ export function Composer({
             size="icon-sm"
             disabled={!listening && (disabled || !dictation.language)}
             onClick={() => listening ? dictation.cancel() : void dictation.start()}
-            title={listening ? "Cancel dictation" : dictation.unavailable ?? `Dictate locally in ${dictation.language}`}
+            title={listening ? "Cancel dictation" : dictation.unavailable ?? (dictation.language === "auto" ? "Dictate locally — language detected automatically" : `Dictate locally in ${dictation.language}`)}
             aria-label={listening ? "Cancel dictation" : "Dictate"}
             aria-pressed={listening}
             data-testid={`${testId}-mic`}
           >
-            <MicIcon className={cn("size-4", listening && "text-destructive")} />
+            {dictation.state === "transcribing" ? <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" /> : <MicIcon className={cn("size-4", listening && "text-destructive")} />}
           </Button>
 
         </div>
@@ -785,13 +786,17 @@ export function Composer({
 
       {dictation.active ? (
         <p role="status" className="px-4 pb-2 text-xs text-muted-foreground">
-          {dictation.state === "checking" ? "Checking local speech…" : "Listening locally… Speak one phrase, then pause. Cancel discards it."}
+            {dictation.state === "checking" ? "Checking local speech…" : dictation.state === "transcribing" ? "Transcribing locally… Cancel discards it." : "Speak one phrase, then pause while it is transcribed locally. Cancel discards it."}
         </p>
       ) : null}
       {dictation.error ? (
         <p role="alert" data-testid={`${testId}-dictation-error`} className="px-4 pb-2 text-xs text-destructive">{dictation.error}</p>
       ) : null}
       {dictation.unavailable ? <p className="px-4 pb-2 text-xs text-muted-foreground">{dictation.unavailable}</p> : null}
+      {dictation.unavailable && dictation.setupAvailable ? <div className="flex gap-2 px-4 pb-2">
+        <Button variant="outline" size="sm" disabled={disabled || dictation.settingUp} onClick={() => void dictation.setup()}>Install local speech</Button>
+        <Button variant="ghost" size="sm" disabled={dictation.settingUp} onClick={() => void dictation.refresh()}>Check again</Button>
+      </div> : null}
       {tray ? (
         <div className="flex flex-wrap items-center gap-1 border-t border-border-weak px-2 py-1.5">
           {tray}

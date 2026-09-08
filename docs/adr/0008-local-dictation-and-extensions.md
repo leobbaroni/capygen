@@ -1,6 +1,22 @@
 # ADR-0008: Local dictation and isolated extension pages
 
-Date: 2026-09-07. Status: Astra proposal, revised after Opus review; implementation pending.
+Date: 2026-09-07. Status: Implemented; dictation revised 2026-09-08 after failed human accuracy test.
+
+## 2026-09-08 dictation revision
+
+The user reported that Windows Speech did not understand ordinary speech. The fallback
+evaluation below is activated: explicitly installed whisper.cpp b4938 / 1.9.3 with the
+multilingual small-q5_1 model, pinned hashes and roughly 199 MB download. Installation uses
+the native confirmation and visible-console gate. Availability never records or downloads.
+The Windows Speech decision below is historical; there is no cloud fallback.
+
+The compiled helper captures 16 kHz mono PCM16 through WinMM in memory, waits for a two-second
+pause after voice, and caps capture at 25 seconds. Parent EOF, main cancellation and timeouts
+own subprocess lifetime. PCM travels by pipe to Whisper; no recording file or renderer audio
+payload is created. The model chooses the language and text enters the draft without sending.
+Twelve focused lifecycle/setup/UI tests pass. A generated 5.13-second instruction transcribed
+exactly in 7.55 seconds. This does not accept microphone accuracy: repeat the ordinary and
+technical instruction test with the user.
 
 ## Dictation
 

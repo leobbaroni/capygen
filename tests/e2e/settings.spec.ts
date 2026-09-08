@@ -672,9 +672,11 @@ test.describe("prerequisites gate", () => {
       const codexLogin = status.steps.find((step) => step.id === "codex-login")!;
       expect(codexCli.detected).toBe(true);
       expect(codexLogin.detected).toBe(false);
+      await page.getByTestId("prereq-redetect").click();
       const codexStep = page.locator('[data-testid="prereq-step-row"][data-step-id="codex-login"]');
       await expect(codexStep).toBeVisible({ timeout: 60_000 });
       await expect(codexStep).toHaveAttribute("data-detected", "false", { timeout: 60_000 });
+      await expect(codexStep.getByTestId("prereq-step-run")).toBeEnabled({ timeout: 60_000 });
       expect(codexLogin.command).toBeTruthy();
       await expect(codexStep).toContainText(codexLogin.command!);
       await page.screenshot({ path: path.join(outDir, "settings-prereqs.png") });

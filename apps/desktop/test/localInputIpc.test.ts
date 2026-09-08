@@ -3,13 +3,17 @@ import { createLocalInputHandlers } from "../src/ipc/localInput.js";
 
 it("only cancels the owning recording and forwards its selected language", async () => {
   let resolve!: (value: { text: string; error: null; cancelled: boolean }) => void;
-  const recognize = vi.fn(() => new Promise<{ text: string; error: null; cancelled: boolean }>(done => { resolve = done; }));
+  let progress!: () => void;
+  const recognize = vi.fn((_language: string, callback?: () => void) => { progress = callback!; return new Promise<{ text: string; error: null; cancelled: boolean }>(done => { resolve = done; }); });
+  const broadcast = vi.fn();
   const cancel = vi.fn(() => ({ ok: true }));
   const handlers = createLocalInputHandlers({
-    dictation: { availability: vi.fn(), recognize, cancel }, terminals: { attach: vi.fn() },
+    dictation: { availability: vi.fn(), recognize, cancel }, terminals: { attach: vi.fn() }, broadcast,
   });
   const pending = handlers["dictation.recognize"]({ requestId: "current", language: "en-GB" });
-  expect(recognize).toHaveBeenCalledWith("en-GB");
+  expect(recognize).toHaveBeenCalledWith("en-GB", expect.any(Function));
+  progress();
+  expect(broadcast).toHaveBeenCalledWith("dictation.progress", { requestId: "current", state: "transcribing" });
   expect(handlers["dictation.cancel"]({ requestId: "old" })).toEqual({ ok: false });
   expect(cancel).not.toHaveBeenCalled();
   expect((await handlers["dictation.recognize"]({ requestId: "other", language: "en-US" })).error).toMatch(/already/);

@@ -47,6 +47,7 @@ internal static class SpeechHelper
             });
             parent.IsBackground = true;
             parent.Start();
+            if (mode == "capture") { AudioCapture.Capture(); return 0; }
             var installed = SpeechRecognitionEngine.InstalledRecognizers();
             List<string> languages = new List<string>();
             foreach (RecognizerInfo info in installed)

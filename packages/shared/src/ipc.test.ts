@@ -199,7 +199,7 @@ describe("IPC contract", () => {
       "policy.audit.list",
       "policy.boundaries.availability",
       "customMode.generate", "customMode.cancel", "customMode.capabilities", "customMode.apply",
-      "dictation.availability", "dictation.recognize", "dictation.cancel", "terminal.attach",
+      "dictation.availability", "dictation.setup", "dictation.recognize", "dictation.cancel", "terminal.attach",
       "extensions.theme", "extensions.list", "extensions.pick", "extensions.register",
       "extensions.unregister", "extensions.refresh", "extensions.open", "extensions.bounds", "extensions.close",
       "updates.status", "updates.check", "updates.download", "updates.cancel", "updates.clear",
@@ -230,6 +230,7 @@ describe("IPC contract", () => {
       "settings.changed",
       "integrations.changed",
       "prereqs.changed",
+      "dictation.progress",
     ]);
   });
 
