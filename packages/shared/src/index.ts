@@ -17,3 +17,4 @@ export * from "./automations.js";
 export * from "./inbox.js";
 export * from "./recurrence.js";
 export * from "./usageReport.js";
+export * from "./customMode.js";

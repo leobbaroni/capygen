@@ -688,3 +688,12 @@ backend, widget-host, and unknown (no matching capture). Main snapshots the matc
 per authorization invocation for audit only; live authority still rechecks after awaits.
 Migration0011 stores local notes separately from immutable received comments. Live-note export
 passes notes through the same redacting projector and maps source block anchors to entries.
+
+### Custom Mode foundation (Phase 9C, not yet activated)
+
+Crew document version 1 is strict declarative JSON; textual drafts are capped at 64 KiB UTF-8.
+A capability row must jointly support backend/model/effort/provider. Unknown capability
+efforts are unavailable, not wildcard support. Ordered rules use first-match precedence.
+Migration 0013 uses SQLite RENAME COLUMN, ADD COLUMN and DROP COLUMN transactionally to
+widen the session mode constraint; the pinned native node:sqlite test preserves foreign
+keys/history. No session-table rebuild or foreign-key disabling is used.

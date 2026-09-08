@@ -2527,3 +2527,19 @@ Tests       2749 passed | 4 skipped (2753)
 Full evidence: e2e-out/phase9-acceptance-final-gate.log. Skipped live tests are not passes
 and remain explicit Phase 11 work. Phase 9C contract/probe drafts are excluded from this
 acceptance. No paid/live model prompts were used. The app is not yet complete.
+
+## Phase 9C contract and persistence foundation — 2026-09-08
+
+Added strict bounded crew JSON, semantic and same-row capability validation, canonical
+serialization, first-match task routing evidence and bounded debate planning with explicit
+lead return. Astra reviewed Luna's schema/tests; Luna reviewed Astra's pure planners and
+scalar migration. Typecheck caught a vacuous capability test; corrected it to pass actual
+capability rows, then native Windows typecheck and 21 focused tests passed.
+
+Migration 0013 replaces only the constrained mode column within the existing transaction,
+preserving sessions table identity and incoming references; its native migration regression
+passed (1 test), including history and foreign_key_check. Public custom-mode activation is
+not exposed until atomic Apply and runtime enforcement are wired. Phase 9C remains open.
+Evidence: custom-crew-verified.log, custom-mode-migration-green.log under e2e-out.
+
+Combined follow-up: 4 test files passed, 95 tests passed (5.23s), including store regressions; e2e-out/custom-foundation-check.log.
