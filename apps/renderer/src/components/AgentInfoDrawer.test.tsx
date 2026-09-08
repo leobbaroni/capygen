@@ -72,6 +72,14 @@ describe("AgentInfoDrawer (SPEC R13)", () => {
 });
 
 describe("sub-agent routing is reachable after creation (SPEC R12)", () => {
+  it("saves a bounded API context capacity and preserves API config", async () => {
+    const user = userEvent.setup(); const updateAgent = vi.fn().mockResolvedValue(agent({}));
+    useAppStore.setState({ describeAgent: async () => describeOf("x"), updateAgent });
+    render(<AgentInfoDrawer agent={agent({ backend: "api", config: { api: { provider: "openai", contextWindowTokens: 4096 } } as never })} onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("agent-info-api-capacity")).toBeInTheDocument());
+    await user.clear(screen.getByTestId("agent-info-api-capacity-input")); await user.type(screen.getByTestId("agent-info-api-capacity-input"), "8192"); await user.click(screen.getByRole("button", { name: "Save capacity" }));
+    expect(updateAgent).toHaveBeenCalledWith("a-alice", { config: { api: { provider: "openai", contextWindowTokens: 8192 } } });
+  });
   it("saves a rule the agent was created without", async () => {
     const user = userEvent.setup();
     const updateAgent = vi.fn().mockResolvedValue(agent({}));

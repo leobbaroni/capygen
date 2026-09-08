@@ -13,7 +13,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeftIcon } from "lucide-react";
-import type { Agent, AgentDescribe, Backend } from "@capygen/shared";
+import { AgentConfigSchema, type Agent, type AgentDescribe, type Backend } from "@capygen/shared";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +82,7 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
 
         {info ? (
           <div className="flex flex-col gap-4">
+            {agent.backend === "api" ? <ApiCapacitySection agent={agent} /> : null}
             <RoutingSection agent={agent} />
             {/* Two different things, both of which R13 asks for: the note the
                 user wrote when they added this agent, and the usage
@@ -172,6 +173,42 @@ export function AgentInfoDrawer({ agent, onBack }: { agent: Agent; onBack: () =>
       </div>
     </div>
   );
+}
+
+function ApiCapacitySection({ agent }: { agent: Agent }) {
+  const updateAgent = useAppStore((s) => s.updateAgent);
+  const custom = useAppStore((s) => s.sessions.some((session) => session.id === agent.sessionId && session.mode === "custom"));
+  const existing = (agent.config as { api?: { contextWindowTokens?: number } } | null)?.api?.contextWindowTokens;
+  const [value, setValue] = useState(existing ? String(existing) : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setValue(existing ? String(existing) : ""); setError(null); }, [agent.id, existing]);
+  async function save() {
+    if (custom || saving) return;
+    const trimmed = value.trim();
+    const parsed = trimmed ? Number(trimmed) : undefined;
+    if (parsed !== undefined && (!Number.isSafeInteger(parsed) || parsed < 1024 || parsed > 10_000_000)) {
+      setError("Enter an integer from 1024 to 10000000."); return;
+    }
+    setSaving(true); setError(null);
+    try {
+      const config = AgentConfigSchema.parse(agent.config ?? {});
+      const api = { ...config.api };
+      if (parsed === undefined) delete api.contextWindowTokens;
+      else api.contextWindowTokens = parsed;
+      await updateAgent(agent.id, { config: { ...config, api } });
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Could not save API capacity."); }
+    finally { setSaving(false); }
+  }
+  return <Section title="API context capacity">
+    <div className="flex flex-col gap-1.5" data-testid="agent-info-api-capacity">
+      <p className="text-xs text-muted-foreground">Enter the provider’s stated context window for this model to enable automatic summaries. Leave blank if unknown.</p>
+      {custom ? <p className="text-xs text-muted-foreground">Edit this agent through Custom mode.</p> : null}
+      <input aria-label="API context window tokens" data-testid="agent-info-api-capacity-input" value={value} disabled={custom || saving} onChange={(e) => setValue(e.target.value)} placeholder="1024–10000000" className="h-8 rounded-md border border-input bg-background px-2 text-xs" />
+      <Button variant="outline" size="sm" disabled={custom || saving} onClick={() => void save()}>{saving ? "Saving…" : "Save capacity"}</Button>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+    </div>
+  </Section>;
 }
 
 /**

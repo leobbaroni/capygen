@@ -2645,3 +2645,10 @@ status, renderer bridge, updater idle/no credential, compiled speech availabilit
 bundled Claude and Codex executable versions, actual PTY echo and raw Codex CLI startup,
 and sample extension assets. No prompt or installer was run. This also closes the raw
 terminal startup evidence gap in Phase 10, but does not substitute for microphone acceptance.
+
+First remote CI run reached root script typechecks and failed because root `@types/node`
+was undeclared (local dependency layout had masked it). Added exact root dev dependency
+22.20.1, already present in the workspace lock. Root script and renderer typechecks now pass.
+The API agent info drawer exposes verified context capacity without losing other config;
+custom-mode agents are directed to their mode editor. Focused drawer suite: 6 passed (4.14s).
+No broad local gate was repeated. Evidence: `e2e-out/ci-types-capacity-focused.log`.
