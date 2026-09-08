@@ -30,7 +30,7 @@ jobs:
         run: |
           corepack pnpm typecheck
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          corepack pnpm test
+          corepack pnpm exec vitest run --maxWorkers=2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build Windows artifacts
         shell: pwsh

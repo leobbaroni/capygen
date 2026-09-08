@@ -68,7 +68,7 @@ describe("usage cost knowledge", () => {
       false,
     ]);
     store.close();
-  });
+  }, 20_000);
 
   it("migrates legacy positive cost as known and legacy zero as unknown", () => {
     const file = databaseFile();
@@ -98,7 +98,7 @@ describe("usage cost knowledge", () => {
       ["usage_zero", false],
     ]);
     store.close();
-  });
+  }, 20_000);
 
   it("reports an inclusive/exclusive range with IANA days, titles, models, and unknown costs", () => {
     const file = databaseFile();

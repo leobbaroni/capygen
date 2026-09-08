@@ -2666,3 +2666,9 @@ The first packaged runtime smoke remains valid for the unchanged launch/SDK/PTY 
 only the changed guard case, desktop typecheck/build and artifact audit were repeated.
 Clean-checkout CI at 89db42e is still running. The following documentation push uses
 [skip ci] to avoid restarting that broad run for the separately verified tiny guard change.
+
+Remote CI follow-up: cancellation logs showed continued progress (178 test files had passed),
+not a deadlock. Two `packages/db/test/usage.test.ts` cases exceeded the default 5-second
+limit on the clean Windows runner (6.1s and 5.5s). Gave only those filesystem/migration cases
+20 seconds and set CI to two Vitest workers; assertions are unchanged. The targeted usage
+suite passes locally. CI cancellation is not recorded as a test pass.
