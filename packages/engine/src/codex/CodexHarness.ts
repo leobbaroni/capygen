@@ -111,6 +111,21 @@ import {
   type CodexUserInputParams,
 } from "./protocol.js";
 import { gateFor, gateDenialMessage } from "../tools/registry.js";
+import {
+  authorizeLocally,
+  jsonSnapshot,
+  type LocalAuthorize,
+  type PolicyBoundarySupport,
+} from "../policy/types.js";
+import {
+  CatalogueRunner,
+  MAX_SCANNED_SERVERS,
+  MAX_SCANNED_TOOLS_PER_SERVER,
+  type CatalogueOptions,
+  type CatalogueServerState,
+  type RawCatalogueServer,
+  type ToolCatalogue,
+} from "../catalogue/types.js";
 import { type ToolContext, type ToolDefinition } from "../tools/types.js";
 
 export interface HarnessLogger {
@@ -156,6 +171,8 @@ export interface CodexHarnessDeps {
    * pays nothing for this existing.
    */
   dynamicTools?: readonly ToolDefinition[];
+  /** capygen's own restrictions (ADR-0007) at the boundaries Codex offers. */
+  authorizeLocal?: LocalAuthorize;
   /**
    * Persist a dynamic tool's **full** output and return an opaque reference the
    * transcript can retrieve it by (SPEC R25).
@@ -190,6 +207,8 @@ export interface CodexHarnessDeps {
 export const DEFAULT_MAX_TOOL_OUTPUT_CHARS = 64 * 1024;
 const DEFAULT_INTERRUPT_GRACE_MS = 5_000;
 const DEFAULT_COMPACT_GRACE_MS = 60_000;
+/** How long an approval waits for this turn to learn its own Codex turn id. */
+const TURN_CORRELATION_TIMEOUT_MS = 10_000;
 /** How long `dispose()` waits for aborted dynamic-tool calls to answer. */
 const DYNAMIC_CALL_DRAIN_MS = 1_000;
 /** SPEC R25's ceiling on a dynamic-tool result, in UTF-8 bytes. */
@@ -271,6 +290,19 @@ interface ActiveTurn {
    * own, is where R25's `outputRef` belongs.
    */
   dynamicRefs: Map<string, string>;
+  /**
+   * Aborted when this turn ends, however it ends. A local authorization waiting
+   * on a card belongs to the turn it was admitted in, and must be released the
+   * moment that turn is interrupted, completed or disposed.
+   */
+  cancel: AbortController;
+  /**
+   * Resolves once Codex's own turn id is known, so an approval that arrives in
+   * the window before `turn/start` answers can be *correlated* rather than
+   * admitted on trust.
+   */
+  turnIdKnown: Promise<void>;
+  markTurnIdKnown: () => void;
   /** `last` from the most recent `thread/tokenUsage/updated` for this turn. */
   usage: CodexTokenUsageBreakdown | null;
   /** Fatal `error` notification text, used when `turn/completed` says failed. */
@@ -322,6 +354,13 @@ export class CodexHarness implements Harness {
   private contextWindow: number | null = null;
   private threadUsage: CodexTokenUsageBreakdown | null = null;
   private approvalPolicy = "on-request";
+  /**
+   * The reviewer the app-server actually kept. capygen always asks for `user`,
+   * but a thread may come back reviewed by `auto_review` or a guardian
+   * subagent — in which case no approval ever reaches this client and an
+   * approval-category restriction could not be enforced.
+   */
+  private approvalsReviewer = "user";
   private sandbox = "workspace-write";
   /**
    * Whether the *current* thread was actually started with capygen's tools.
@@ -339,8 +378,22 @@ export class CodexHarness implements Harness {
   private readonly pending = new Map<string, PendingAnswer>();
   /** questionRequestId → question text → Codex's own question id. */
   private readonly questionIds = new Map<string, Map<string, string>>();
+  /**
+   * Approval replies still being decided. Like an in-flight dynamic tool call,
+   * one must get its answer onto the wire before shutdown closes the transport,
+   * or the app-server is left blocked on a reply that can no longer be written.
+   */
+  private readonly outstandingApprovals = new Set<Promise<unknown>>();
 
   private commands: SlashCommand[] = [...CODEX_BUILTIN_COMMANDS];
+  private readonly catalogueRunner = new CatalogueRunner({
+    // The thread is the runtime identity here: a `/clear`, a restart or a
+    // fresh thread while a listing is in flight makes that listing stale.
+    initialize: () => this.ensureThread(),
+    lifecycle: () => this.threadId,
+    fetch: () => this.fetchCatalogue(),
+    onFailure: (code) => this.log.warn(`[codex] the MCP catalogue is unavailable (${code})`),
+  });
   private skills: CodexSkill[] = [];
   private disposed = false;
 
@@ -414,12 +467,19 @@ export class CodexHarness implements Harness {
       subagents: new Map(),
       dynamicCalls: new Map(),
       dynamicRefs: new Map(),
+      cancel: new AbortController(),
+      turnIdKnown: undefined as unknown as Promise<void>,
+      markTurnIdKnown: () => {},
       usage: null,
       fatal: null,
       settled: false,
       interrupted: false,
       timer: null,
     };
+    // The deferred is armed before anything can await it.
+    turn.turnIdKnown = new Promise<void>((resolve) => {
+      turn.markTurnIdKnown = resolve;
+    });
     this.active = turn;
 
     if (ctx.signal) {
@@ -458,6 +518,7 @@ export class CodexHarness implements Harness {
       TURN_START_TIMEOUT_MS,
     );
     turn.codexTurnId = started?.turn?.id ?? null;
+    turn.markTurnIdKnown();
   }
 
   /**
@@ -504,6 +565,7 @@ export class CodexHarness implements Harness {
           TURN_START_TIMEOUT_MS,
         );
         turn.codexTurnId = started?.turn?.id ?? null;
+        turn.markTurnIdKnown();
         return true;
       }
       case "/model": {
@@ -762,6 +824,8 @@ export class CodexHarness implements Harness {
     this.approvalPolicy =
       typeof response?.approvalPolicy === "string" ? response.approvalPolicy : approvalPolicy;
     this.sandbox = sandbox;
+    this.approvalsReviewer =
+      typeof response?.approvalsReviewer === "string" ? response.approvalsReviewer : "user";
     if (response?.approvalsReviewer && response.approvalsReviewer !== "user") {
       // Worth a loud line: approvals would be answered by Codex's own reviewer
       // and capygen's permission cards would never appear.
@@ -857,7 +921,10 @@ export class CodexHarness implements Harness {
       case CODEX_NOTIFICATIONS.turnStarted: {
         const turn = this.active;
         const id = str((params.turn as { id?: unknown } | undefined)?.id);
-        if (turn && !turn.codexTurnId && id) turn.codexTurnId = id;
+        if (turn && !turn.codexTurnId && id) {
+          turn.codexTurnId = id;
+          turn.markTurnIdKnown();
+        }
         return;
       }
       case CODEX_NOTIFICATIONS.itemStarted:
@@ -1382,6 +1449,10 @@ export class CodexHarness implements Harness {
   }
 
   private async askCommandApproval(params: CodexCommandApprovalParams): Promise<CodexCommandApprovalDecision> {
+    // Captured at admission, before anything awaits: this is the turn the
+    // request belongs to for the rest of its life.
+    const admitted = await this.admitApproval(params);
+    if (!admitted) return "decline";
     const requestId = newId("request");
     const request: PermissionRequest = {
       requestId,
@@ -1403,12 +1474,24 @@ export class CodexHarness implements Harness {
       title: "Command approval",
       description: "Codex wants to run this command.",
     });
-    return commandDecision(answer);
+    // [review] The card shows a summary; authorization gets the *complete*
+    // approval parameters. Anything omitted here is something a rule could not
+    // see and an exact grant could silently be reused across.
+    return this.applyLocalApproval(
+      "codex-command-approval",
+      "shell",
+      { params },
+      answer,
+      admitted,
+      String(params.approvalId ?? params.itemId ?? requestId),
+    );
   }
 
   private async askFileChangeApproval(
     params: CodexFileChangeApprovalParams,
   ): Promise<CodexCommandApprovalDecision> {
+    const admitted = await this.admitApproval(params);
+    if (!admitted) return "decline";
     const requestId = newId("request");
     const item = this.active?.items.get(params.itemId);
     const changes = item && item.type === "fileChange" ? (item.changes ?? []) : [];
@@ -1426,7 +1509,189 @@ export class CodexHarness implements Harness {
       title: "File change approval",
       description: `Codex wants to change ${changes.length} file${changes.length === 1 ? "" : "s"}.`,
     });
-    return commandDecision(answer);
+    // [review] Paths and kinds alone let two entirely different edits to the
+    // same files share one exact grant. Authorization sees the full captured
+    // change set, diffs included, alongside the complete approval parameters.
+    return this.applyLocalApproval(
+      "codex-file-approval",
+      "apply_patch",
+      { params, changes },
+      answer,
+      admitted,
+      String(params.itemId ?? requestId),
+    );
+  }
+
+  /**
+   * ADR-0007 for Codex's native approval categories: the local restriction is
+   * consulted **after** the user's answer arrives and **before** the reply goes
+   * back, so a rule edited or revoked while the card was open still decides.
+   *
+   * `allowInputReplacement: false` because the protocol accepts a *decision*,
+   * not a rewritten command or patch. An authorizer that returns a different
+   * input is declined rather than run unchanged — capygen will not advertise an
+   * editable approval it cannot actually apply.
+   */
+  private async applyLocalApproval(
+    boundary: "codex-command-approval" | "codex-file-approval",
+    toolName: string,
+    input: unknown,
+    answer: PermissionAnswer,
+    /** The turn this request was **admitted** in, captured before the card. */
+    admitted: ActiveTurn | null,
+    callId: string,
+  ): Promise<CodexCommandApprovalDecision> {
+    const work = this.decideLocalApproval(boundary, toolName, input, answer, admitted, callId);
+    this.outstandingApprovals.add(work);
+    void work.then(
+      () => this.outstandingApprovals.delete(work),
+      () => this.outstandingApprovals.delete(work),
+    );
+    return work;
+  }
+
+  private async decideLocalApproval(
+    boundary: "codex-command-approval" | "codex-file-approval",
+    toolName: string,
+    input: unknown,
+    answer: PermissionAnswer,
+    admitted: ActiveTurn | null,
+    callId: string,
+  ): Promise<CodexCommandApprovalDecision> {
+    const native = commandDecision(answer);
+    // A refusal needs no policy check, and asking about one would only create
+    // an audit record for something nobody approved.
+    if (native === "decline" || native === "cancel") return native;
+    // Oversized native metadata is refused rather than trimmed: a truncated
+    // value would authorize something other than what runs.
+    const snapshot = jsonSnapshot(input);
+    if (!snapshot.ok) {
+      this.log.warn(`[codex] an approval could not be authorized exactly (${snapshot.reason})`);
+      return "decline";
+    }
+    const verdict = await authorizeLocally(
+      this.deps.authorizeLocal,
+      {
+        boundary,
+        toolName,
+        input,
+        cwd: this.session?.projectPath ?? process.cwd(),
+        signal: this.approvalSignal(admitted),
+        stage: "final",
+        callId: `${boundary}:${callId}`,
+      },
+      { allowInputReplacement: false, requireObject: false },
+    );
+    // [review] Re-checked *after* the wait, against the turn this request was
+    // admitted in — not against whichever turn `this.active` happens to be by
+    // now. A replacement turn is a different authorization context, and a
+    // finished one is none at all.
+    if (this.disposed || !admitted || admitted.settled || admitted.interrupted) return "decline";
+    if (this.active !== admitted) return "decline";
+    return verdict.allowed ? native : "decline";
+  }
+
+  /**
+   * Whether an approval request belongs here at all, decided **before** a card
+   * is raised or the local authorizer is consulted.
+   *
+   * [review] The params were previously cast and the active turn captured
+   * without ever comparing the two, so a frame naming another thread — or a
+   * turn that had already ended — still raised a card and still asked the
+   * policy about it. The cancellation fix covers a request that *was* validly
+   * admitted; this is the admission itself.
+   */
+  private async admitApproval(params: {
+    threadId?: unknown;
+    turnId?: unknown;
+  }): Promise<ActiveTurn | null> {
+    if (this.disposed) return null;
+    const threadId = str(params.threadId);
+    if (!threadId || threadId !== this.threadId) {
+      this.log.warn("[codex] an approval named a thread this harness does not own");
+      return null;
+    }
+    const turn = this.active;
+    if (!turn || turn.settled || turn.interrupted) return null;
+    /**
+     * [review] An approval must *name* its turn. Admitting one that carries no
+     * id — or any id, because the client has not learned its own yet — lets a
+     * stale request from the previous native turn through the window between
+     * `turn/start` being sent and its response arriving. The later identity
+     * check compares the captured turn *object*, which in that window is the
+     * new turn, so it catches nothing: the comment claiming otherwise was
+     * wrong.
+     */
+    const turnId = str(params.turnId);
+    if (!turnId) {
+      this.log.warn("[codex] an approval carried no turn id");
+      return null;
+    }
+    if (!turn.codexTurnId) {
+      // Bounded and cancellable: wait for the id this turn is about to learn,
+      // rather than guessing. `settle`/`interrupt` release the deferred, and
+      // the deadline covers a `turn/start` that never answers at all.
+      await Promise.race([
+        turn.turnIdKnown,
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, TURN_CORRELATION_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      if (this.disposed || turn.settled || turn.interrupted || this.active !== turn) return null;
+    }
+    if (!turn.codexTurnId || turnId !== turn.codexTurnId) {
+      this.log.warn("[codex] an approval named a turn that is not the active one");
+      return null;
+    }
+    return turn;
+  }
+
+  /**
+   * The cancellation an approval's local authorization runs under.
+   *
+   * [review] `turnSignal()` built a controller, sampled the turn once and
+   * returned a signal that could never fire — so a hung authorizer sat there
+   * after the user pressed Stop and could still answer into a dead turn. This
+   * returns the turn's **own** controller, which `interrupt`, `settle` and
+   * `dispose` all abort, and an already-aborted signal when there is no turn.
+   */
+  private approvalSignal(turn: ActiveTurn | null): AbortSignal {
+    if (turn && !turn.settled && !turn.interrupted && !this.disposed) return turn.cancel.signal;
+    const controller = new AbortController();
+    controller.abort();
+    return controller.signal;
+  }
+
+  /**
+   * Which boundaries **this** agent, on **this** captured thread, can actually
+   * enforce. Never a static list: a thread started with `approvalPolicy:
+   * "never"` is told nothing to approve, so advertising an approval-category
+   * restriction for it would be a promise the runtime cannot keep.
+   */
+  localPolicyCapabilities(): PolicyBoundarySupport[] {
+    // Both halves matter: `never` means Codex asks nobody, and a reviewer other
+    // than `user` means it asks somebody who is not this client.
+    const approvals = this.approvalPolicy !== "never" && this.approvalsReviewer === "user";
+    const approvalReason = approvals ? null : ("native-approval-disabled" as const);
+    return [
+      {
+        boundary: "codex-dynamic-tool",
+        available: this.dynamicToolsActive(),
+        reason: this.dynamicToolsActive() ? null : "harness-unavailable",
+      },
+      { boundary: "codex-command-approval", available: approvals, reason: approvalReason },
+      { boundary: "codex-file-approval", available: approvals, reason: approvalReason },
+      // `item/permissions/requestApproval` is a request capygen does not answer:
+      // its reply shape is a permission *profile*, and guessing one would grant
+      // filesystem or network access nobody asked for. Unavailable until a
+      // concrete supported path is proved (ADR-0007).
+      {
+        boundary: "codex-permissions-approval",
+        available: false,
+        reason: "capability-unproven",
+      },
+    ];
   }
 
   private async askPermission(
@@ -1749,6 +2014,27 @@ export class CodexHarness implements Harness {
       }
       if (abort.signal.aborted) return dynamicFailure("cancelled");
 
+      // ADR-0007, after the host gate and any native approval above, on the
+      // input that will actually run.
+      const verdict = await authorizeLocally(
+        this.deps.authorizeLocal,
+        {
+          boundary: "codex-dynamic-tool",
+          toolName: tool.name,
+          input,
+          cwd: this.session?.projectPath ?? process.cwd(),
+          signal: abort.signal,
+          stage: "final",
+          callId,
+        },
+        { allowInputReplacement: true, requireObject: true },
+      );
+      if (!verdict.allowed) return dynamicFailure("denied", verdict.message);
+      // No fallback to the model's original: `requireObject` refused anything
+      // that could not be executed as approved.
+      input = verdict.input as Record<string, unknown>;
+      if (abort.signal.aborted) return dynamicFailure("cancelled");
+
       const maxOutputChars = this.deps.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS;
       const ctx: ToolContext = {
         cwd: this.session?.projectPath ?? process.cwd(),
@@ -1883,6 +2169,22 @@ export class CodexHarness implements Harness {
    * written. The deadline is what keeps a tool that ignores its abort signal
    * from holding shutdown open.
    */
+  /** The same bounded wait, for approval replies still being authorized. */
+  private async drainOutstandingApprovals(): Promise<void> {
+    if (this.outstandingApprovals.size === 0) return;
+    await Promise.race([
+      Promise.allSettled([...this.outstandingApprovals]),
+      new Promise((resolve) => {
+        const timer = setTimeout(resolve, DYNAMIC_CALL_DRAIN_MS);
+        timer.unref?.();
+      }),
+    ]);
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 0);
+      timer.unref?.();
+    });
+  }
+
   private async drainDynamicCalls(): Promise<void> {
     const running = this.abortDynamicCalls();
     if (running.length === 0) return;
@@ -1950,6 +2252,71 @@ export class CodexHarness implements Harness {
     return response?.data ?? [];
   }
 
+  /**
+   * `mcpServerStatus/list` on the thread this harness already owns
+   * (`v2/ListMcpServerStatusParams.ts`). No extra client, no extra configured
+   * stdio child, and no turn: the app-server answers from the servers it has
+   * already started for this thread.
+   *
+   * `detail: "toolsAndAuthOnly"` asks for exactly the half a catalogue shows —
+   * resources and resource templates are not requested, so they are not paid
+   * for in transport or in memory.
+   */
+  async catalogue(options: CatalogueOptions = {}): Promise<ToolCatalogue> {
+    if (this.disposed) return { kind: "notStarted" };
+    const live = this.client?.running === true && this.threadId !== null;
+    if (!live && options.initialize !== true) return { kind: "notStarted" };
+    return this.catalogueRunner.run(options);
+  }
+
+  private async fetchCatalogue(): Promise<{
+    servers: RawCatalogueServer[];
+    moreServers: boolean;
+  }> {
+    const response = await this.client!.request<CodexMcpServerStatusListResponse>(
+      CODEX_METHODS.mcpServerStatusList,
+      {
+        ...(this.threadId ? { threadId: this.threadId } : {}),
+        detail: "toolsAndAuthOnly",
+      },
+      DISCOVERY_TIMEOUT_MS,
+    );
+    // One page. A cursor means there is more, which is exactly what the
+    // truncation flag is for — paging a display list without a bound is how a
+    // hostile configuration turns a refresh into an unbounded loop.
+    const more = typeof response?.nextCursor === "string" && response.nextCursor.length > 0;
+    const data = response?.data ?? [];
+    // [review] Capped before mapping, as on the Claude side.
+    const serverLimit = Math.min(data.length, MAX_SCANNED_SERVERS);
+    const servers: RawCatalogueServer[] = [];
+    for (let index = 0; index < serverLimit; index += 1) {
+      const entry = data[index];
+      // `tools` is a map keyed by tool name; the values are full `Tool` objects
+      // with schemas, and only the keys are taken. `Object.keys` would build
+      // the whole key array first, so the keys are walked and counted instead.
+      const toolNames: string[] = [];
+      let more_tools = false;
+      const tools = entry?.tools;
+      if (isRecord(tools)) {
+        for (const key in tools) {
+          if (!Object.prototype.hasOwnProperty.call(tools, key)) continue;
+          if (toolNames.length >= MAX_SCANNED_TOOLS_PER_SERVER) {
+            more_tools = true;
+            break;
+          }
+          toolNames.push(key);
+        }
+      }
+      servers.push({
+        name: entry?.name,
+        state: codexServerState(entry?.runtimeStatus),
+        toolNames,
+        ...(more_tools ? { truncated: true } : {}),
+      });
+    }
+    return { moreServers: more || data.length > serverLimit, servers };
+  }
+
   listSkills(): CodexSkill[] {
     return this.skills;
   }
@@ -1986,6 +2353,10 @@ export class CodexHarness implements Harness {
     const turn = this.active;
     if (!turn || turn.settled) return false;
     turn.interrupted = true;
+    turn.markTurnIdKnown();
+    // Releases a local authorization still waiting on this turn's card;
+    // `settle()` only runs once Codex answers, which may be much later.
+    turn.cancel.abort();
 
     // Anything waiting on the user would otherwise hold the turn open forever.
     this.cancelPending("interrupted");
@@ -2009,9 +2380,11 @@ export class CodexHarness implements Harness {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    // Before `cancelPending`, and awaited: an in-flight dynamic tool has to get
-    // its refusal onto the wire while the transport is still open.
+    this.active?.cancel.abort();
+    // Before `cancelPending`, and awaited: an in-flight dynamic tool call or
+    // approval reply has to reach the wire while the transport is still open.
     await this.drainDynamicCalls();
+    await this.drainOutstandingApprovals();
     this.cancelPending("closed");
     const turn = this.active;
     if (turn && !turn.settled) this.settle(turn, "interrupted");
@@ -2105,6 +2478,10 @@ export class CodexHarness implements Harness {
 
   private settle(turn: ActiveTurn, status: "done" | "error" | "interrupted", error?: string): void {
     if (turn.settled) return;
+    turn.cancel.abort();
+    // Releases anything still waiting to correlate against an id this turn will
+    // now never learn.
+    turn.markTurnIdKnown();
     // Before the queue closes, not after: a request still waiting on the user
     // has to be cancelled while its card update can still reach the transcript.
     this.cancelPending(status === "interrupted" ? "interrupted" : "the turn ended");
@@ -2233,6 +2610,30 @@ function clampUtf8Bytes(text: string, maxBytes: number): string {
   if (byteLength(text) <= maxBytes) return text;
   const notice = "\n… truncated by capygen";
   return `${headUtf8Bytes(text, maxBytes - byteLength(notice))}${notice}`;
+}
+
+/** `v2/McpServerConnectionStatus.ts` → the shared vocabulary. `null` means the
+ *  runtime state is unavailable or the configuration changed, which is not the
+ *  same claim as "not started". */
+function codexServerState(raw: unknown): CatalogueServerState {
+  switch (raw) {
+    case "connected":
+      return "connected";
+    case "failed":
+      return "failed";
+    case "authenticationRequired":
+      return "needsAuth";
+    case "starting":
+      return "pending";
+    case "disabled":
+      return "disabled";
+    case "notStarted":
+      return "notStarted";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "unknown";
+  }
 }
 
 function firstLine(text: string): string {

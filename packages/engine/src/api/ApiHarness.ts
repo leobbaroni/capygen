@@ -64,6 +64,19 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from "../tools/types.js";
+import {
+  authorizeLocally,
+  type LocalAuthorize,
+  type PolicyBoundarySupport,
+} from "../policy/types.js";
+import {
+  CatalogueRunner,
+  MAX_SCANNED_SERVERS,
+  MAX_SCANNED_TOOLS_PER_SERVER,
+  type CatalogueOptions,
+  type RawCatalogueServer,
+  type ToolCatalogue,
+} from "../catalogue/types.js";
 import { resolveApiKey, type KeyProvider } from "./keys.js";
 import { estimateCost } from "./pricing.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -136,6 +149,11 @@ export interface ApiHarnessDeps {
    * widget resolution — which is precisely the duplication R26 exists to stop.
    */
   acquirePool?: (servers: readonly McpServerConfig[]) => Promise<AcquiredPool> | AcquiredPool;
+  /**
+   * capygen's own restrictions (ADR-0007), consulted per dequeued tool call
+   * immediately before it runs. Absent means no local policy is wired.
+   */
+  authorizeLocal?: LocalAuthorize;
   /** Set false to run with the built-in tools only. */
   useMcp?: boolean;
   tools?: BuiltinToolDeps;
@@ -210,6 +228,16 @@ export class ApiHarness implements Harness {
   /** Accumulated text per streamed block key, so a delta only carries the tail. */
   private readonly deltas = new Map<string, string>();
   private disposed = false;
+  private readonly catalogueRunner = new CatalogueRunner({
+    // The pool is the runtime identity: a dispose or a restart replaces it,
+    // and a listing from the old one no longer describes this agent.
+    initialize: async () => {
+      await this.ensurePool();
+    },
+    lifecycle: () => this.pool,
+    fetch: () => this.fetchCatalogue(),
+    onFailure: (code) => this.log.warn(`[api] the MCP catalogue is unavailable (${code})`),
+  });
 
   constructor(deps: ApiHarnessDeps = {}) {
     this.deps = deps;
@@ -521,6 +549,35 @@ export class ApiHarness implements Harness {
       if (isRecord(answer.updatedInput)) input = answer.updatedInput;
     }
 
+    /**
+     * ADR-0007: the last thing before execution, on the input that will
+     * actually run — after the native gate, after any operator edit, and once
+     * per *dequeued* call, so admitting one call in a batch never authorizes
+     * the ones queued behind it. A waiting approval therefore re-resolves here
+     * with whatever the policy says now, not what it said when the card opened.
+     *
+     * Deliberately *after* the `deny` gate above: a local allow is the absence
+     * of a capygen restriction, never a licence to overturn plan mode.
+     */
+    const verdict = await authorizeLocally(
+      this.deps.authorizeLocal,
+      {
+        boundary: "api-tool",
+        toolName: tool.name,
+        input,
+        cwd: this.session?.projectPath ?? process.cwd(),
+        signal: turn.abort.signal,
+        stage: "final",
+        callId: call.id,
+      },
+      { allowInputReplacement: true, requireObject: true },
+    );
+    if (!verdict.allowed) return this.denied(call, tool, verdict.message);
+    // Only the approved value runs. `requireObject` already refused anything
+    // that is not a tool input, so there is no fallback to the model's original
+    // here — running it would execute an input nobody approved.
+    input = verdict.input as Record<string, unknown>;
+
     const ctx: ToolContext = {
       cwd: this.session?.projectPath ?? process.cwd(),
       signal: turn.abort.signal,
@@ -687,6 +744,56 @@ export class ApiHarness implements Harness {
     });
     this.emitBlock(key, { kind: "question", requestId, questions, answers, allowOther });
     return answers;
+  }
+
+  /**
+   * The catalogue an `api` agent already has: its own reference-counted
+   * `McpClientPool`, and that pool's per-server `listTools` cache (R26). No new
+   * connection is opened for a listing that a turn has already paid for, and a
+   * second refresh costs nothing at all.
+   */
+  /** The one boundary an `api` agent has: capygen owns its whole tool loop. */
+  localPolicyCapabilities(): PolicyBoundarySupport[] {
+    return [{ boundary: "api-tool", available: true, reason: null }];
+  }
+
+  async catalogue(options: CatalogueOptions = {}): Promise<ToolCatalogue> {
+    if (this.disposed) return { kind: "notStarted" };
+    if (!this.pool && options.initialize !== true) return { kind: "notStarted" };
+    return this.catalogueRunner.run(options);
+  }
+
+  private async fetchCatalogue(): Promise<RawCatalogueServer[]> {
+    const pool = this.pool;
+    if (!pool) return [];
+    const rows: RawCatalogueServer[] = [];
+    const configured = pool.list();
+    const limit = Math.min(configured.length, MAX_SCANNED_SERVERS);
+    for (let index = 0; index < limit; index += 1) {
+      const server = configured[index]!;
+      if (server.disabled === true) {
+        rows.push({ name: server.name, state: "disabled", toolNames: [] });
+        continue;
+      }
+      try {
+        const tools = await pool.listTools(server.name);
+        const toolLimit = Math.min(tools.length, MAX_SCANNED_TOOLS_PER_SERVER);
+        const toolNames: string[] = [];
+        for (let cursor = 0; cursor < toolLimit; cursor += 1) toolNames.push(tools[cursor]!.name);
+        rows.push({
+          name: server.name,
+          state: "connected",
+          toolNames,
+          ...(tools.length > toolLimit ? { truncated: true } : {}),
+        });
+      } catch {
+        // The reason is the pool's to log; a catalogue says only that this
+        // server could not be listed. `failureReason` deliberately unread —
+        // it is a raw transport message.
+        rows.push({ name: server.name, state: "failed", toolNames: [] });
+      }
+    }
+    return rows;
   }
 
   answerPermission(requestId: string, answer: PermissionAnswer): boolean {

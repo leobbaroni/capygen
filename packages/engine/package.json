@@ -15,7 +15,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "live:api": "tsx scripts/live-api.ts",
-    "probe:codex-dynamic-tools": "tsx scripts/probe-codex-dynamic-tools.ts"
+    "probe:codex-dynamic-tools": "tsx scripts/probe-codex-dynamic-tools.ts",
+    "probe:mcp-catalogue": "tsx scripts/probe-mcp-catalogue.ts",
+    "probe:claude-hook-precedence": "tsx scripts/probe-claude-hook-precedence.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.261",

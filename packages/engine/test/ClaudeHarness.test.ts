@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ClaudeHarness,
   SUBAGENT_HOOK_MATCHER,
+  SUBAGENT_TOOL_NAMES,
   buildCommands,
   deltaUsage,
   parseQuestions,
@@ -542,14 +543,18 @@ describe("ClaudeHarness — describeSnapshot (SPEC R13)", () => {
 });
 
 describe("ClaudeHarness — sub-agents (SPEC R12)", () => {
-  it("registers the hook on both wire names and fails open by default", async () => {
+  it("registers one matcher-less hook and fails open by default", async () => {
     const fake = makeFakeSdk();
     const harness = await start(fake);
     const turn = drain(harness.send({ turnId: "trn_1", text: "delegate" }));
     await vi.waitFor(() => expect(fake.calls).toHaveLength(1));
 
+    // [ADR-0007] Was `Task|Agent`. The hook now carries local policy as well as
+    // routing, and a matcher that only fires for spawns cannot restrict `Bash`.
+    // `SUBAGENT_TOOL_NAMES` is what keeps the routing branch spawn-only.
     const matchers = fake.options().hooks?.PreToolUse?.map((m) => m.matcher);
-    expect(matchers).toEqual([SUBAGENT_HOOK_MATCHER]);
+    expect(matchers).toEqual([undefined]);
+    expect([...SUBAGENT_TOOL_NAMES]).toEqual(SUBAGENT_HOOK_MATCHER.split("|"));
 
     const hook = fake.options().hooks?.PreToolUse?.[0]?.hooks[0];
     const output = await hook?.(
@@ -654,7 +659,11 @@ describe("ClaudeHarness — sub-agents (SPEC R12)", () => {
     ).toEqual({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "allow",
+        // [ADR-0007] No `permissionDecision: "allow"` any more. The rewrite is
+        // proved to survive a neutral decision against the real CLI
+        // (`routing-neutral` in scripts/probe-claude-hook-precedence.ts), and a
+        // native deny on the spawn still stops it — so routing no longer rides
+        // on overriding the user's own permission rules.
         updatedInput: { description: "explore", prompt: "go", model: "haiku" },
       },
     });

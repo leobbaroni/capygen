@@ -27,6 +27,8 @@ import type {
   TurnStatus,
   UsageTotals,
 } from "@capygen/shared";
+import type { CatalogueOptions, ToolCatalogue } from "./catalogue/types.js";
+import type { PolicyBoundarySupport } from "./policy/types.js";
 
 /** Fields the store owns; a harness supplies everything else about a block. */
 type BlockEnvelope = "id" | "turnId" | "sessionId" | "index" | "createdAt" | "updatedAt";
@@ -200,6 +202,22 @@ export interface Harness {
    * same answer a stale request gets.
    */
   answerElicitation?(requestId: string, answers: Record<string, unknown> | null): boolean;
+  /**
+   * The MCP servers and tool *names* this backend's own runtime reports
+   * (Phase 9). Optional: a backend with no metadata surface simply omits it,
+   * and a caller treats a missing method as `{kind: "unsupported"}` rather than
+   * as an empty catalogue.
+   *
+   * Metadata only, and never a model call — see `catalogue/types.ts`.
+   */
+  catalogue?(options?: CatalogueOptions): Promise<ToolCatalogue>;
+  /**
+   * Which local-policy boundaries this agent's captured runtime can actually
+   * enforce (ADR-0007). Optional: a harness that reports none offers no local
+   * enforcement, which a caller must treat as "refuse affected rules", never as
+   * "nothing is restricted".
+   */
+  localPolicyCapabilities?(): PolicyBoundarySupport[];
   /** The backend session id to store for `resume`, once known. */
   backendSessionId(): string | null;
   dispose(): Promise<void>;

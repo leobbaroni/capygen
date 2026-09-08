@@ -55,6 +55,21 @@ import {
   type SDKUserMessage,
 } from "./sdk.js";
 import type { ClaudeInitSnapshot } from "./describe.js";
+import {
+  authorizeLocally,
+  jsonSnapshot,
+  type LocalAuthorize,
+  type PolicyBoundarySupport,
+} from "../policy/types.js";
+import {
+  CatalogueRunner,
+  MAX_SCANNED_SERVERS,
+  MAX_SCANNED_TOOLS_PER_SERVER,
+  type CatalogueOptions,
+  type CatalogueServerState,
+  type RawCatalogueServer,
+  type ToolCatalogue,
+} from "../catalogue/types.js";
 
 export interface HarnessLogger {
   info: (...args: unknown[]) => void;
@@ -119,6 +134,22 @@ export interface ClaudeHarnessDeps {
     | null;
   /** `settingSources` for the child (spike §8.8 gotcha 4). */
   settingSources?: ("user" | "project" | "local")[];
+  /** capygen's own restrictions (ADR-0007), enforced in the pre-tool hook. */
+  authorizeLocal?: LocalAuthorize;
+  /**
+   * What the hook answers when it rewrites a spawn's model (SPEC R12).
+   *
+   * `"neutral"` is the default, **on evidence**: `probe-claude-hook-precedence`
+   * drives the real CLI and shows a routed spawn reaching the routed model with
+   * no `permissionDecision` at all (`routing-neutral`), while a native `deny` on
+   * the spawn still stops it (`routing-neutral-under-native-deny`).
+   *
+   * `"allow"` — the Phase 1 spike's original lever — is kept only so that probe
+   * can compare the two. It is an unconditional native allow, which ADR-0007
+   * forbids for anything downstream of a policy verdict, so nothing should ship
+   * with it.
+   */
+  routingPermissionDecision?: "allow" | "neutral";
   /** Tool output kept in a block before it is stubbed (SPEC R25). */
   maxToolOutputChars?: number;
   /** How long to wait for the backend's own `result` after an interrupt. */
@@ -130,6 +161,13 @@ const DEFAULT_INTERRUPT_GRACE_MS = 5_000;
 /** Wire names of the sub-agent tool: `init.tools` says Task, the model emits Agent. */
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
 export const SUBAGENT_HOOK_MATCHER = "Task|Agent";
+
+/**
+ * The wire names of Claude's sub-agent tool. `init.tools` advertises `Task`
+ * while the hook and `tool_use` frames both say `Agent` (spike §8.6), so the
+ * routing branch of the matcher-less hook keys on either.
+ */
+export const SUBAGENT_TOOL_NAMES = new Set(SUBAGENT_HOOK_MATCHER.split("|"));
 /**
  * Tools whose whole purpose is the card `canUseTool` already emitted. Their
  * `tool_use` / `tool_result` frames would otherwise render a second, raw
@@ -174,6 +212,12 @@ interface ActiveTurn {
   >;
   /** tool_use ids of INTERACTION_TOOLS calls, whose frames are not re-rendered. */
   interactionToolUseIds: Set<string>;
+  /**
+   * Callbacks that abort work bound to this turn — a hook waiting on a local
+   * authorization, today. Run on settle, so an interrupt cannot leave an
+   * approval outstanding that later authorizes a call into a finished turn.
+   */
+  cancellations: Set<() => void>;
   settled: boolean;
   interrupted: boolean;
   interruptTimer: ReturnType<typeof setTimeout> | null;
@@ -226,10 +270,31 @@ export class ClaudeHarness implements Harness {
    */
   private initSnapshot: ClaudeInitSnapshot | null = null;
   private sdkSessionId: string | null = null;
+  /** In-flight `ensureQuery`, so racing callers share one backend session. */
+  private starting: Promise<void> | null = null;
+  private readonly catalogueRunner = new CatalogueRunner({
+    initialize: () => this.ensureQuery(),
+    lifecycle: () => this.query,
+    fetch: () => this.fetchCatalogue(),
+    // A code, never the backend's own words: an MCP launch failure quotes the
+    // command line it tried, and this line is written to a log file.
+    onFailure: (code) => this.log.warn(`[claude] the MCP catalogue is unavailable (${code})`),
+  });
   private resolvedModel: string | null = null;
   /** Latest cumulative `modelUsage`, so each turn reports its own delta. */
   private lastByModel: Record<string, UsageTotals> = {};
   private disposed = false;
+  /**
+   * Bumped whenever the backend session this harness owns is torn down.
+   *
+   * [review] `ensureQuery`'s memo stops two callers *starting* two sessions; it
+   * does nothing about a dispose that lands while the one in flight is still
+   * awaiting. `doEnsureQuery` awaits the SDK module and the extra MCP server
+   * list before it calls `queryFn`, and both are somebody else's promise — so a
+   * catalogue refresh that raced a dispose used to spawn a CLI child for a
+   * harness the app had already released, with nothing left to dispose it.
+   */
+  private generation = 0;
   /** Anchors block keys to the assistant message they came from. */
   private currentMessageId = "m0";
   /** tool_use id → name/input, so a later tool_result re-upserts a whole block. */
@@ -309,6 +374,7 @@ export class ClaudeHarness implements Harness {
       taskToolUse: new Map(),
       subagents: new Map(),
       interactionToolUseIds: new Set(),
+      cancellations: new Set(),
       settled: false,
       interrupted: false,
       interruptTimer: null,
@@ -339,14 +405,36 @@ export class ClaudeHarness implements Harness {
     this.queryInput?.push(message);
   }
 
-  private async ensureQuery(): Promise<void> {
+  /**
+   * Concurrency-safe: `ensureQuery` awaits before it assigns `this.query`, so
+   * two callers arriving together — a turn and a catalogue refresh, or two
+   * refreshes — both used to pass the guard and build a second streaming
+   * session, orphaning the first CLI child. The in-flight promise is memoised.
+   */
+  private ensureQuery(): Promise<void> {
+    if (this.query && this.queryInput && !this.queryInput.isClosed) return Promise.resolve();
+    this.starting ??= this.doEnsureQuery().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private async doEnsureQuery(): Promise<void> {
     if (this.query && this.queryInput && !this.queryInput.isClosed) return;
     const session = this.session;
     const agent = this.agent;
     if (!session || !agent) throw new Error("ClaudeHarness.start() was never called");
 
+    // Sampled once, compared after every await below: a dispose (or a teardown
+    // that starts a new session) while this is in flight must abandon it rather
+    // than finish building a backend nobody owns any more.
+    const generation = this.generation;
+    const superseded = (): boolean => this.disposed || this.generation !== generation;
+
     const queryFn =
       this.deps.query ?? (await (this.deps.loadQuery ?? loadClaudeQuery)());
+    // Nothing has been assigned yet, so there is nothing to unwind.
+    if (superseded()) return;
 
     const inputQueue = new AsyncQueue<SDKUserMessage>();
     const abort = new AbortController();
@@ -362,6 +450,14 @@ export class ClaudeHarness implements Harness {
       // R12 fails open: no delegation tool beats no session.
       this.log.warn("[claude] the extra MCP server list could not be built", err);
     }
+    if (superseded()) {
+      // `dispose()` already nulled these; only clear them when they are still
+      // the ones this call put there, so a newer session is never disturbed.
+      inputQueue.close();
+      if (this.queryInput === inputQueue) this.queryInput = null;
+      if (this.abort === abort) this.abort = null;
+      return;
+    }
 
     const options = this.buildOptions(session, agent, abort, extraServers);
     this.log.info(
@@ -370,6 +466,24 @@ export class ClaudeHarness implements Harness {
     );
 
     const q = queryFn({ prompt: inputQueue, options });
+    // The last possible moment: `queryFn` is synchronous, but a dispose that
+    // landed during `buildOptions` must not leave the child running.
+    if (superseded()) {
+      try {
+        void q.return?.(undefined);
+      } catch {
+        /* a generator mid-yield refuses; the abort below is what matters */
+      }
+      try {
+        abort.abort();
+      } catch {
+        /* already aborted */
+      }
+      inputQueue.close();
+      if (this.queryInput === inputQueue) this.queryInput = null;
+      if (this.abort === abort) this.abort = null;
+      return;
+    }
     this.query = q;
     this.pump = this.runPump(q);
   }
@@ -401,9 +515,12 @@ export class ClaudeHarness implements Harness {
         this.onCanUseTool(toolName, toolInput, opts),
       hooks: {
         PreToolUse: [
+          // No matcher: every tool call, so a local restriction can reach one.
           {
-            matcher: SUBAGENT_HOOK_MATCHER,
-            hooks: [(hookInput, toolUseId) => this.onPreToolUse(hookInput, toolUseId)],
+            hooks: [
+              (hookInput, toolUseId, hookOptions) =>
+                this.onPreToolUse(hookInput, toolUseId, hookOptions as { signal?: AbortSignal }),
+            ],
           },
         ],
       },
@@ -938,11 +1055,99 @@ export class ClaudeHarness implements Harness {
       ...display,
     });
 
-    if (answer.behavior === "allow") {
-      const updated = isRecord(answer.updatedInput) ? answer.updatedInput : input;
-      return { behavior: "allow", updatedInput: updated };
+    if (answer.behavior !== "allow") {
+      // A native refusal is already the answer. Asking the local policy about
+      // it could only mint a record for something nobody is going to run.
+      return { behavior: "deny", message: answer.message ?? "Denied in capygen" };
     }
-    return { behavior: "deny", message: answer.message ?? "Denied in capygen" };
+
+    /**
+     * [review] The pre-tool hook is not the last word.
+     *
+     * Between the hook approving and this card being answered, a rule can be
+     * edited or a grant revoked — and the operator can *edit the input*. So the
+     * final input is re-checked here, immediately before the allow goes back to
+     * the CLI, exactly as the `api` boundary re-checks at dequeue.
+     *
+     * `callId` is the same `toolUseID` the hook used and the stage is `final`,
+     * so an authorizer that already prompted for this call can resolve what it
+     * asked instead of asking twice — bound to this one pending call, never by
+     * widening a grant.
+     */
+    const updated = isRecord(answer.updatedInput) ? answer.updatedInput : input;
+    const verdict = await authorizeLocally(
+      this.deps.authorizeLocal,
+      {
+        boundary: "claude-pre-tool",
+        toolName,
+        input: updated,
+        cwd: this.session?.projectPath ?? process.cwd(),
+        signal: opts.signal ?? this.turnCancellation(turn),
+        stage: "final",
+        callId: anchor,
+      },
+      { allowInputReplacement: true, requireObject: true },
+    );
+    if (!verdict.allowed) return { behavior: "deny", message: verdict.message };
+    return { behavior: "allow", updatedInput: verdict.input as Record<string, unknown> };
+  }
+
+  /**
+   * Matcher-less interception is proved against the pinned native CLI by
+   * probe-claude-hook-precedence: local denials hold under native allow and
+   * bypass, neutral decisions preserve native denial, and neutral model
+   * rewrites still route sub-agent execution.
+   */
+  localPolicyCapabilities(): PolicyBoundarySupport[] {
+    return [{ boundary: "claude-pre-tool", available: true, reason: null }];
+  }
+
+  /** Query.mcpServerStatus is a control request, never a model turn. */
+  async catalogue(options: CatalogueOptions = {}): Promise<ToolCatalogue> {
+    const live = this.query && this.queryInput && !this.queryInput.isClosed;
+    if (!live && options.initialize !== true) return { kind: "notStarted" };
+    if (this.disposed) return { kind: "notStarted" };
+    return this.catalogueRunner.run(options);
+  }
+
+  private async fetchCatalogue(): Promise<RawCatalogueServer[]> {
+    const query = this.query as (ClaudeQuery & {
+      mcpServerStatus?: () => Promise<unknown[]>;
+    }) | null;
+    // Older CLIs do not implement the control request at all; that is
+    // "unsupported", which the caller sees as an error rather than as a
+    // confident empty list — `fetchCatalogue` throwing is what produces it.
+    if (typeof query?.mcpServerStatus !== "function") {
+      throw new Error("this Claude CLI does not implement mcpServerStatus");
+    }
+    const statuses = await query.mcpServerStatus();
+    if (!Array.isArray(statuses)) return [];
+    // [review] Capped *before* mapping, not after. A `.map()` over the whole
+    // reply materialises one object per server and one array per tool list
+    // before a single bound is applied, which is precisely the allocation a
+    // hostile or broken server should not be able to force.
+    const rows: RawCatalogueServer[] = [];
+    const serverLimit = Math.min(statuses.length, MAX_SCANNED_SERVERS);
+    for (let index = 0; index < serverLimit; index += 1) {
+      const candidate: unknown = statuses[index];
+      const row: Record<string, unknown> = isRecord(candidate) ? candidate : {};
+      const tools: unknown[] = Array.isArray(row.tools) ? row.tools : [];
+      const toolLimit = Math.min(tools.length, MAX_SCANNED_TOOLS_PER_SERVER);
+      const toolNames: unknown[] = [];
+      for (let cursor = 0; cursor < toolLimit; cursor += 1) {
+        const tool = tools[cursor];
+        // Names only: `description` and `annotations` are deliberately dropped
+        // here rather than carried across and filtered later.
+        toolNames.push(isRecord(tool) ? tool.name : undefined);
+      }
+      rows.push({
+        name: row.name,
+        state: claudeServerState(row.status),
+        toolNames,
+        ...(tools.length > toolLimit ? { truncated: true } : {}),
+      });
+    }
+    return rows;
   }
 
   answerPermission(requestId: string, answer: PermissionAnswer): boolean {
@@ -964,62 +1169,172 @@ export class ClaudeHarness implements Harness {
   }
 
   // -------------------------------------------------------------------------
-  // sub-agent hook (SPEC R12)
+  // the pre-tool hook: local policy (ADR-0007) and sub-agent routing (R12)
   // -------------------------------------------------------------------------
 
+  /** An already-aborted signal when this turn can no longer run anything. */
+  private turnCancellation(turn: ActiveTurn | null): AbortSignal {
+    const controller = new AbortController();
+    if (!turn || turn.settled || turn.interrupted || this.disposed) controller.abort();
+    else turn.cancellations.add(() => controller.abort());
+    return controller.signal;
+  }
+
+  /**
+   * One matcher-less `PreToolUse` hook for both jobs.
+   *
+   * [review] It used to be registered as `'Task|Agent'`, which never fires for
+   * `Bash`, `Write` or an MCP tool — precisely the tools a restriction is
+   * usually about. `canUseTool` is not a substitute: it is not called at all
+   * under a native allow rule or `bypassPermissions` (spike §8.5), so the hook
+   * is the only place a local rule can stand in Claude's execution path.
+   * Routing is a *branch* inside it rather than a second registration, because
+   * two hooks on the same event would each have to know about the other's
+   * decision.
+   *
+   * What this hook must never do is return `permissionDecision: "allow"` for a
+   * local allow. A local allow means only "capygen has no restriction here";
+   * answering `allow` would override the user's own Claude permission rules,
+   * which capygen has no authority to widen. The neutral `{}` lets those rules
+   * decide, exactly as they would without capygen.
+   */
   private async onPreToolUse(
     hookInput: ClaudeHookInput,
     toolUseId: string | undefined,
+    options?: { signal?: AbortSignal },
   ): Promise<ClaudeHookOutput> {
     const turn = this.active;
     const raw = hookInput as unknown as Record<string, unknown>;
     const input = isRecord(raw.tool_input) ? raw.tool_input : {};
     const anchor = toolUseId ?? str(raw.tool_use_id) ?? newId("request");
+    const toolName = str(raw.tool_name) ?? "";
+    const isSpawn = SUBAGENT_TOOL_NAMES.has(toolName);
 
-    if (turn) {
-      const asked = str(input.model);
-      this.upsertSubagent(turn, anchor, {
-        name: str(input.subagent_type) ?? str(raw.tool_name) ?? "sub-agent",
-        description: str(input.description) ?? "",
-        ...(asked ? { model: asked } : {}),
-        status: "spawned",
-      });
-    }
+    /**
+     * [review] The SDK's own hook signal *and* this turn's cancellation.
+     *
+     * The session-level controller was wrong twice over: it survives an
+     * interrupt, so a local ask could still be waiting after the user pressed
+     * Stop and then authorize a call into a turn that had already ended; and
+     * when there was no turn at all it minted a fresh live controller, which
+     * can never abort. With no turn the signal starts aborted, because there is
+     * nothing left for an approval to be for.
+     */
+    const cancellation = new AbortController();
+    const cancel = (): void => {
+      if (!cancellation.signal.aborted) cancellation.abort();
+    };
+    if (!turn || turn.settled) cancel();
+    else turn.cancellations.add(cancel);
+    const hookSignal = options?.signal;
+    if (hookSignal?.aborted) cancel();
+    else hookSignal?.addEventListener("abort", cancel, { once: true });
 
-    // Routing policy stub. Any failure means "spawn on the inherited model".
     try {
-      const route = this.deps.routeSubagent?.({
-        sessionId: this.session?.sessionId ?? "",
-        agentId: this.agent?.agentId ?? "",
-        toolName: str(raw.tool_name) ?? "Agent",
-        toolUseId,
-        description: str(input.description) ?? "",
-        subagentType: str(input.subagent_type),
-        input,
-      });
-      if (route?.model) {
+      /**
+       * The routing decision is taken **before** authorization, so the
+       * authorizer sees the input that will actually run — model rewrite
+       * included — and nothing transforms it afterwards. Routing a spawn the
+       * policy then refuses is impossible: the refusal below is a hook deny.
+       */
+      let candidate = input;
+      let routed: { model: string; backend?: Backend } | null = null;
+      if (isSpawn) {
+        if (turn) {
+          const asked = str(input.model);
+          this.upsertSubagent(turn, anchor, {
+            name: str(input.subagent_type) ?? (toolName || "sub-agent"),
+            description: str(input.description) ?? "",
+            ...(asked ? { model: asked } : {}),
+            status: "spawned",
+          });
+        }
+        // R12 fails open: a routing failure means "spawn on the inherited
+        // model", which deliberately does not extend to the policy check.
+        try {
+          const route = this.deps.routeSubagent?.({
+            sessionId: this.session?.sessionId ?? "",
+            agentId: this.agent?.agentId ?? "",
+            toolName: toolName || "Agent",
+            toolUseId,
+            description: str(input.description) ?? "",
+            subagentType: str(input.subagent_type),
+            input,
+          });
+          if (route?.model) {
+            routed = { model: route.model, ...(route.backend ? { backend: route.backend } : {}) };
+            candidate = { ...input, model: route.model };
+          }
+        } catch (err) {
+          this.log.warn("[claude] sub-agent routing policy failed; failing open", err);
+        }
+      }
+
+      const verdict = await authorizeLocally(
+        this.deps.authorizeLocal,
+        {
+          boundary: "claude-pre-tool",
+          toolName: toolName || "unknown",
+          input: candidate,
+          cwd: this.session?.projectPath ?? process.cwd(),
+          signal: cancellation.signal,
+          // The hook runs *before* Claude's own permission machinery, which is
+          // the only place a restriction can reach a tool a native allow rule
+          // or `bypassPermissions` would wave through.
+          stage: "pre",
+          callId: anchor,
+        },
+        { allowInputReplacement: true, requireObject: true },
+      );
+      if (!verdict.allowed) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: verdict.message,
+          },
+        };
+      }
+      // `requireObject` already refused anything unusable, so there is no
+      // fallback to the unapproved original.
+      const approved = verdict.input as Record<string, unknown>;
+
+      if (routed) {
         // The decision is recorded on the block, not only applied: `delegated`
         // is false because the Claude CLI still spawns this sub-agent itself —
         // capygen only rewrote which model it runs on (SPEC R12).
         if (turn) {
           this.upsertSubagent(turn, anchor, {
-            model: route.model,
-            backend: route.backend ?? this.backend,
+            model: routed.model,
+            backend: routed.backend ?? this.backend,
             delegated: false,
           });
         }
+        // `updatedInput` is exactly the value the authorizer approved, never a
+        // later edit of it — and it now ships *without* a native allow, so the
+        // rewrite no longer rides on overriding the user's own rules.
+        const decision = this.deps.routingPermissionDecision ?? "neutral";
         return {
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
-            permissionDecision: "allow",
-            updatedInput: { ...input, model: route.model },
+            ...(decision === "allow" ? { permissionDecision: "allow" as const } : {}),
+            updatedInput: approved,
           },
         };
       }
-    } catch (err) {
-      this.log.warn("[claude] sub-agent routing policy failed; failing open", err);
+
+      // Only an *actual* replacement is passed on: sending `updatedInput` that
+      // equals the original would claim an edit nobody made.
+      const before = jsonSnapshot(candidate);
+      const after = jsonSnapshot(approved);
+      const replaced = !before.ok || !after.ok || before.canonical !== after.canonical;
+      return replaced
+        ? { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: approved } }
+        : {};
+    } finally {
+      turn?.cancellations.delete(cancel);
+      hookSignal?.removeEventListener("abort", cancel);
     }
-    return {};
   }
 
   // -------------------------------------------------------------------------
@@ -1033,6 +1348,10 @@ export class ClaudeHarness implements Harness {
 
     // Anything waiting on the user would otherwise hold the turn open forever.
     this.cancelPending("interrupted");
+    // Including a pre-tool hook waiting on a local authorization: `settle()`
+    // only runs once the SDK stream actually ends, and until then an approval
+    // arriving late would authorize a call into a turn the user has stopped.
+    this.cancelTurnWork(turn);
 
     try {
       await this.query?.interrupt();
@@ -1051,6 +1370,8 @@ export class ClaudeHarness implements Harness {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Anything still building a session is now building it for nobody.
+    this.generation += 1;
     this.cancelPending("closed");
     const turn = this.active;
     if (turn && !turn.settled) this.settle(turn, "interrupted");
@@ -1192,9 +1513,22 @@ export class ClaudeHarness implements Harness {
     };
   }
 
+  /** Release everything bound to this turn's lifetime; safe to call twice. */
+  private cancelTurnWork(turn: ActiveTurn): void {
+    for (const cancel of [...turn.cancellations]) {
+      try {
+        cancel();
+      } catch {
+        /* a cancellation that throws must not stop the turn from ending */
+      }
+    }
+    turn.cancellations.clear();
+  }
+
   private settle(turn: ActiveTurn, status: "done" | "error" | "interrupted", error?: string): void {
     if (turn.settled) return;
     turn.settled = true;
+    this.cancelTurnWork(turn);
     if (turn.interruptTimer) clearTimeout(turn.interruptTimer);
     // `toolNames`/`toolInputs` only exist to rebuild a tool_call block while its
     // turn is live. A harness outlives every turn in a session (R15), so keeping
@@ -1618,4 +1952,22 @@ export function readClaudeConfig(config: unknown): ClaudeAgentConfig {
     out.skills = root.skills.filter((s): s is string => typeof s === "string");
   }
   return out;
+}
+
+/** `McpServerStatus.status` (`sdk.d.ts:1117`) → the shared vocabulary. */
+function claudeServerState(raw: unknown): CatalogueServerState {
+  switch (raw) {
+    case "connected":
+      return "connected";
+    case "failed":
+      return "failed";
+    case "needs-auth":
+      return "needsAuth";
+    case "pending":
+      return "pending";
+    case "disabled":
+      return "disabled";
+    default:
+      return "unknown";
+  }
 }

@@ -33,6 +33,14 @@ export interface FakeFrame {
   error?: { code: number; message: string; data?: unknown };
 }
 
+/**
+ * Returned by a handler that wants to answer *later*: nothing is written now,
+ * and the test delivers the reply itself with `emit({id, result})`. Lets a test
+ * hold a request open — the window between `turn/start` being sent and its
+ * response arriving, for instance.
+ */
+export const DEFER: unique symbol = Symbol("capygen.fakeAppServer.defer");
+
 /** Answers one client request. Return the `result`, or throw for an error. */
 export type FakeHandler = (params: unknown) => unknown;
 
@@ -116,7 +124,9 @@ export function createFakeAppServer(options: FakeAppServerOptions = {}): FakeApp
         return;
       }
       try {
-        deliver({ id: frame.id, result: handler(frame.params) ?? {} });
+        const answer = handler(frame.params);
+        if (answer === DEFER) return;
+        deliver({ id: frame.id, result: answer ?? {} });
       } catch (err) {
         deliver({
           id: frame.id,

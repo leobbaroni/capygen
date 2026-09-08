@@ -21,7 +21,7 @@ Verified on: Windows 10 Pro 19045 · Node 22.16 · Electron 44.2.0 (Node 24.20.0
 | `AskUserQuestion` answered via `{behavior:'allow', updatedInput:{...input, answers}}` | `sdk-tools.d.ts:2575-2577`, verified in the spike | `ClaudeHarness.onCanUseTool` | if the field moves, the question card stops round-tripping; the deny path still protects the user |
 | `AskUserQuestion` reaches `canUseTool` even under `bypassPermissions` | spike §8.5 | question cards in every permission mode | ordinary tools do **not**: they need `permissionMode: 'default'`/`'auto'` |
 | the same `AskUserQuestion` call *also* arrives on the stream as `tool_use` + `tool_result`, under the id `canUseTool` gave as `toolUseID` | verified live 2026-09-06 (`tests/e2e/skeleton.spec.ts`) | `ClaudeHarness` `INTERACTION_TOOLS`: those frames are dropped so the question card is not shadowed by a raw tool-call card | if the ids stopped matching, the transcript would show the question card *and* a duplicate `AskUserQuestion` tool card — cosmetic, not a data loss |
-| `PreToolUse` hook matcher must be `'Task\|Agent'` | spike §8.6 — `init.tools` says `Task`, the wire name is `Agent` | sub-agent blocks + routing policy (SPEC R12) | a matcher of `'Task'` alone silently never fires |
+| Matcher-less `PreToolUse`; routing branch recognizes both `Task` and `Agent` | spike §8.6 plus `probe:claude-hook-precedence` (2026-09-08): eight native cases pass | Local restrictions intercept all tools; the routing branch still recognizes the native spawn aliases | Local allow returns a neutral hook result. `updatedInput.model` routes without a native allow override; native deny remains effective. Local deny also holds under native allow and bypass |
 | `hookSpecificOutput.updatedInput.model` steers a sub-agent | spike §8.9, `sdk.d.ts:2577-2583`; confirmed live 2026-09-06 (`tests/e2e/roundtable.spec.ts` (c): a `Task` spawn re-homed onto `haiku`) | the same-backend half of the routing policy (SPEC R12) | fallback: deny the Task/Agent call and re-issue the work as a fresh `query()` with `options.model`. Note the ordering trap: the hook fires **before** the assistant `tool_use` frame for the same call, and both upsert the `subagent` block — the later one must not write `model: null`, or it erases the route |
 | `result` is the turn boundary, one per turn | `sdk.d.ts:5000-5003` | turn status + usage | a second `result` per turn would double-count usage |
 | `result.modelUsage` is **cumulative** in a streaming session | `sdk.d.ts:5036-5039` | per-turn usage is the delta (`deltaUsage`) | if it became per-turn, every turn after the first would under-report |
@@ -640,3 +640,23 @@ redacts heuristically before text clipping, and refuses cardinality overflow/unk
 Comment input anchors refer to source block positions, mapped through omitted blocks; comments
 on withheld blocks become session-level. Public display labels strip bidi control characters.
 Redaction is heuristic, so the eventual export flow must show the full reviewable snapshot.
+
+## Phase 9 runtime catalogue and local interception (2026-09-08)
+
+`Harness.catalogue({initialize, signal, timeoutMs})` is optional metadata discovery, never a
+model turn. Claude uses the captured `Query.mcpServerStatus()` tools and connection states;
+Codex uses `mcpServerStatus/list` on the captured app-server with bounded pagination. Native
+loopback MCP probes prove both adapters. Results omit schemas, descriptions, launch config
+and raw errors, preserve tool identity, and cap scanned entries and escaped JSON bytes.
+Unsupported, not-started, failed and connected-empty states remain distinct. One unresolved
+query per lifecycle prevents duplicate backend work; cancelled/stale results are discarded.
+
+Local interception is additive to native permissions. API and Codex hosted tools recheck
+local authorization before execution; Codex command/file approval requires matching nonempty
+thread and turn IDs. Early approval waits for the current turn ID with a bounded cancellable
+deadline. Claude's pre-hook and final `canUseTool` stages share a call ID, but final approval
+must still recheck current authority and edited input. Codex native input edits are refused
+when the protocol cannot apply them. `probe:claude-hook-precedence` uses a process environment
+allowlist, disposable homes and dummy loopback credentials; it observes requests received by
+the fixture endpoint, not every socket opened by the child. Routing uses a local haiku alias
+fixture to prove child execution, not a paid model request.
