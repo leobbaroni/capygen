@@ -705,13 +705,32 @@ intentionally carry no invented dynamic effort data. Custom Mode availability st
 live backend capability validation before Apply.
 ### Dictation and local extension contracts (Phase 9C/10, 2026-09-08)
 
-Windows dictation uses the packaged C# 5/.NET Framework helper with bounded NDJSON, explicit
-recognition, request-bound cancellation, parent-stdin EOF handling, and a 16,000-character ceiling.
-It is local-only. The en-GB no-microphone probe and 17 focused tests passed; real microphone and
-accuracy behavior remains user-observed. Extensions use operator-registered local packages with
+Windows dictation now uses explicitly installed whisper.cpp b4938 (1.9.3) and multilingual
+`ggml-small-q5_1.bin`. Archive SHA-256:
+`c2a4b60edb11f7e11a9191ffb50929535527d4d91c9903dbe3e554583bbbc63d`; model SHA-256:
+`ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb`; model revision:
+`5359861c739e955e79d9a303bcbc70fb988958b1`. Total download: 198,447,327 bytes.
+`dictation.setup` uses the native exact-command confirmation and visible console;
+availability may include `setupAvailable`, and an installed runtime exposes language `auto`.
+
+The packaged C# helper's `capture` NDJSON command uses WinMM prepared buffers and returns
+16 kHz mono PCM16 WAV over stdout, capped at 25 seconds / 800,044 bytes. Reset/unprepare/close
+and parent-stdin EOF own the microphone. No recording reaches disk or the renderer.
+Whisper flags: `-m <model> -l auto -nt -np -ng -sns -t <1..12> -f - -of capygen-stdout`, with **no**
+output-format flags. b4938 otherwise infers `-` as output and opens Windows `CON` instead
+of the parent pipe. The nominal name enables the segment callback without creating a file.
+See https://github.com/ggml-org/whisper.cpp/blob/b4938/examples/cli/cli.cpp.
+Output remains capped at 64 KB / 16,000 characters; cancel terminates either subprocess.
+A generated 5.13-second instruction transcribed exactly in 7.68 seconds at default four
+threads, 5.51 seconds at eight, and 4.64 seconds at twelve on the same host. Capture ends
+after 1.5 seconds of silence. `dictation.progress` emits the owning request ID and
+`state: transcribing`; the UI keeps Cancel active. The user confirmed real microphone
+transcription works; the earlier Windows Speech recognizer failed that test.
+
+Extensions use operator-registered local packages with
 strict manifests, verified roots/assets, fresh per-view grants, bounded bridge traffic, namespaced
-storage, and explicit GitHub PR lookup. Native extension verification remains pending; this does not
-claim full parity.
+storage, and explicit GitHub PR lookup. Tools → App pages restores registration and page access.
+The native sample passes storage/restart, capability and ambient-network isolation checks.
 
 ## Windows packaging and explicit updater (Phase 12 implementation)
 

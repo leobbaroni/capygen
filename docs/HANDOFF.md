@@ -1,18 +1,19 @@
-# capygen — handoff (2026-09-08, Phase 9C accepted; Phases 10–12 in progress)
+# capygen — handoff (2026-09-09, Phases 10–11 accepted; Phase 12 in progress)
 
 ## Current work
 
-Resumed 2026-09-08 after `1a429b3`: the complete unit suite passes (2917 passed,
-4 skipped) after stale theme/dictation assertions and an oversized quota fixture were
-corrected. Typecheck and build passed. The native suite initially reported 53 passed,
-12 skipped and two failures; the prerequisite cancellation regression now passes in a
-focused run. Local app pages remain unreachable after the Tools redesign, so the extension
-native test is still failing and placement awaits the user's choice. No new phase is accepted.
-Microphone acceptance awaits the user's test result. The user subsequently reauthorized
-the Phase 11 live benchmark; dedicated test login is pending. Continue fixes and automated checks.
-The existing uncommitted Codex isolation probe and
-`state.lock` are preserved. Full CI on the old revision was cancelled after reproducing
-its stale assertions locally; a new full CI run is needed after the navigation issue is resolved.
+Phase 10 is accepted: the user confirmed local Whisper microphone transcription works.
+The composer now shows request-scoped transcription progress and cancellation; measured
+CPU tuning reduced a fixed sample from 7.68s to 4.64s. Text overlay/selection metrics match
+at normal and increased font scale. Tools → App pages restores local extension access.
+Full gate: typecheck/build pass, 2923 unit tests pass / 4 skipped, 56 native Electron tests
+pass / 12 credential-dependent tests skipped. See PROJECT_LOG.md for evidence.
+Phase 11's full live cohort passed at 102.25% of baseline tokens; all journals and exact
+numbers are in docs/benchmarks.md. Version 0.1.1 packaging/audit and actual packaged
+smoke pass, including raw Codex with inherited TERM=dumb. Full CI, published release,
+older-build/private-feed verification and final review completion remain for Phase 12.
+The pre-existing Codex isolation probe, engine package script, state.lock and Microsoft/
+directory are preserved. Historical checkpoints below describe earlier states.
 
 Phase 9 is accepted at `a319b5b`. Phase 9C passed its full gate on 2026-09-08: typechecks,
 2815 unit tests (4 skipped), build, and 54 native Electron tests (12 live skipped, 2.3m).

@@ -7,11 +7,11 @@ The repair is committed at `1a429b3`; the resumed run verifies it before continu
 
 ## Current State
 
-- Phases 1–9 and 9C are accepted. Work and verified pushes use `main`.
+- Phases 1–10 and 9C are accepted. Work and verified pushes use `main`.
 - Phase 9C gate: typecheck/build passed; 2815 unit tests passed / 4 skipped;
   54 native Electron tests passed / 12 live tests skipped. See `PROJECT_LOG.md` for evidence.
-- Phases 10–12 remain open. Microphone acceptance awaits the user's test result.
-  The user reauthorized Phase 11 live benchmark work on 2026-09-08; dedicated test login is pending.
+- Phase 11 passed its complete live cohort at 102.25% of baseline tokens (limit 110%).
+  Phase 12 remains open pending full CI, release and actual older-build/private-feed proof.
 - Packaging and packaged smoke have passed; actual older-build/private-feed, release,
   full CI and final review evidence remain required for Phase 12 acceptance.
 
@@ -323,22 +323,26 @@ silently substitute models. Review status and failed Claude attempts are recorde
       preserves policy/history; classified diagram routes and bounded same-chat debate pass
       focused runtime fixtures. Full gate: typecheck/build pass, 2815 unit tests passed / 4
       skipped, 54 native Electron tests passed / 12 live skipped (2.3m).
-- [ ] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
+- [x] Phase 10: Dictation, hosts (local), terminal attach, extensions (M7)
       Done when: mic button dictates into the composer (Windows Speech or whisper.cpp local);
       Hosts page shows this machine's harness statuses; Terminal attach opens the raw `claude` /
       `codex` CLI in a pane; a sample extension page loads.
       Covers: P18–P20.
-      Implementation: native extension test and packaged raw Codex terminal/speech metadata
-      smoke pass (2026-09-08); user-observed microphone transcription remains pending.
-- [ ] Phase 11: Efficiency pass
+      Accepted 2026-09-09: user confirmed real microphone transcription with the explicitly
+      installed local Whisper runtime. Tools → App pages, local hosts and terminal attach
+      pass native fixtures. Full gate: typecheck/build passed, 2923 units passed / 4 skipped,
+      56 native Electron tests passed / 12 credential-dependent tests skipped (3.2m).
+- [x] Phase 11: Efficiency pass
       Done when: request-capture tests prove cache_control on system+tools; compaction triggers
       at threshold on a fixture; tool outputs >64 KB truncated with stub; benchmark script
       reports ≤110 % of the CLI baseline for the 20-turn session, numbers in `docs/benchmarks.md`.
       Steps: baseline measurement first (CLI via SDK vs our app on identical prompts); then
       caching, compaction, lazy MCP schemas, IPC noise audit.
       Covers: R24, R25, R26, G9.
-      Implementation: bounded API summarizer and SQL text projection fixtures pass; paired
-      benchmark runner is ready, real dedicated-auth measurements remain unavailable.
+      Accepted 2026-09-09: bounded API summarizer, request-cache and output limits pass
+      the full gate. All three paired 20-turn live sessions completed; pooled token ratio
+      1.022469 (≤1.10). Exact accounting, failed attempts and source hashes are published
+      in docs/benchmarks.md and docs/benchmark-results/.
 - [ ] Phase 12: Packaging, updater, CI, docs, parity audit, release
       Done when: `pnpm build:win` yields installer + portable + latest.yml; release workflow
       publishes on tag; updater finds the release from an older build; README/ARCHITECTURE/

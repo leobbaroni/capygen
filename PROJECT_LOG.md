@@ -2905,3 +2905,52 @@ The user reauthorized Phase 11 and then requested finishing all remaining phases
 reporting poor real microphone recognition and mismatched composer text/selection.
 Those repairs are next; microphone and full phase acceptance remain open. No full
 suite was repeated for this launcher-only change; real startup is its failure signal.
+
+### 2026-09-09 — Phase 10 acceptance, speech feedback and composer repairs
+
+User confirmed the explicitly installed local Whisper microphone path works. Speech setup
+uses an exact-command native gate and visible console; pinned runtime/model checksums,
+WinMM PCM capture, stdin/stdout inference, cancellation and output bounds keep recordings
+local and in memory. Upstream license notices accompany setup. Request-scoped progress
+switches the composer to a spinner and Transcribing locally; Cancel stays active.
+Synthetic 5.13s phrase: exact transcript at 7.68s default four threads, 5.51s at eight,
+4.64s at twelve. Adaptive bounded threads and 1.5s end silence reduce waiting.
+
+Composer overlay/selection regression reproduced 16px visible text versus 13px textarea;
+both now inherit the app font and share metrics. Native long-wrap/scroll/selection and
+1.25 font-scale checks pass. Tools App pages restores extension registration and pages.
+Stale prerequisite detection is refreshed in its native confirmation fixture.
+
+Full gate tails: e2e-out/phase12-final-typecheck.log: all packages Done; build PASS in
+phase12-current-build.log; phase12-current-unit.log: 242 passed, 2923 tests passed / 4
+skipped (65.90s); phase12-current-native.log: 56 passed / 12 credential-dependent skipped
+(3.2m). The preceding unit run exposed a missing-bridge subscription plus two stale event
+assertions; repaired and rerun. Skips are not live passes.
+
+### 2026-09-09 — Phase 11 live benchmark accepted
+
+Dedicated login completed interactively. Native helper model and effort overrides are
+identical at the final SDK seam. Both lanes use the same delegation schema and native
+claude_code preset; the application's 671-byte delegation append remains measured.
+Three fixed pairs, 20 turns per lane, all 120 turns complete: ratios 1.064908, 1.001633,
+1.001132; pooled 1.022469, below 1.10. Exact source hash and all earlier incomplete or
+diagnostic journals are retained under docs/benchmark-results, explained in docs/benchmarks.md.
+No incomplete lane was reused. Full automated cache/compaction/output-limit fixtures passed.
+
+### 2026-09-09 — 0.1.1 packaging checkpoint
+
+build:win creates installer, portable and checksum-verified latest.yml. Preserved prior
+0.1.0 unpacked app at e2e-out/update-baseline-0.1.0 for actual private-feed proof.
+The first packaged test revealed inherited TERM=dumb blocked raw Codex at its compatibility
+prompt. TerminalService now advertises its actual xterm capabilities. The regression starts
+with TERM=dumb and reaches Codex: phase12-final-packaged-smoke.log: 1 passed (13.5s).
+Artifact audit passes in phase12-final-package.log. No installer was executed.
+Independent Luna review round 1 found no high/medium issues; release/CI/feed and final
+round remain outstanding. Unrelated engine probe/package script, state.lock, Microsoft/
+remain untouched.
+
+Final review round 2 (Luna, different model from substantive implementation) is clean after
+checking terminal environment, benchmark totals and the private updater verifier. The verifier
+uses ElectronApplication.evaluate in main, not Page.evaluate in the renderer; its GitHub
+credential remains in test/main memory and isolated safeStorage, and it never installs.
+Standalone verifier typecheck passed. Focused real ConPTY/service checks: 12 passed.

@@ -16,6 +16,8 @@ test("packaged Windows runtime: bridge, updates, speech, bundled CLI, PTY and as
   const homes = { claudeHome: path.join(root, "claude"), codexHome: path.join(root, "codex"), dedicated: false, cleanup() {} };
   for (const dir of [userDataDir, projectDir, homes.claudeHome, homes.codexHome]) fs.mkdirSync(dir);
   const env = launchEnv({ userDataDir, projectDir, homes, engine: "stub" });
+  // The pane owns an xterm/ConPTY, even when the app's parent has no terminal.
+  env.TERM = "dumb";
   const excluded = new Set([...PERSONAL_KEY_ENV, "GH_TOKEN", "GITHUB_TOKEN", "PORTABLE_EXECUTABLE_FILE", "ELECTRON_RUN_AS_NODE"].map((key) => key.toLowerCase()));
   for (const key of Object.keys(env)) if (excluded.has(key.toLowerCase())) delete env[key];
   // CLI and shell defaults also resolve beneath this run's owned home.
@@ -38,7 +40,7 @@ test("packaged Windows runtime: bridge, updates, speech, bundled CLI, PTY and as
     expect(status.hasCredential).toBe(false);
     expect(["idle", "unavailable"]).toContain(status.phase);
     expect(status.message).not.toMatch(/packaged Windows builds|unavailable in this host/i);
-    const speech = await invoke<{ available: boolean; languages: string[]; message: string | null }>("dictation.availability");
+    const speech = await invoke<{ available: boolean; setupAvailable: boolean; languages: string[]; message: string | null }>("dictation.availability");
     const speechProtocol = await app.evaluate((_electron, { helper, env, cwd }) => {
       const { execFile } = process.getBuiltinModule("node:child_process") as typeof import("node:child_process");
       return new Promise<{ available: boolean; languages: string[] }>((resolve, reject) => {
@@ -52,9 +54,14 @@ test("packaged Windows runtime: bridge, updates, speech, bundled CLI, PTY and as
     }, { helper: path.join(packaged.root, "desktop/dist/speech/capygen-speech.exe"), env: isolatedEnv, cwd: projectDir });
     expect(typeof speechProtocol.available).toBe("boolean");
     expect(Array.isArray(speechProtocol.languages)).toBe(true);
-    expect(speech.available).toBe(speechProtocol.available && speechProtocol.languages.length > 0);
-    expect(speech.languages).toEqual(speechProtocol.languages);
-    if (!speech.available) expect(speech.message).toMatch(/installed speech languages/i);
+    // Fresh profiles require explicit installation, regardless of legacy SAPI metadata.
+    expect(speech.available).toBe(false);
+    expect(speech.setupAvailable).toBe(true);
+    expect(speech.languages).toEqual([]);
+    expect(speech.message).toMatch(/install local speech/i);
+    for (const name of ["install-whisper.ps1", "LICENSE-whisper.cpp.txt", "LICENSE-whisper-model.txt"]) {
+      expect(fs.existsSync(path.join(packaged.root, "desktop/dist/speech", name))).toBe(true);
+    }
     for (const relative of ["desktop/dist/speech/capygen-speech.exe", "desktop/dist/assets/extensions/sample/capygen-extension.json", "desktop/dist/assets/extensions/sample/index.html", "desktop/dist/assets/extensions/sample/sample.js", "desktop/dist/assets/extensions/sample/sample.css"]) {
       expect(fs.existsSync(path.join(packaged.root, relative)), relative).toBe(true);
     }

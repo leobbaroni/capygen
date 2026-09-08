@@ -242,8 +242,9 @@ backend homes:
   external `[mcp_servers.…]` block comes back into the UI;
 - **(e)** an API key entered in Providers is absent, byte-for-byte, from every file in the
   profile and both backend homes, and from the log — while `secrets.has` says `stored` (R21);
-- **(f)** with every `codex`-bearing directory pruned off `PATH`, the setup panel shows the step
-  and **Run…** reaches the confirm dialog and spawns nothing (R3/R27);
+- **(f)** with the bundled Codex CLI available and an isolated signed-out home, the setup panel
+  shows the sign-in step; **Run…** reaches the exact-command confirmation, and Cancel spawns
+  nothing (R3/R27). Missing-CLI and dependency refusal remain covered by unit tests;
 - **(g)** the dark-theme screenshot, and `nativeTheme.themeSource === "dark"` in the main process;
 - **(h)** the Plugins page uses a synthetic isolated plugin registry; its isolated screenshot is
   `settings-plugins-isolated.png`.
@@ -497,12 +498,27 @@ server fixture requests an OS-assigned loopback port and does not require stoppi
 service on the machine.
 ### Dictation and extensions
 
-On Windows, the composer microphone action starts local speech only after explicit user action. The
-helper is built from checked-in C#; no compiler or runtime is downloaded. Current evidence is a
-no-microphone en-GB probe plus 17 focused tests, so test a real microphone and installed language
-manually. Extension packages are operator-registered local roots with strict manifest/package
-identity checks. Backend, host, and UI focused checks passed; native extension verification and the
-full phase gate remain pending.
+On Windows, choose **Install local speech** below the composer, review the exact command in
+the native confirmation, and let the visible console download the pinned whisper.cpp runtime
+and multilingual model (about 199 MB). Choose **Check again** when it finishes. Availability
+checks and microphone clicks never download anything. The runtime lives under the app profile's
+`speech` directory and detects the spoken language automatically.
+
+Click the microphone, speak one instruction, then pause for 1.5 seconds. Capture is capped
+at 25 seconds; a spinning **Transcribing locally…** indicator follows capture while CPU
+inference runs. It uses up to 12 available CPU threads, reserving two for the app where
+possible. Cancel remains available and discards the result.
+Text enters the editable draft without submitting. Audio stays in memory and is piped to the
+local recognizer. The capture helper compiles during desktop build. The earlier Windows Speech
+recognizer failed the user's test; real microphone accuracy still needs repeat acceptance.
+
+After explicitly installing an isolated test runtime, run
+`corepack pnpm exec tsx scripts/verify-local-speech.mts <isolated-runtime-directory>`.
+This exercises production transcription with generated audio, without a microphone or download.
+
+Open **Tools → App pages** to register/open local extension packages. Strict package identity
+and capability checks remain. Native verification passes storage, restart, navigation and
+network isolation through this visible path.
 
 ### Composer attachments
 
