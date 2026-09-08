@@ -1,6 +1,6 @@
 # ADR-0008: Local dictation and isolated extension pages
 
-Date: 2026-09-07. Status: Astra proposal; Opus review and implementation pending.
+Date: 2026-09-07. Status: Astra proposal, revised after Opus review; implementation pending.
 
 ## Dictation
 
@@ -9,9 +9,14 @@ A read-only probe on this machine loaded the framework assembly and enumerated:
 ```json
 {"Id":"MS-2057-80-DESK","Name":"MS-2057-80-DESK","Culture":"en-GB"}
 ```
-No microphone was opened and no audio was recorded. This proves an installed recognizer,
-not dictation accuracy or microphone access. The probe used PowerShell -NoProfile and
+No microphone was opened by this capability probe. A subsequent owned WAV fixture used
+System.Speech.Synthesis output redirected to a temporary file, then DictationGrammar with
+SetInputToWaveFile. It recognized "The project is ready for review" at confidence 0.54163307;
+the temporary file was deleted after disposal. Evidence: e2e-out/phase10-speech-audio-proof.log.
+This proves one synthetic file-input recognition path, not human dictation accuracy or
+microphone access. The probe used PowerShell -NoProfile and
 InstalledRecognizers(); no installation or personal backend configuration was involved.
+The log path is a transient local artifact; the result quoted above is the tracked record.
 Microsoft documents [installed recognizers and recognition lifecycle](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine?view=netframework-4.8.1)
 and [default audio input](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.setinputtodefaultaudiodevice?view=netframework-4.8.1).
 
@@ -31,6 +36,35 @@ Microphone access starts only after the explicit action; metadata probing never 
 Acceptance needs lifecycle fixtures, an owned audio-file recognition proof, and actual
 Windows microphone dictation into the composer. Synthetic text events alone are insufficient.
 
+### Review decisions
+
+Compile an app-owned helper at build time for the initial Windows x64 target using the
+installed .NET Framework compiler. Pin C# 5 (`/langversion:5`) and compile the real helper in
+CI; a missing compiler is a visible build prerequisite failure, never a silent omission or
+download. Package the executable so runtime does not depend on PowerShell or runtime source
+compilation. Other architecture support requires its own build/runtime proof. Phase 12 owns
+the helper's packaged hash and the same signing policy as the app (unsigned builds are
+currently accepted); do not imply that installer signing signs its contained executable.
+
+Use UTF-8 newline-delimited JSON with explicit input/output encoding, bounded line sizes and
+fixed command names. Spawn without a shell and with `windowsHide` and the cleaned environment.
+Language identifiers must come from the enumerated recognizers. The helper exits when stdin
+closes, including after a parent crash; main also stops it during app shutdown. No microphone
+is opened during availability discovery. Show the installed language and unavailable state
+before recording, including in prerequisites.
+
+Only display specific device/permission failures when the observed runtime result supports
+them. Silence/timeouts say that no speech was recognized and point to microphone selection
+and Windows desktop-app privacy settings; do not claim to distinguish a privacy block from
+silence without evidence. The earlier distinct-error list is a UI goal, not a proved SAPI
+capability.
+
+Real microphone acceptance remains user-observed: a short ordinary instruction and a short
+technical instruction must land as editable composer text without sending. The user judges
+whether correcting the draft is preferable to retyping it. The synthesized fixture does not
+meet that bar. If it fails, evaluate an explicitly installed local recognizer such as
+whisper.cpp with its actual runtime/model footprint; there is no silent cloud fallback.
+
 ## Extensions
 
 The initial contract is an offline, read-only local extension page with a versioned manifest,
@@ -45,3 +79,19 @@ symlinks/junctions); escape paths are refused. Include a bundled sample with no 
 The page exposes only extension metadata and a Close action in the trusted host UI. A future
 capability API needs a separate reviewed contract. Loading the sample and hostile-page tests
 must prove isolation, denied navigation/permissions, and cleanup before Phase 10 acceptance.
+
+Use a separate `capygen-extension` protocol and non-persistent sandbox partition. Do not
+loosen BrowserViewService's browser URL rules, load file URLs, or inherit the widget host's
+tool bridge. Serve a restrictive CSP header and block requests outside the extension's
+authorized origin; test fetch/image requests as well as navigation, popups and permission
+requests. Bound and validate manifest fields, namespace identifiers, and check realpath
+confinement on every served asset. A selected directory may change after manifest discovery.
+
+### P20 inventory still to resolve
+
+The reference's browser extension contract has more than a read-only page: namespaced pages
+and navigation, theme, quota-bound namespaced storage, and explicitly granted session/project
+services (`reference/omnigent/docs/extending/browser_extensions.md` and its services registry).
+The isolated sample is the first implementation slice; it does not by itself establish full
+P20 parity. Map these capabilities and their local permissions before accepting P20. No
+remaining capability is silently deferred by this proposal.

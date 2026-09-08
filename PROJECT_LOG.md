@@ -2175,3 +2175,22 @@ corepack pnpm --filter @capygen/db typecheck
 $ tsc --noEmit
 ```
 Logs: e2e-out/phase9-policy-astra-db.log and phase9-policy-astra-db-types.log.
+
+## Phase 9 resumed review — 2026-09-08
+
+Recovered completed MCP catalogue, sharing worker/staging and policy management outputs from
+the existing child session histories. Opus restart failed with `Login expired · Please run
+/login`; the user was asked to sign in. Astra continued review and Luna merged the central
+policy IPC contracts and optional desktop handler wiring. No runtime enforcement is claimed.
+```text
+corepack pnpm exec vitest run apps/desktop/test/localPoliciesIpc.test.ts packages/shared/src/localPolicyIpc.test.ts
+Test Files 2 passed (2)
+Tests 20 passed (20)
+Duration 1.74s
+```
+Root evidence: e2e-out/phase9-policy-ipc-astra.log. Luna's shared contract confirmation:
+49 passed across two files; shared typecheck passed (e2e-out/shared-ipc-focused.log).
+Astra reproduced a sharing worker generation bug with an owned fake-child probe: an old
+child's exit rejects a replacement child's valid request. Remaining review findings are
+tracked in docs/plans/phase9-resume-review.md; dependent code remains uncommitted pending
+correction and review. Phases 9, 9C and 10–12 remain open.

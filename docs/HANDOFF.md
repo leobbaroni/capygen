@@ -1,5 +1,18 @@
 # capygen — handoff (2026-09-07, Phase 9 in progress)
 
+## Resume review — 2026-09-08
+
+Verified work is pushed privately through `5eab81a` (local policy service), following
+`0819486` (Codex desktop delegation). Completed worker outputs for MCP catalogue, sharing
+staging/worker IPC and policy management were recovered from session histories. Their code
+remains uncommitted while integration review is open. See `docs/plans/phase9-resume-review.md`
+for concrete findings and proof. No Phase 9 or later acceptance has been claimed.
+
+Opus restart failed with `Login expired · Please run /login`; the user has been asked to
+sign in to the Claude agent session. Astra review and Luna's easy central IPC wiring continued.
+Resume the existing Opus sessions after sign-in, preserving ownership and outstanding review
+findings. Do not silently substitute another model for the requested Opus implementation.
+
 Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied
 before acceptance. Phases 1–6 remain historical acceptance, preserved below.

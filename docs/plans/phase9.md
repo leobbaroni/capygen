@@ -58,3 +58,29 @@ URLs, env, headers or raw backend failures. A failed/not-started catalogue is vi
 empty list claimed to prove no tools. Refresh after supported config changes without silently
 showing an old lifecycle as current. Native/fixture tests must prove metadata only, no model
 prompt, and no duplicate server spawn. These findings are not implementation acceptance.
+
+### Catalogue contract for the implementation wave
+
+The request names a persisted session and its selected agent. Main checks that the agent
+belongs to that session and uses the agent's captured runtime configuration. Discovery may
+initialize that harness after an explicit refresh; it must never send a model prompt. Share
+and native-import artifacts have no discoverable execution context. Concurrent refreshes
+join one in-flight operation rather than starting duplicate SDK queries or MCP processes.
+
+Return a bounded view of server labels, connection state and tool names, plus an explicit
+truncation indicator. Preserve exact names for identity; escape them as ordinary React text.
+Do not return raw status errors, schemas, descriptions, launch commands, environment values,
+URLs, headers or backend session identifiers. A query error is a generic actionable state.
+An unsupported/not-started query must be distinguishable from a connected server with no
+tools. Treat a lifecycle change during discovery as stale and discard that result.
+
+The session editor reads/writes the existing agent override through agents.update; it does
+not duplicate backend-managed registrations. Changes use the existing quiescence/restart
+path. Credentials continue to be managed through the backend settings and safeStorage.
+The slash menu receives the separate informational collection and filters names locally;
+keyboard command selection and Enter must never execute an informational MCP tool row.
+
+Required fixtures cover refresh without model input, concurrent refresh, cancellation or
+restart during discovery, two agents with different server sets, bounded hostile metadata,
+an unavailable server and a connected empty server. Native proof uses an owned local stdio
+fixture and isolated backend homes, with no credentials or remote model call.
