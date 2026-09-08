@@ -310,13 +310,13 @@ describe("transcript import persistence", () => {
     legacy.close();
 
     store = open();
-    expect(store.migration.applied).toEqual([
-      "0006_transcript_imports",
-      "0007_automations_inbox",
-      "0008_usage_cost_known",
-      "0009_share_imports",
-      "0010_local_policies",
-    ]);
+    // Everything after the legacy 0005 snapshot, derived so a new migration
+    // does not break a case about *this* one.
+    expect(store.migration.applied).toEqual(
+      readMigrations(MIGRATIONS_DIR)
+        .map((m) => m.id)
+        .filter((id) => id > "0005_integrations_backend_column"),
+    );
     expect(store.migration.backupFile).toBeTruthy();
     expect(store.sessions.get("session_legacy")).toMatchObject({
       title: "Legacy",

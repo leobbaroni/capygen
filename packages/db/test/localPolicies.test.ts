@@ -48,7 +48,10 @@ describe("migration 0010 — local policy schema", () => {
     fs.rmSync(file, { force: true });
     const all = readMigrations(MIGRATIONS_DIR);
     const before = all.filter((m) => m.id < "0010");
-    expect(before.length).toBe(all.length - 1);
+    const after = all.filter((m) => m.id >= "0010").map((m) => m.id);
+    // Everything from 0010 on is what this open must apply, whatever has been
+    // added since — the case is about preservation, not about the count.
+    expect(after[0]).toBe("0010_local_policies");
     const legacy = openDatabase(file, { migrations: before });
     legacy.db.run(
       "INSERT INTO members (id, name, role, created_at) VALUES ('m1', 'Legacy', 'owner', 1)",
@@ -64,7 +67,7 @@ describe("migration 0010 — local policy schema", () => {
     legacy.db.close();
 
     store = open();
-    expect(store.migration.applied).toEqual(["0010_local_policies"]);
+    expect(store.migration.applied).toEqual(after);
     expect(store.db.get("SELECT name FROM members WHERE id = 'm1'")).toEqual({ name: "Legacy" });
     // The historical allow_always record survives as history and is not
     // migrated into any authority table.

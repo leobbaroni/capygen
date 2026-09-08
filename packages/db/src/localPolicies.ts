@@ -32,6 +32,7 @@ import {
   type LocalPolicyRule,
   type LocalPolicyRuleDraft,
   type LocalPolicyScope,
+  type PolicyAuditSite,
   type PolicyBoundary,
 } from "@capygen/shared";
 import type { Database, Row } from "./driver.js";
@@ -383,6 +384,18 @@ export interface LocalPolicyAuditDraft {
   /** An unauthenticated display label, as it read at decision time. */
   memberLabel?: string | null;
   memberRole?: LocalMemberRole | null;
+  /**
+   * Which of capygen's own surfaces executed the call.
+   *
+   * Separate from `backend`/`boundary`, which keep naming the *origin*: a
+   * widget call still comes from an agent on a backend and is still checked at
+   * that backend's tool boundary.
+   *
+   * `"unknown"` is a real answer — a decision recorded for a request that never
+   * matched a live capture. Omitted means `"backend"`, which is what every row
+   * written before this column existed truthfully was.
+   */
+  executionSite?: PolicyAuditSite | null;
 }
 
 export interface LocalPolicyAuditRecord extends LocalPolicyAuditDraft {
@@ -411,6 +424,9 @@ function rowToAudit(row: Row): LocalPolicyAuditRecord {
     memberId: text(row.member_id),
     memberLabel: text(row.member_label),
     memberRole: text(row.member_role) as LocalMemberRole | null,
+    // Historical rows predate the column and default to `backend`, which is
+    // what they were: widget authorization did not exist when they were written.
+    executionSite: (text(row.execution_site) ?? "backend") as PolicyAuditSite,
   };
 }
 
@@ -435,12 +451,13 @@ export class LocalPolicyAuditRepo {
       `INSERT INTO local_policy_audit
          (id, ts, request_id, session_id, agent_id, backend, boundary, boundary_available,
           tool_name, decision, source, rule_id, scope_kind, scope_id, member_id,
-          member_label, member_role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          member_label, member_role, execution_site)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, ts, draft.requestId ?? null, draft.sessionId ?? null, draft.agentId ?? null,
       draft.backend, draft.boundary, boolToInt(draft.boundaryAvailable), toolName,
       draft.decision, draft.source, draft.ruleId ?? null, draft.scopeKind ?? null,
       draft.scopeId ?? null, draft.memberId ?? null, memberLabel, draft.memberRole ?? null,
+      draft.executionSite ?? "backend",
     );
     this.prune();
     const written = this.db.get<Row>("SELECT * FROM local_policy_audit WHERE id = ?", id);

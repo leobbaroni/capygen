@@ -10,6 +10,7 @@
 // Side-effect import: must run before the first schema below is constructed.
 import "./zodRuntime.js";
 import { z } from "zod";
+import { LocalPolicyAttributionSchema } from "./localPolicies.js";
 
 /** Milliseconds since the epoch. Every timestamp in capygen is this. */
 export const TimestampSchema = z.number().int().nonnegative();
@@ -613,6 +614,8 @@ export const PermissionRequestSchema = z.object({
   requestId: z.string().min(1),
   toolName: z.string(),
   input: z.unknown(),
+  /** Display-only attribution minted by main for a local policy approval. */
+  localPolicy: LocalPolicyAttributionSchema.optional(),
   /** Free-form reason string from the backend, when it supplies one. */
   reason: z.string().optional(),
   /** Backend-suggested alternatives (e.g. a narrowed command). */

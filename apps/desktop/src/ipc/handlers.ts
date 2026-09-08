@@ -8,13 +8,15 @@
  * main.ts) and return the domain shape; main validates the result on the way
  * back so a handler bug is caught at the boundary.
  */
-import type { CapygenStore } from "@capygen/db";
+import { fromJson, type CapygenStore, type Row, type SqlValue } from "@capygen/db";
 import { effectiveBackendConfig, type ModelCatalogue } from "@capygen/engine";
 import {
   builtinSlashCommandsFor,
   assertNoInlineAgentMcpCredentials,
   redactInlineAgentMcpCredentials,
+  APPROVE_INPUT_SUMMARY_MAX,
   type Agent,
+  type PermissionRequest,
   type AgentDraft,
   type ApiProvider,
   type Block,
@@ -25,7 +27,8 @@ import {
   type Project,
   type SlashCommand,
 } from "@capygen/shared";
-import { createSessionRunner } from "../engine/SessionRunner.js";
+import { createSessionRunner, type SessionPolicyHooks } from "../engine/SessionRunner.js";
+import { errorBlock } from "../engine/persist.js";
 import { InboxService } from "../inbox/InboxService.js";
 import { AutomationService } from "../automations/AutomationService.js";
 import { API_ENV_KEYS } from "./harnessList.js";
@@ -36,6 +39,17 @@ import {
   type ImportHandlers,
   type ImportsHandlerDeps,
 } from "./imports.js";
+import {
+  SHARING_CHANNELS,
+  createSharingHandlers,
+  type SharingHandlerDeps,
+  type SharingHandlers,
+} from "./sharing.js";
+import {
+  createLocalPolicyHandlers,
+  type LocalPolicyHandlers,
+  type LocalPolicyIpcDeps,
+} from "./localPolicies.js";
 import { createWorkspaceIpc, type WorkspaceIpcDeps } from "./workspace.js";
 // [B1/Phase 6] The settings hub, the config-sync engine and diagnostics.
 import { createSettingsHubHandlers } from "./settings.js";
@@ -186,6 +200,50 @@ export interface IpcContextDeps {
   /** Native import picker and the process-owned staging service. Optional in
    * tests and utility contexts; absent channels refuse without side effects. */
   imports?: Omit<ImportsHandlerDeps, "store" | "broadcast" | "validateAgent">;
+  /** Native share picker/saver, the staging service and the file decoder.
+   *  Optional on the same terms as `imports`: absent channels refuse. */
+  sharing?: Omit<SharingHandlerDeps, "store" | "broadcast">;
+  /** Local execution-policy management; absent contexts refuse explicitly. */
+  localPolicies?: LocalPolicyIpcDeps;
+  /**
+   * The runner's local policy hooks, from the same one service the management
+   * channels use. Passed through to the engine so a capture, its lifecycle
+   * token and its dispatch gate all come from a single place.
+   */
+  policyHooks?: SessionPolicyHooks;
+  /**
+   * The local ask broker, when one is wired. Consulted before the engine on
+   * `permission.answer`, because a card capygen raised itself has no backend
+   * waiting behind it.
+   */
+  /**
+   * Copies a source session's execution profile onto a fresh automation run.
+   * Absent means no local policy is wired and automations behave as before.
+   */
+  /**
+   * Whether this machine's current execution subject may answer a session's
+   * approvals. Absent means no local policy, and every waiting request is
+   * answerable exactly as it was before this existed.
+   */
+  policyApprovability?: (sessionId: string) => {
+    answerable: boolean;
+    refusal: "viewer" | "missing-member" | "read-only-artifact" | null;
+  };
+  policySubject?: {
+    copyForRun(
+      sourceSessionId: string,
+      targetSessionId: string,
+    ): { ok: true } | { ok: false; reason: string; message: string };
+  };
+  policyAnswer?: {
+    owns(requestId: string): boolean;
+    answer(requestId: string, decision: {
+      behavior: "allow" | "allow_always" | "deny";
+      scope?: "once" | "session" | "always";
+      updatedInput?: unknown;
+      hasUpdatedInput?: boolean;
+    }): { ok: boolean };
+  };
 }
 
 export type IpcHandlers = {
@@ -396,7 +454,11 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
   // built by `makeEngine` that spreads its deps gets the same resolution and
   // validation the shipping one does, rather than silently falling back to the
   // bare chain.
-  const engine = (deps.makeEngine ?? createSessionRunner)({ ...engineDeps, ...runnerConfig });
+  const engine = (deps.makeEngine ?? createSessionRunner)({
+    ...engineDeps,
+    ...runnerConfig,
+    ...(deps.policyHooks ? { policy: deps.policyHooks } : {}),
+  });
 
   function materializeImportedAgent(draft: AgentDraft): AgentDraft {
     // An imported continuation persists this object as a normal live agent,
@@ -433,6 +495,23 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       })
     : unavailableImports();
 
+  const sharingHandlers: SharingHandlers = deps.sharing
+    ? createSharingHandlers({
+        store,
+        broadcast,
+        // The same validation a native transcript's continuation gets: a fresh
+        // session from a shared artifact resolves and checks its model and
+        // provider before any row is written, rather than persisting whatever
+        // draft the renderer sent. Injected here so main cannot forget it —
+        // `deps.sharing` may still override it, but it is never absent.
+        validateAgent: materializeImportedAgent,
+        ...deps.sharing,
+      })
+    : unavailableSharing();
+  const localPolicyHandlers: LocalPolicyHandlers = deps.localPolicies
+    ? createLocalPolicyHandlers(deps.localPolicies)
+    : unavailableLocalPolicies();
+
   const handlers: IpcHandlers = {
     "automations.list": (args) => automationService!.list(args),
     "automations.create": (args) => automationService!.create(args),
@@ -454,6 +533,8 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
     },
     "usage.report": (args) => store.usage.report(args),
     ...importHandlers,
+    ...sharingHandlers,
+    ...localPolicyHandlers,
     "projects.pick": async (): Promise<Project | null> => {
       const dir = await deps.pickDirectory();
       if (!dir) return null;
@@ -637,6 +718,14 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * rather than guessing at a tool list.
      */
     "agents.describe": (args) => engine.describeAgent(args.agentId),
+    "agents.catalogue": async (args) => {
+      const session = store.sessions.get(args.sessionId);
+      if (!session || session.origin === "import") throw new Error("No runnable session for this catalogue");
+      const agentId = args.agentId ?? session.leadAgentId;
+      const agent = agentId ? store.sessions.agent(agentId) : null;
+      if (!agent || agent.sessionId !== session.id) throw new Error("No matching agent for this catalogue");
+      return engine.catalogueAgent?.(session.id, agent.id, args.initialize) ?? { kind: "unsupported" as const };
+    },
 
     "turns.list": (args) => ({
       turns: store.turns.list(args.sessionId),
@@ -758,9 +847,100 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
      * click reached an agent that no longer exists — so the row is left
      * undecided and the renderer says the request is stale.
      */
+    /**
+     * Everything waiting for a decision, across sessions (P17).
+     *
+     * Read straight from the persisted cards rather than from any in-memory
+     * queue: a native backend approval and a card capygen's own policy raised
+     * are both permission blocks with no decision yet, and the Approve page
+     * exists to show *everything* that is waiting. A block whose session is
+     * gone is not listed — its foreign key would have taken it anyway.
+     *
+     * `answerable` is resolved here on every read, never cached in the page,
+     * so a profile demoted in another window stops being able to approve from
+     * this one. An unanswerable row is still listed: hiding it would
+     * misrepresent what is waiting.
+     *
+     * Archived sessions are deliberately **not** filtered out. Archiving is a
+     * shelf, not a stop: a turn that was running when its session was archived
+     * is still running and still waiting on an answer, and omitting it here
+     * would leave a live call blocked with nothing on screen to unblock it.
+     */
+    "approve.pending": (args) => {
+      const where = args.projectId === null ? "" : " AND s.project_id = ?";
+      const params: SqlValue[] = args.projectId === null ? [] : [args.projectId];
+      const total = Number(store.db.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM blocks b JOIN sessions s ON s.id = b.session_id
+          WHERE b.kind = 'permission'
+            AND json_extract(b.payload_json, '$.decision') IS NULL${where}`,
+        ...params)?.n ?? 0);
+
+      const rows = store.db.all<Row>(
+        `SELECT b.id AS block_id, b.session_id, b.turn_id, b.created_at,
+                b.payload_json, s.title AS session_title, t.agent_id
+           FROM blocks b
+           JOIN sessions s ON s.id = b.session_id
+           JOIN turns t ON t.id = b.turn_id
+          WHERE b.kind = 'permission'
+            AND json_extract(b.payload_json, '$.decision') IS NULL${where}
+          ORDER BY b.created_at ASC, b.id ASC
+          LIMIT ? OFFSET ?`,
+        ...params, args.limit, args.offset);
+
+      const approvability = new Map<string, ReturnType<
+        NonNullable<IpcContextDeps["policyApprovability"]>>>();
+      const requests = rows.flatMap((row) => {
+        const payload = fromJson<{ request?: PermissionRequest }>(row.payload_json, {});
+        const request = payload.request;
+        if (!request) return [];
+        const sessionId = String(row.session_id);
+        let verdict = approvability.get(sessionId);
+        if (!verdict) {
+          verdict = deps.policyApprovability?.(sessionId)
+            ?? { answerable: true, refusal: null };
+          approvability.set(sessionId, verdict);
+        }
+        const agentId = (row.agent_id as string | null) ?? null;
+        const agent = agentId === null ? null : store.sessions.agent(agentId);
+        // A hint, not the argument list: the card in the session has the whole
+        // input, and an aggregation page must not put every waiting call's
+        // full arguments on one screen.
+        const summary = JSON.stringify(request.input ?? null) ?? "";
+        return [{
+          blockId: String(row.block_id),
+          sessionId,
+          sessionTitle: String(row.session_title ?? "").slice(0, 200),
+          turnId: String(row.turn_id),
+          agentId,
+          agentLabel: agent?.name?.slice(0, 120) ?? null,
+          requestId: request.requestId,
+          toolName: request.toolName.slice(0, 256),
+          inputSummary: summary.slice(0, APPROVE_INPUT_SUMMARY_MAX),
+          ...(request.localPolicy ? { localPolicy: request.localPolicy } : {}),
+          createdAt: Number(row.created_at),
+          answerable: verdict.answerable,
+          refusal: verdict.refusal,
+        }];
+      });
+      return { requests, total };
+    },
+
     "permission.answer": (args) => {
       const behavior: "allow" | "deny" = args.decision === "deny" ? "deny" : "allow";
       const scope = args.decision === "allow_always" ? "always" : args.scope;
+      // A card capygen's own policy raised is answered by the broker that
+      // raised it: the backend is not waiting on it, so `answerPermission`
+      // would report it stale and the call would hang until it timed out.
+      // Same request id, same card, same channel — only the waiter differs.
+      if (deps.policyAnswer?.owns(args.requestId) === true) {
+        return deps.policyAnswer.answer(args.requestId, {
+          behavior: args.decision,
+          scope,
+          ...(args.updatedInput !== undefined
+            ? { updatedInput: args.updatedInput, hasUpdatedInput: true }
+            : {}),
+        });
+      }
       const delivered = engine.answerPermission(args.requestId, {
         behavior,
         ...(args.updatedInput !== undefined ? { updatedInput: args.updatedInput } : {}),
@@ -974,6 +1154,21 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       const created = store.sessions.create({ projectId: automation.projectId, mode: "solo", title: automation.name, agents: [draft] });
       store.automations.attachSession(run.id, created.session.id);
       broadcast("session.updated", created.session);
+      // The fresh run inherits the source session's *current* execution
+      // profile, copied before anything is dispatched. A missing or viewer
+      // subject refuses here — visibly, with the session already attached so
+      // the user can see the refused run — rather than falling back to the
+      // owner, which would let a scheduled prompt run with authority nobody
+      // granted it.
+      const subject = deps.policySubject?.copyForRun(source.sessionId, created.session.id);
+      if (subject && !subject.ok) {
+        const turn = store.turns.create({
+          sessionId: created.session.id, role: "system", status: "done",
+        });
+        errorBlock(engineDeps, created.session.id, turn.id, subject.message);
+        broadcast("session.updated", store.sessions.get(created.session.id)!);
+        throw new Error("automation_subject_unavailable");
+      }
       engine.dispatch({ sessionId: created.session.id, text: automation.prompt, agentId: created.session.leadAgentId });
       return { sessionId: created.session.id };
     },
@@ -998,6 +1193,38 @@ export function createIpcContext(deps: IpcContextDeps): IpcContext {
       // a chokidar instance left running keeps the process alive on quit.
       await integrations.dispose();
     },
+  };
+}
+
+function unavailableSharing(): SharingHandlers {
+  const unavailable = (): never => {
+    throw new Error("sharing is unavailable in this process");
+  };
+  return Object.fromEntries(
+    SHARING_CHANNELS.map((channel) => [channel, unavailable]),
+  ) as unknown as SharingHandlers;
+}
+
+function unavailableLocalPolicies(): LocalPolicyHandlers {
+  const unavailable = (): never => {
+    throw new Error("local policy management is unavailable in this process");
+  };
+  return {
+    "policy.members.list": unavailable,
+    "policy.members.create": unavailable,
+    "policy.members.update": unavailable,
+    "policy.members.remove": unavailable,
+    "policy.session.subject.get": unavailable,
+    "policy.session.subject.assign": unavailable,
+    "policy.rules.list": unavailable,
+    "policy.rules.create": unavailable,
+    "policy.rules.update": unavailable,
+    "policy.rules.remove": unavailable,
+    "policy.rules.preview": unavailable,
+    "policy.grants.list": unavailable,
+    "policy.grants.revoke": unavailable,
+    "policy.audit.list": unavailable,
+    "policy.boundaries.availability": unavailable,
   };
 }
 

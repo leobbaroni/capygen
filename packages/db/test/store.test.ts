@@ -137,18 +137,10 @@ describe("migrations", () => {
   });
 
   it("is idempotent: reopening applies nothing and writes no backup", () => {
-    expect(store.migration.applied).toEqual([
-      "0001_init",
-      "0002_widgets_elicitations_tool_outputs",
-      "0003_round_table_agents",
-      "0004_workspace_panes",
-      "0005_integrations_backend_column",
-      "0006_transcript_imports",
-      "0007_automations_inbox",
-      "0008_usage_cost_known",
-      "0009_share_imports",
-      "0010_local_policies",
-    ]);
+    // Derived, not transcribed: a fresh open applies every packaged migration
+    // in file order, and pinning the literal list meant every new migration
+    // broke three unrelated cases.
+    expect(store.migration.applied).toEqual(readMigrations(MIGRATIONS_DIR).map((m) => m.id));
     expect(store.migration.backupFile).toBeNull();
     store.close();
 
@@ -191,18 +183,8 @@ describe("migrations", () => {
     const migrations = readMigrations(MIGRATIONS_DIR);
     expect(pendingMigrations(store.db, migrations)).toEqual([]);
     const fresh = openRaw(":memory:");
-    expect(pendingMigrations(fresh, migrations).map((m) => m.id)).toEqual([
-      "0001_init",
-      "0002_widgets_elicitations_tool_outputs",
-      "0003_round_table_agents",
-      "0004_workspace_panes",
-      "0005_integrations_backend_column",
-      "0006_transcript_imports",
-      "0007_automations_inbox",
-      "0008_usage_cost_known",
-      "0009_share_imports",
-      "0010_local_policies",
-    ]);
+    expect(pendingMigrations(fresh, migrations).map((m) => m.id))
+      .toEqual(migrations.map((m) => m.id));
     expect(
       fresh.get("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'"),
     ).toBeUndefined();

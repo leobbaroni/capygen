@@ -104,6 +104,16 @@ export interface ShareProjectionInput {
   metadata: ShareDisplayMetadata;
   comments?: ShareCommentInput[];
   options: ShareProjectionOptions;
+  /**
+   * Receives "source block position → the entry it became", for callers that
+   * must re-anchor something of their own against this projection.
+   *
+   * An out-parameter rather than a widened return type: every existing caller
+   * and every test that pins this function's result stays exactly as it is,
+   * and a caller that does not need the mapping cannot accidentally depend on
+   * it. A position absent from the map was withheld and has no entry.
+   */
+  onEntryMap?: (entryOfSource: ReadonlyMap<number, number>) => void;
 }
 
 const speakerOf = (role: TurnRole): "user" | "assistant" | "system" =>
@@ -314,6 +324,8 @@ export function projectShareBundle(input: ShareProjectionInput): ShareBundle {
     droppedUsage: dropped.usage,
     redactions,
   };
+
+  input.onEntryMap?.(entryOfSource);
 
   return {
     kind: "capygen.share",

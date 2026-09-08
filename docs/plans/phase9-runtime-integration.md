@@ -93,3 +93,12 @@ existing non-MCP fields and respecting credential rejection and restart behavior
 
 Run the phase's full gate and independent review after integration. Phases 9, 9C and 10–12
 remain open until their own Done-when checks hold.
+
+### Widget site follow-through
+
+Astra's 2026-09-08 clarification is in ADR-0007. A widget request must match an actual
+widget capture and its origin tool family; a request flag alone cannot bypass capability
+checks. Attribution must identify widget-host alongside the originating rule family.
+Before acceptance, carry this site into the metadata-only decision audit as well, so the
+audit does not imply a native hook intercepted a call the app host executed. Preserve old
+rows as backend-site when adding the field; do not rewrite migration 0010 or store inputs.

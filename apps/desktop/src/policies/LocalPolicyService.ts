@@ -23,6 +23,7 @@
  *     that request's session, lifecycle, capabilities, subject and rules are
  *     still the ones it was asked under.
  */
+import { randomUUID } from "node:crypto";
 import {
   policyBoundaryBackend,
   type Backend,
@@ -31,6 +32,7 @@ import {
   type LocalPolicyRule,
   type LocalPolicyRuleDraft,
   type PolicyBoundary,
+  type PolicyAuditSite,
 } from "@capygen/shared";
 import type {
   LocalMembersRepo,
@@ -61,6 +63,29 @@ export interface LocalPolicyStore {
 }
 
 /**
+ * The boundary a backend's own tool calls are restricted at.
+ *
+ * A widget's call is evaluated against *this* — the boundary the user already
+ * writes rules at for that agent — so a restriction on the agent's tools also
+ * governs a widget its result opened, and a widget is never a way around it.
+ *
+ * Codex is the deliberate one. `codex-dynamic-tool` is capygen's
+ * **client-hosted** tool channel; Codex's *native* MCP servers come from the
+ * user's own `config.toml`, run inside the Codex runtime, and capygen cannot
+ * intercept them at all. The command and file approval categories are a
+ * different thing again — a native approval prompt, not a tool call — and are
+ * deliberately **not** reachable from an app host.
+ */
+export function originToolBoundary(backend: Backend): PolicyBoundary {
+  switch (backend) {
+    case "api": return "api-tool";
+    case "claude": return "claude-pre-tool";
+    case "codex": return "codex-dynamic-tool";
+    default: return "api-tool";
+  }
+}
+
+/**
  * What main knows about one agent in one session, at this instant.
  *
  * Per agent, not per session: two Codex agents in the same round table may have
@@ -77,6 +102,15 @@ export interface AgentPolicyContext {
   lifecycleToken: string;
   /** The boundaries this agent's captured lifecycle can enforce right now. */
   availableBoundaries: readonly PolicyBoundary[];
+  /**
+   * Where calls against this capture are actually intercepted.
+   *
+   * A property of the **capture**, never of the request: main sets it when it
+   * records the capture, so a caller cannot name a site to reach a rule set it
+   * was not captured for. A request still states its own site, and the two must
+   * agree — that is what makes naming one useless as a bypass.
+   */
+  executionSite?: "backend" | "widget-host";
 }
 
 /** Resolves live per-agent facts main owns; null for anything it does not know. */
@@ -99,6 +133,17 @@ export interface ApprovalPrompt {
   rule: LocalPolicyRule | null;
   /** The session execution profile, an unauthenticated display label. */
   member: LocalMember;
+  /**
+   * The turn this call belongs to, as main resolved it.
+   *
+   * Carried rather than derived: a delegated child and a widget both run under
+   * ids that have no turn row of their own, so anything that tried to look a
+   * turn up from the agent id would find none and publish a card nobody could
+   * answer. Null when main could not resolve one, which refuses the ask.
+   */
+  originTurnId: string | null;
+  /** Where this call is intercepted, for the card's own honesty. */
+  executionSite: "backend" | "widget-host";
 }
 
 /**
@@ -219,6 +264,35 @@ export interface AuthorizeRequest {
    */
   lifecycleToken: string;
   signal?: AbortSignal;
+  /** The turn a card for this call belongs to; main resolves it, never this. */
+  originTurnId?: string | null;
+  /**
+   * Where this call is actually intercepted.
+   *
+   * `backend` (the default) means the boundary is one the agent's captured
+   * backend offers, and the usual capability check applies.
+   *
+   * `widget-host` means capygen's **own** MCP client executes the call, for an
+   * app widget the backend has already finished with. That is a different
+   * execution site, not a different authority: the session, the agent, the
+   * execution subject and the applicable rules are still the origin's, and the
+   * origin's own restrictions still govern — a widget must not be a way around
+   * a rule the user wrote for the agent whose result opened it. What the site
+   * *does* decide is availability: the interception is capygen's, so it does
+   * not depend on what the origin backend can offer.
+   */
+  executionSite?: "backend" | "widget-host";
+  /**
+   * Where in one call's life this check sits (engine `LocalAuthorizationRequest`).
+   *
+   * A Claude call is checked twice: `pre` at the PreToolUse hook, `final`
+   * immediately before execution. Both re-evaluate the *current* restrictions;
+   * `stage` only decides whether an answer already given for this exact call
+   * may stand in for asking the user a second time.
+   */
+  stage?: "pre" | "final";
+  /** The backend's own id for this call; stable across both checks. */
+  callId?: string;
 }
 
 export type DispatchDecision =
@@ -280,8 +354,41 @@ interface AuthorizationEpoch {
   fingerprint: string;
 }
 
+/**
+ * What a `pre` check decided, waiting for the `final` check of the same call.
+ *
+ * This is **not** a cached authorization. It is a receipt for one answer the
+ * user already gave, and it can only ever save asking them the same question
+ * twice: `final` re-evaluates the current rules, member and grants from
+ * scratch, and consults this only when that evaluation lands on `ask` again.
+ * It is invalidated by anything that could change the answer — a policy edit, a
+ * demotion, a revocation, a lifecycle ending — because its epoch is compared
+ * against the live one, and it is consumed on first use.
+ */
+interface PreauthorizationReceipt {
+  /** Every part of the call's identity, so it cannot stand in for another. */
+  sessionId: string;
+  agentId: string | null;
+  lifecycleToken: string;
+  boundary: PolicyBoundary;
+  toolName: string;
+  cwd: string;
+  /** The canonical form of the input that was actually approved. */
+  canonicalInput: string;
+  /** Authority as it stood when the answer was given. */
+  epoch: AuthorizationEpoch;
+  /** The user's answer — never an authorization in itself. */
+  kind: "allow-once" | "allow-session";
+  approvedInput: unknown;
+}
+
+/** Receipts held at once; a bound, so an abandoned call cannot grow this. */
+const MAX_RECEIPTS = 256;
+
 export class LocalPolicyService {
   readonly grants: SessionGrantRegistry;
+  /** callId → the one receipt awaiting its `final` check. */
+  private readonly receipts = new Map<string, PreauthorizationReceipt>();
   private readonly store: LocalPolicyStore;
   private readonly now: () => number;
   /**
@@ -331,8 +438,44 @@ export class LocalPolicyService {
    * Fail closed: any storage or evaluation error refuses. R12's routing
    * fail-open does not apply to this path.
    */
-  async authorize(request: AuthorizeRequest): Promise<Authorization> {
+  /**
+   * One admitted authorization's execution site, keyed by the request object.
+   *
+   * Weak on purpose: the entry lives exactly as long as the caller's own
+   * request, so a long-lived service accumulates nothing and two concurrent
+   * authorizations cannot read each other's snapshot.
+   */
+  private readonly admissionSites = new WeakMap<AuthorizeRequest, PolicyAuditSite>();
+
+  async authorize(incoming: AuthorizeRequest): Promise<Authorization> {
+    /**
+     * [review] One invocation, one identity.
+     *
+     * The admission snapshot is keyed by the request object, and a caller may
+     * legitimately hand the *same* object to two overlapping authorizations —
+     * a retry, a queued pair. Sharing one key would let the second admission
+     * overwrite the first, and both rows would then report the later site.
+     *
+     * A shallow clone is the whole fix: it is unique per invocation while
+     * `signal` and `input` stay the very same references, so cancellation still
+     * works and the existing input snapshot is unchanged. Nothing about
+     * authority moves — this only separates two bookkeeping entries.
+     */
+    const request: AuthorizeRequest = { ...incoming };
     const backend = policyBoundaryBackend(request.boundary);
+    // [review] Snapshotted **at admission**, before anything awaits.
+    //
+    // The audit site used to be re-resolved when the row was written, which is
+    // after an approval may have been waited on. A widget connection can end
+    // while its card is open: by the time a cancellation was recorded the
+    // capture was gone, and the row claimed `backend` for a call that ran at
+    // the widget host — attribution silently rewritten by a disposal. A capture
+    // replaced mid-flight would have moved it the other way.
+    //
+    // This is a *record* of what was admitted, never authority: the live
+    // authorization checks below still re-resolve the capture on every path, so
+    // nothing here can make a stale capture permit anything.
+    this.admissionSites.set(request, this.siteAtAdmission(request));
     try {
       // 1. Cancellation, before anything can succeed — including the paths
       //    where no rule applies and where an exact grant already exists.
@@ -362,7 +505,8 @@ export class LocalPolicyService {
       // 3. Capability, per agent. A request at a boundary this agent's captured
       //    lifecycle cannot enforce is refused: an allow there would be an
       //    authorization nothing is able to police.
-      const capability = this.capabilityProblem(request.boundary, backend, context);
+      const capability = this.capabilityProblem(
+        request.boundary, backend, context, request.executionSite);
       if (capability) {
         return this.refuse(request, backend, false, "boundary-unavailable", "subject", null, capability);
       }
@@ -427,9 +571,25 @@ export class LocalPolicyService {
         return this.permit(request, backend, "grant", outcome, subject, snapshot.value, null);
       }
 
-      const asked = await this.race(this.deps.ask(
+      // A `final` check for a call whose `pre` check the user already answered
+      // reuses **that answer**, not an authorization: everything above has just
+      // been re-evaluated against the current rules, member, grants and
+      // lifecycle, and only the question is skipped. Anything that could change
+      // the answer has already invalidated the receipt through its epoch.
+      const reused = this.takeReceipt(request, snapshot.canonical, epoch);
+      // Deliberately without an `input` property: the receipt only survives when
+      // the canonical input still matches, so the value below is already the
+      // one that was approved. Synthesising an `input` here would look like a
+      // fresh operator edit and be sent back through edit validation.
+      const asked = reused
+        ? { cancelled: false as const, value: { kind: reused.kind } }
+        : await this.race(this.deps.ask(
         {
-          requestId: request.requestId ?? `${request.sessionId}:${request.toolName}:${this.now()}`,
+          // Unique per prompt, never derived from the clock: two parallel
+          // calls to one tool inside a single millisecond produced the same id
+          // under the old scheme, and the second card silently replaced the
+          // first's waiter — leaving one call unanswerable for ever.
+          requestId: request.requestId ?? `ask_${randomUUID()}`,
           sessionId: request.sessionId,
           agentId: request.agentId,
           backend,
@@ -439,6 +599,8 @@ export class LocalPolicyService {
           cwd: request.cwd,
           rule: outcome.rule,
           member: subject.member,
+          originTurnId: request.originTurnId ?? null,
+          executionSite: request.executionSite ?? "backend",
         },
         request.signal,
       ), request.signal);
@@ -499,6 +661,25 @@ export class LocalPolicyService {
         approved = edited.snapshot;
       }
 
+      if (request.stage === "pre" && request.callId !== undefined && !reused) {
+        // The user answered a `pre` check. Record *the answer*, with the exact
+        // identity it was given for and the authority it was given under, so
+        // the `final` check for this same call need not ask again. This is not
+        // an authorization: `final` re-evaluates everything above from scratch
+        // and only reaches here if it lands on `ask` all over again.
+        this.putReceipt(request.callId, {
+          sessionId: request.sessionId,
+          agentId: request.agentId,
+          lifecycleToken: request.lifecycleToken,
+          boundary: request.boundary,
+          toolName: request.toolName,
+          cwd: request.cwd,
+          canonicalInput: approved.canonical,
+          epoch,
+          kind,
+          approvedInput: approved.value,
+        });
+      }
       if (kind === "allow-session") {
         const record = this.grants.grant(identity(approved.canonical), {
           projectId: authority.context.projectId, now: this.now,
@@ -842,7 +1023,7 @@ export class LocalPolicyService {
       return deny(true, "lifecycle-mismatch", "subject", priorOutcome,
         `The backend lifecycle was replaced ${when}.`, priorSubject);
     }
-    if (this.capabilityProblem(request.boundary, backend, context)) {
+    if (this.capabilityProblem(request.boundary, backend, context, request.executionSite)) {
       return deny(false, "boundary-unavailable", "subject", priorOutcome,
         `This agent can no longer enforce that boundary, so the request cannot be authorized.`,
         priorSubject);
@@ -940,14 +1121,87 @@ export class LocalPolicyService {
     boundary: PolicyBoundary,
     backend: Backend,
     context: AgentPolicyContext,
+    requestSite: "backend" | "widget-host" = "backend",
   ): string | null {
+    // Backend equality is checked **always**, at every site. With the origin
+    // tool family it holds naturally for a widget too (a Claude widget is
+    // judged at `claude-pre-tool`, whose backend is claude), so there was never
+    // anything for a site to excuse — and skipping it would have let a call
+    // name any backend's boundary.
     if (backend !== context.backend) {
       return `This agent targets ${context.backend}; a ${boundary} request cannot be authorized for it.`;
+    }
+    // The site is the capture's. A request that claims a different one is
+    // refused rather than believed: it is the only thing a caller supplies
+    // here, so it may narrow nothing and unlock nothing.
+    const capturedSite = context.executionSite ?? "backend";
+    if (requestSite !== capturedSite) {
+      return `This request claims to run at capygen's ${requestSite}, but this agent was captured at its ${capturedSite}.`;
+    }
+    if (capturedSite === "widget-host") {
+      // An app host executes *tool calls*, so only the origin's tool family is
+      // reachable from one. A native approval category — Codex's command or
+      // file prompts — is not a tool call and must not become addressable by
+      // opening a widget.
+      const family = originToolBoundary(context.backend);
+      if (boundary !== family) {
+        return `An app widget can only be authorized against the ${family} boundary.`;
+      }
+      // Availability is the site's: capygen's own MCP client intercepts this,
+      // so it does not depend on what the origin backend offers.
+      return null;
     }
     if (!context.availableBoundaries.includes(boundary)) {
       return `This agent's captured backend cannot enforce the ${boundary} boundary.`;
     }
     return null;
+  }
+
+  /**
+   * Take the receipt for this call, if it is still valid for *this* request.
+   *
+   * Every part of the call's identity has to match — session, agent, lifecycle,
+   * boundary, tool, cwd and the canonical input — and so does the authority it
+   * was given under. A policy edit, a demotion, a revocation or a lifecycle
+   * ending all move an epoch, and a moved epoch discards the receipt: the user
+   * is asked again rather than carried by an answer that predates the change.
+   *
+   * Consumed on first use, and consumed even when it does not match, so a
+   * receipt can never be replayed.
+   */
+  private takeReceipt(
+    request: AuthorizeRequest,
+    canonicalInput: string,
+    epoch: AuthorizationEpoch,
+  ): PreauthorizationReceipt | null {
+    if (request.stage !== "final" || request.callId === undefined) return null;
+    const receipt = this.receipts.get(request.callId);
+    if (!receipt) return null;
+    this.receipts.delete(request.callId);
+    if (request.signal?.aborted) return null;
+    const sameCall =
+      receipt.sessionId === request.sessionId
+      && receipt.agentId === request.agentId
+      && receipt.lifecycleToken === request.lifecycleToken
+      && receipt.boundary === request.boundary
+      && receipt.toolName === request.toolName
+      && receipt.cwd === request.cwd
+      && receipt.canonicalInput === canonicalInput;
+    if (!sameCall) return null;
+    const sameAuthority =
+      receipt.epoch.session === epoch.session
+      && receipt.epoch.lifecycle === epoch.lifecycle
+      && receipt.epoch.revocation === epoch.revocation
+      && receipt.epoch.fingerprint === epoch.fingerprint;
+    return sameAuthority ? receipt : null;
+  }
+
+  private putReceipt(callId: string, receipt: PreauthorizationReceipt): void {
+    if (this.receipts.size >= MAX_RECEIPTS) {
+      const oldest = this.receipts.keys().next().value;
+      if (oldest !== undefined) this.receipts.delete(oldest);
+    }
+    this.receipts.set(callId, receipt);
   }
 
   private epochOf(
@@ -1091,6 +1345,7 @@ export class LocalPolicyService {
         toolName: request.toolName,
         decision: "deny",
         source: "error",
+        executionSite: this.capturedSite(request),
       });
     } catch {
       audit = null;
@@ -1108,6 +1363,45 @@ export class LocalPolicyService {
       grantId: null,
       audit,
     };
+  }
+
+  /**
+   * The site this authorization was admitted at, for its audit rows.
+   *
+   * Falls back to the admission-time reading only when there is none — a
+   * `failClosed` that fired before `authorize` recorded one.
+   */
+  private capturedSite(request: AuthorizeRequest): PolicyAuditSite {
+    return this.admissionSites.get(request) ?? this.siteAtAdmission(request);
+  }
+
+  /**
+   * Read once, from main's captured context — never from `request.executionSite`.
+   *
+   * The request's copy is caller-supplied, and `capabilityProblem` already
+   * refuses any request whose claim disagrees with its capture; reading the
+   * captured value keeps that true of the log as well, so an audit row can
+   * never report a site a caller merely asserted.
+   *
+   * No capture at all is `"unknown"`, not `"backend"`: a decision recorded for
+   * an agent main knows nothing about did not run at a backend site — nothing
+   * is known about where it would have run, and the row should say so.
+   *
+   * [review] The same applies to a capture that exists but is not *this*
+   * request's. A stale or mistaken `lifecycleToken` is refused by the
+   * authorization path; the log must not meanwhile borrow the site of whatever
+   * lifecycle happens to be current, which would attribute the decision to a
+   * connection it had nothing to do with.
+   */
+  private siteAtAdmission(request: AuthorizeRequest): PolicyAuditSite {
+    try {
+      const context = this.deps.resolveContext(request.sessionId, request.agentId ?? null);
+      if (!context) return "unknown";
+      if (context.lifecycleToken !== request.lifecycleToken) return "unknown";
+      return context.executionSite ?? "backend";
+    } catch {
+      return "unknown";
+    }
   }
 
   private audit(
@@ -1136,6 +1430,7 @@ export class LocalPolicyService {
         memberId: subject?.member.id ?? null,
         memberLabel: subject?.member.label ?? null,
         memberRole: subject?.member.role ?? null,
+        executionSite: this.capturedSite(request),
       });
     } catch {
       // Same reasoning as failClosed: a failed audit never upgrades a refusal

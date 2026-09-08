@@ -1,28 +1,28 @@
-# capygen — handoff (2026-09-07, Phase 9 in progress)
+# capygen — handoff (2026-09-08, Phase 9 accepted)
 
-## Resume review — 2026-09-08
+## Phase 9 acceptance — 2026-09-08
 
-Verified work is pushed privately through `96f4cf9` (engine local interception and bounded
-native MCP catalogues). Prior foundations include `5dfc080` (renderer catalogue metadata),
-`5eab81a` (local policy service) and `0819486` (Codex desktop delegation). Engine acceptance:
-602 passed, four explicit skips, types clean, all eight native Claude hook cases proven.
-Phase 9 and later phases remain unaccepted; desktop/sharing/renderer integration is ongoing.
+Phase 9 is accepted following independent reviews and the complete Windows gate:
+typecheck passed; 201 unit-test files passed (2749 tests passed, 4 skipped); build passed;
+52 native tests passed, 12 live-backend tests skipped (1.8 minutes). The skipped tests are
+not live-backend acceptance; dedicated authenticated test homes remain needed for Phase 11.
+Evidence: `e2e-out/phase9-acceptance-final-gate.log` and `PROJECT_LOG.md`.
 
-Login was renewed and Opus lanes are healthy. Engine now owns the separate Windows 8.3-path
-containment false positive; desktop owns policy/widget integration; sharing/renderer owns
-Approve aggregation and fresh shared continuation. Root alone stages/commits. Luna reviewed
-the root native tool test and Phase 10–12 briefs without high/medium findings.
+Session MCP editor activation, inert slash-menu tools and explicit disable are proven on
+Claude and Codex without model turns. Codex refresh starts transient discovery processes;
+repeated refresh retains exactly one persistent server and disposal leaves none. An empty
+Codex override map does not suppress inherited servers; named enabled=false does.
+Sharing exports/imports HTML/JSON, preserves local notes through redaction, and creates fresh
+continuations. Members, Policies and Approve enforce local permissions in native fixtures.
+Audit migration 0012 snapshots execution site at admission, including concurrent requests
+and disposed captures. Migration 0011 stores local share comments.
 
-Latest native checks: `localPoliciesShell.spec.ts` proves viewer refusal, persistence and
-management invalidation. `localPolicyTools.spec.ts` passes real tool execution, exact grants,
-revocation, busy reassignment refusal, restrictive viewer cancellation, stale-answer refusal
-and zero further provider requests (1 passed, 3.6s). Sharing first-use export/import/restart
-passed, but a new repeat-use assertion exposes Prepare staying disabled after save. Root also
-found stale finally callbacks can unlock another operation. These findings remain visible in
-the current review queue, alongside widget backend/boundary mismatch and notes anchor review.
-Read the full current findings in phase9-resume-review.md before accepting any worker output.
-In-flight broad mutation sweeps were stopped; do not mutate the shared checkout during
-another agent's build/tests. No pending changes are staged and state.lock remains unrelated.
+Next: Phase 9C Custom Mode, then Phases 10–12. The standalone customMode.ts contract draft
+is not integrated or accepted. Codex no-tool authoring isolation remains unproven and must
+stay unavailable. Opus reached its session quota (reset reported 07:40 Lisbon); Astra
+continues integration and Luna handles small tasks/reviews. Root alone stages and commits.
+The unrelated state.lock remains untouched. Earlier findings below are historical unless
+explicitly carried into the remaining phase briefs.
 
 Phase 8 acceptance crew (historical): GPT-6-Astra (Codex), low; hard/medium implementation and review: GPT-5.6-Sol,
 medium; easy renderer work: GPT-5.6-Luna, medium. Different-model review was applied

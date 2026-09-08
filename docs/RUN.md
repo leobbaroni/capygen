@@ -467,3 +467,29 @@ automation. This feature installs no Windows service or startup task.
 Offline acceptance: `corepack pnpm exec playwright test tests/e2e/activity.spec.ts` uses a real
 every-minute timer and isolated profiles, with no model tokens. The full acceptance gate is
 typecheck, unit tests, build, then all Playwright tests.
+
+
+## Phase9 local workflows
+
+- Open a live session's header gear to add a credential-free stdio MCP server for its lead
+  agent. Refresh explicitly to start discovery; type `/` to see informational tool names.
+  Editing waits for an idle session. Backend files remain the source for inherited servers.
+- Settings > Members assigns local execution profiles; Settings > Policies edits additional
+  restrictions, previews decisions, revokes grants and displays decision activity. A policy
+  card's restriction link opens its exact rule, or explains that the rule was deleted.
+- Approve lists pending tool requests across sessions and uses the normal answer path.
+- Settings > Sharing prepares a reviewable export and saves HTML or JSON. Import previews
+  remain inert. Received transcripts accept separate local notes; Continue creates a fresh
+  live conversation with quoted reference text, preserving the original artifact.
+
+Offline native regression commands (build first):
+
+```sh
+corepack pnpm build
+corepack pnpm exec playwright test tests/e2e/sessionMcp.spec.ts tests/e2e/sharingShell.spec.ts tests/e2e/localPolicyTools.spec.ts tests/e2e/localPoliciesShell.spec.ts
+```
+
+These fixtures use owned homes, local providers and dummy credentials. Live authenticated
+skips remain separate; they are not evidence of a successful live model run. The workspace
+server fixture requests an OS-assigned loopback port and does not require stopping another
+service on the machine.

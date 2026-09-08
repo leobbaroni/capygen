@@ -120,6 +120,16 @@ export * from "./routing/index.js";
  * not the *connection* shape.
  */
 export * from "./config/index.js";
+export {
+  isSessionScopedServer,
+  mergeReservedServers,
+  sessionOverridesMcp,
+  isSafeServerName,
+  toClaudeMcpServers,
+  toCodexMcpServers,
+  type ClaudeMcpServerRecord,
+  type CodexMcpOverride,
+} from "./config/nativeMcpOverrides.js";
 
 import type { Backend } from "@capygen/shared";
 import { ApiHarness, type ApiHarnessDeps } from "./api/ApiHarness.js";

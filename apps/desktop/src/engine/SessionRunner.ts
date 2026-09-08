@@ -34,7 +34,12 @@ import {
   type McpServerConfig,
   type SubagentRoute,
   type SubagentRouteRequest,
+  type LocalAuthorize,
+  sessionOverridesMcp,
+  toClaudeMcpServers,
+  toCodexMcpServers,
 } from "@capygen/engine";
+import type { AgentToolCatalogue } from "@capygen/shared";
 import {
   newId,
   type Agent,
@@ -172,9 +177,89 @@ export interface HarnessExtras {
   }) => string | null;
   /** Full main-process-only MCP values captured with this harness lifecycle. */
   mcpServerConfigs?: readonly McpServerConfig[];
+  /**
+   * The complete MCP set a native backend must run, when this session's own
+   * configuration changes it. Null when it does not, so an unconfigured session
+   * behaves exactly as it did before and the CLI keeps reading its own files.
+   */
+  resolvedMcpServers?: () => Record<string, Record<string, unknown>> | null;
+  /**
+   * capygen's own restriction check, bound in main to this session, this agent
+   * and this capture's lifecycle token. The engine only ever calls it; it never
+   * sees a rule, a member or a grant.
+   */
+  authorizeLocal?: LocalAuthorize;
+}
+
+/**
+ * What main lends the runner so a turn can be governed by local policy.
+ *
+ * Deliberately four narrow functions rather than the policy service: the runner
+ * knows when a harness is captured and released and when a turn is about to
+ * start, and main knows what any of that is allowed to do. Neither needs the
+ * other's vocabulary.
+ */
+export interface SessionPolicyHooks {
+  /** Record a capture and mint its lifecycle token. */
+  capture: (info: {
+    sessionId: string;
+    agentId: string;
+    projectId: string | null;
+    backend: Backend;
+    readOnly: boolean;
+    codexApprovalPolicy?: string | undefined;
+    declaresDynamicTools?: boolean;
+  }) => string;
+  /** The capture is over: its grants end with it. */
+  release: (sessionId: string, agentId: string) => void;
+  /** The authorizer for one capture, bound in main to values a model cannot supply. */
+  authorizeFor: (bound: {
+    sessionId: string;
+    agentId: string;
+    lifecycleToken: string;
+    /**
+     * The turn a permission card for this agent belongs to, resolved when the
+     * card is raised rather than when the harness is captured.
+     *
+     * Supplied as a closure because the runner is the only thing that knows
+     * which turn is live — and because a delegated child and a widget have no
+     * turn row of their own, so nothing could look one up from their id.
+     */
+    originTurnId: () => string | null;
+  }) => LocalAuthorize;
+  /**
+   * Whether this agent may run at all — the persisted execution subject and any
+   * rule whose boundary this configuration cannot enforce.
+   *
+   * Consulted **before** a harness is built, so a viewer never starts a model.
+   * That is also why it carries its own `preflight` description: at this point
+   * nothing is captured, and a check that could only see captures would refuse
+   * every session that had not run yet. The preflight is what this agent *would*
+   * run under, resolved from current configuration — never a previous capture,
+   * which may describe a configuration the user has since changed.
+   *
+   * It is deliberately not authority for execution: a tool call still has to
+   * present the token its capture minted.
+   */
+  checkDispatch: (
+    sessionId: string,
+    agentId: string | null,
+    preflight: PolicyPreflight,
+  ) => { allowed: true } | { allowed: false; message: string };
+}
+
+/** What an agent would run under, resolved without starting anything. */
+export interface PolicyPreflight {
+  projectId: string | null;
+  readOnly: boolean;
+  backend: Backend;
+  codexApprovalPolicy?: string | undefined;
+  declaresDynamicTools: boolean;
 }
 
 export interface SessionRunnerDeps extends EngineDeps {
+  /** Local policy, when main wired it. Absent means no capygen restrictions. */
+  policy?: SessionPolicyHooks;
   /**
    * Overridden in tests; the default asks `@capygen/engine`'s registry for the
    * harness that matches `agent.backend`, so the composer's backend choice is
@@ -313,6 +398,59 @@ function withDeadline(work: Promise<unknown>, ms: number): Promise<unknown> {
   ]);
 }
 
+
+/**
+ * The MCP servers this agent's own configuration declares.
+ *
+ * Read from the raw config rather than from the resolved list, because a
+ * *disabled* entry is removed by resolution — and a session that switches a
+ * native server off has changed the runtime set just as much as one that adds
+ * a server, so the override has to notice it.
+ */
+function readAgentMcpServers(backendConfig: unknown): McpServerConfig[] {
+  const record = backendConfig as { mcpServers?: unknown } | null | undefined;
+  const servers = record?.mcpServers;
+  if (typeof servers !== "object" || servers === null) return [];
+  return Object.entries(servers as Record<string, unknown>).map(([name, value]) => {
+    const entry = (typeof value === "object" && value !== null
+      ? value
+      : {}) as Record<string, unknown>;
+    return {
+      name,
+      transport: (entry.transport === "http" || entry.transport === "sse"
+        ? entry.transport
+        : "stdio") as McpServerConfig["transport"],
+      ...(typeof entry.command === "string" ? { command: entry.command } : {}),
+      ...(entry.disabled === true ? { disabled: true } : {}),
+      source: "agent" as const,
+    };
+  });
+}
+
+/**
+ * The set for a native backend, with everything it could not carry reported.
+ *
+ * A server that was configured but is not in the runtime set must never pass
+ * silently: the session's own panel would show it as active while nothing was
+ * running it. Each one is named, with why, in the agent's own log line.
+ */
+function nativeMcpSet(
+  backend: "claude" | "codex",
+  servers: readonly McpServerConfig[],
+  agentId: string,
+  log: { warn: (message: string) => void },
+): Record<string, Record<string, unknown>> {
+  const converted = backend === "claude"
+    ? toClaudeMcpServers(servers)
+    : toCodexMcpServers(servers);
+  for (const missing of converted.notApplied) {
+    log.warn(
+      `[engine] ${agentId}: the MCP server "${missing.name}" was not applied because ${missing.reason}`,
+    );
+  }
+  return converted.servers;
+}
+
 export function createSessionRunner(deps: SessionRunnerDeps): Engine {
   const { store, broadcast, log } = deps;
 
@@ -333,16 +471,25 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
           log,
           ...(extras.routeSubagent ? { routeSubagent: extras.routeSubagent } : {}),
           ...(extras.mcpServers ? { mcpServers: extras.mcpServers } : {}),
+          ...(extras.resolvedMcpServers
+            ? { resolvedMcpServers: extras.resolvedMcpServers }
+            : {}),
+          ...(extras.authorizeLocal ? { authorizeLocal: extras.authorizeLocal } : {}),
         },
         codex: {
           log,
+          ...(extras.resolvedMcpServers
+            ? { resolvedMcpServers: extras.resolvedMcpServers }
+            : {}),
           ...(extras.dynamicTools ? { dynamicTools: extras.dynamicTools } : {}),
           ...(extras.storeDynamicToolOutput
             ? { storeDynamicToolOutput: extras.storeDynamicToolOutput }
             : {}),
+          ...(extras.authorizeLocal ? { authorizeLocal: extras.authorizeLocal } : {}),
         },
         api: {
           log,
+          ...(extras.authorizeLocal ? { authorizeLocal: extras.authorizeLocal } : {}),
           ...(deps.keys ? { keys: deps.keys } : {}),
           ...(deps.pools
             ? { acquirePool: (servers) => deps.pools!.acquire(servers) }
@@ -416,6 +563,18 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
    */
   const delegated = new Map<string, Set<Harness>>();
 
+  /** Ephemeral ids for delegated children, so each capture is distinct. */
+  let delegationSequence = 0;
+  /**
+   * The child harness a capture belongs to.
+   *
+   * Correlated by object identity rather than by "the last one created": two
+   * delegations can be in flight at once, and releasing the wrong child's
+   * lifecycle would leave a live child holding grants that had been reported
+   * revoked.
+   */
+  const delegateCaptures = new WeakMap<Harness, { sessionId: string; agentId: string }>();
+
   /**
    * `sessionId:agentId` → the signature of the client-hosted tool set the live
    * harness was built with, recorded alongside its backend session id so a
@@ -466,12 +625,64 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       // so the two cannot describe different runs. It used to build a second
       // one from the parent here, carrying the parent's whole config and its
       // permission mode into another backend.
-      makeHarness: (_routed: { backend: Backend; model: string }, child: HarnessAgent) =>
-        makeHarness(
-          child,
-          // No delegation inside a delegated turn: one hop, not a tree.
-          {},
-        ),
+      makeHarness: (_routed: { backend: Backend; model: string }, child: HarnessAgent) => {
+        // A delegated child is its own run: its own dispatch check, its own
+        // capture, its own lifecycle token and its own authorizer. The parent's
+        // grants and permission mode do not reach it, and neither does the
+        // parent's *permission to run* — a session reassigned to a viewer must
+        // not keep spawning children through a turn that started earlier.
+        const childExtras: HarnessExtras = {};
+        if (!deps.policy) return makeHarness(child, childExtras);
+
+        const childConfig = (child.config as Record<string, unknown> | null | undefined)?.[
+          child.backend
+        ] as { approvalPolicy?: unknown } | undefined;
+        const childFacts: PolicyPreflight = {
+          projectId: session.projectId,
+          readOnly: session.origin !== "live",
+          backend: child.backend,
+          // From the *resolved child* configuration, not the parent's: a Codex
+          // child inherits nothing about how it asks for approval.
+          ...(typeof childConfig?.approvalPolicy === "string"
+            ? { codexApprovalPolicy: childConfig.approvalPolicy }
+            : {}),
+          declaresDynamicTools: false,
+        };
+        const childAgentId = `${agent.id}#delegate-${(delegationSequence += 1)}`;
+        // Checked **before** the capture and before the child's backend is
+        // built, so a refused child costs no model call.
+        const decision = deps.policy.checkDispatch(session.id, childAgentId, childFacts);
+        if (!decision.allowed) throw new Error(decision.message);
+
+        const lifecycleToken = deps.policy.capture({
+          sessionId: session.id,
+          agentId: childAgentId,
+          ...childFacts,
+        });
+        childExtras.authorizeLocal = deps.policy.authorizeFor({
+          sessionId: session.id,
+          agentId: childAgentId,
+          lifecycleToken,
+          // A child has no turn of its own. Its card belongs to the parent's
+          // turn — the one the user is watching — which is the only place it
+          // could be seen and therefore answered.
+          originTurnId: () => active.get(agentKey(session.id, agent.id))?.turnId ?? null,
+        });
+        try {
+          const built = makeHarness(child, childExtras);
+          // Remembered against the harness itself, so `onHarness` can end the
+          // right lifecycle whenever this child is disposed — success, error,
+          // timeout or Stop.
+          delegateCaptures.set(built, { sessionId: session.id, agentId: childAgentId });
+          return built;
+        } catch (error) {
+          // The build failed, so nothing will ever dispose this child and
+          // `onHarness` will never see it. Release here or the capture — and
+          // any grant made against it — would outlive a run that never began.
+          deps.policy.release(session.id, childAgentId);
+          throw error;
+        }
+      },
       // The target backend's own defaults, with the parent's explicit section
       // for that backend on top; the parent's permission mode is never copied.
       resolveTarget: (backend: Backend) => {
@@ -520,6 +731,13 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
         return () => {
           set.delete(child);
           if (set.size === 0) delegated.delete(session.id);
+          // The child is gone: its capture ends with it, so no grant it made
+          // can outlive the run that made it.
+          const capture = delegateCaptures.get(child);
+          if (capture) {
+            delegateCaptures.delete(child);
+            deps.policy?.release(capture.sessionId, capture.agentId);
+          }
         };
       },
       log,
@@ -804,6 +1022,12 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     harnesses.delete(key);
     runtime.delete(key);
     restartPending.delete(key);
+    // The lifecycle ends here whether or not a harness was ever built, so a
+    // grant cannot outlive the capture it was bound to.
+    if (deps.policy) {
+      const separator = key.indexOf(":");
+      deps.policy.release(key.slice(0, separator), key.slice(separator + 1));
+    }
     if (!harness) return;
     // [7-P1] The disposal is **remembered**, not merely started. Building the
     // replacement is what the very next turn does, and a backend whose teardown
@@ -829,6 +1053,33 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     evict(key);
     const agentId = key.slice(key.indexOf(":") + 1);
     broadcast("agent.runtime", { agentId, restartPending: false });
+  }
+
+  /**
+   * What this agent would run under, resolved from current configuration.
+   *
+   * Built from the same `effectiveHarnessAgent` resolution a real capture uses,
+   * so a dispatch decision is made against the configuration that is about to
+   * run rather than against a previous capture or a raw stored row. Nothing is
+   * started: this reads settings, it does not acquire a backend.
+   */
+  function preflightFor(session: Session, agent: Agent): PolicyPreflight {
+    const declaresTools =
+      agent.backend === "codex" && delegationTarget(store, session.id, agent.id) !== null;
+    const resolved = effectiveHarnessAgent(agent);
+    const config = "error" in resolved
+      ? null
+      : ((resolved.agent.config as Record<string, unknown> | null | undefined)?.[agent.backend] as
+        { approvalPolicy?: unknown } | undefined);
+    return {
+      projectId: session.projectId,
+      readOnly: session.origin !== "live",
+      backend: agent.backend,
+      ...(typeof config?.approvalPolicy === "string"
+        ? { codexApprovalPolicy: config.approvalPolicy }
+        : {}),
+      declaresDynamicTools: declaresTools,
+    };
   }
 
   /** What an agent *would* run with, for an agent that has no harness yet. */
@@ -894,6 +1145,17 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       ...(backendConfig !== undefined ? { agentConfig: backendConfig } : {}),
     }) ?? [];
     deps.widgets?.captureSession?.(session.id, agent.id, mcpServerConfigs);
+    // A native backend reads its own configuration files, and so does capygen's
+    // resolver — so the resolved set is handed over only when this session
+    // actually changes it. Handing it over unconditionally would start every
+    // native server twice; never handing it over is what left a session's own
+    // servers out of the runtime entirely.
+    const agentServers = readAgentMcpServers(backendConfig);
+    const nativeBackend = agent.backend === "claude" || agent.backend === "codex"
+      ? agent.backend
+      : null;
+    const overridesMcp = nativeBackend !== null
+      && sessionOverridesMcp(mcpServerConfigs, agentServers);
     if (agent.backend === "api") {
       const turns = store.turns.list(session.id);
       historyWatermarks.set(key, turns[turns.length - 1]?.id ?? null);
@@ -903,7 +1165,52 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     // other than what its factory was told (see `routing/delegate.ts`).
     const extras = harnessExtras(session, agent, harnessAgent);
     extras.mcpServerConfigs = mcpServerConfigs;
-    const harness = makeHarness(harnessAgent, extras);
+    if (overridesMcp && nativeBackend) {
+      // Resolved once, with the rest of the captured options (R24): a server
+      // list that moved between turns is a cache miss on every turn.
+      const forBackend = nativeMcpSet(nativeBackend, nativeBackend === "codex"
+        ? [...mcpServerConfigs, ...agentServers.filter((server) => server.disabled === true)]
+        : mcpServerConfigs, agent.id, log);
+      extras.resolvedMcpServers = () => forBackend;
+    }
+    // The capture, and the authorizer bound to it. Both happen here because
+    // this is the moment main can see what this agent actually runs under: a
+    // later token would describe a configuration nobody captured, and an
+    // authorizer bound anywhere else could be handed a session or agent id by
+    // the model rather than by main.
+    if (deps.policy) {
+      const codexConfig = agent.backend === "codex"
+        ? (backendConfig as { approvalPolicy?: unknown } | undefined)
+        : undefined;
+      const lifecycleToken = deps.policy.capture({
+        sessionId: session.id,
+        agentId: agent.id,
+        projectId: session.projectId,
+        backend: agent.backend,
+        // An imported transcript or a received bundle never dispatches.
+        readOnly: session.origin !== "live",
+        ...(typeof codexConfig?.approvalPolicy === "string"
+          ? { codexApprovalPolicy: codexConfig.approvalPolicy }
+          : {}),
+        declaresDynamicTools: declaresTools,
+      });
+      extras.authorizeLocal = deps.policy.authorizeFor({
+        sessionId: session.id,
+        agentId: agent.id,
+        lifecycleToken,
+        // This agent's own live turn: the map the runner already keeps.
+        originTurnId: () => active.get(key)?.turnId ?? null,
+      });
+    }
+    let harness: Harness;
+    try {
+      harness = makeHarness(harnessAgent, extras);
+    } catch (error) {
+      // Nothing was registered, so nothing will ever evict this key: release
+      // the capture here or its lifecycle outlives a harness that never was.
+      deps.policy?.release(session.id, agent.id);
+      throw error;
+    }
     harnesses.set(key, harness);
     runtime.set(key, harnessAgent);
     declaredToolSignature.set(key, dynamicToolSignature(extras.dynamicTools));
@@ -1295,6 +1602,52 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     }
   }
 
+  /**
+   * The MCP catalogue for one agent, as metadata and nothing else.
+   *
+   * Never a model turn. `initialize` decides only whether a runtime may be
+   * *started* to answer — a user pressing Refresh — and even then the harness
+   * is started and asked, never sent a prompt. Every distinct outcome stays
+   * distinct: no runtime, no catalogue surface, a failure, a cancellation and a
+   * result that arrived after its runtime was replaced are five different
+   * answers, and collapsing any of them would tell the user something untrue.
+   */
+  async function catalogueAgent(
+    sessionId: string,
+    agentId: string,
+    initialize: boolean,
+  ): Promise<AgentToolCatalogue> {
+    const session = store.sessions.get(sessionId);
+    const agent = store.sessions.agent(agentId);
+    if (!session || !agent || agent.sessionId !== sessionId) return { kind: "error" };
+    // A read-only artifact has no runtime and must never acquire one.
+    if (session.origin !== "live") return { kind: "notStarted" };
+
+    const key = agentKey(sessionId, agentId);
+    let harness = harnesses.get(key);
+    if (!harness) {
+      if (!initialize) return { kind: "notStarted" };
+      try {
+        const built = harnessFor(session, agent);
+        harness = built.harness;
+        await built.ready;
+      } catch {
+        return { kind: "error" };
+      }
+    }
+    if (!harness.catalogue) return { kind: "unsupported" };
+
+    try {
+      const answer = await harness.catalogue({ initialize });
+      // The runtime may have been evicted while the query ran; an answer from a
+      // harness that is no longer this agent's is stale, not current.
+      if (harnesses.get(key) !== harness) return { kind: "stale" };
+      return answer as AgentToolCatalogue;
+    } catch {
+      return { kind: "error" };
+    }
+  }
+
   async function consume(turn: ActiveTurn, events: AsyncIterable<EngineEvent>): Promise<void> {
     for await (const event of events) handleEvent(turn, event);
   }
@@ -1333,6 +1686,24 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
       errorBlock(deps, session.id, args.turnId, message);
       finishTurn(deps, session.id, args.turnId, "error", message);
       return Promise.resolve({ status: "error" as TurnStatus });
+    }
+
+    // capygen's own restriction, checked **before** a harness is built.
+    //
+    // The order matters more than it looks: `harnessFor` is what starts a
+    // backend, leases an MCP pool and spends a resume id, so discovering after
+    // it that the session's execution profile is a viewer would already have
+    // run the model. The refusal is written into the transcript like any other,
+    // so a run that did not happen is visible rather than silent.
+    if (deps.policy) {
+      const decision = deps.policy.checkDispatch(
+        session.id, agent.id, preflightFor(session, agent));
+      if (!decision.allowed) {
+        log.info(`[engine] local policy refused a turn for ${agentKey(session.id, agent.id)}`);
+        errorBlock(deps, session.id, args.turnId, decision.message);
+        finishTurn(deps, session.id, args.turnId, "error", "refused by local policy");
+        return Promise.resolve({ status: "error" as TurnStatus });
+      }
     }
 
     // Anything that goes wrong before the stream exists must still close the
@@ -1497,6 +1868,8 @@ export function createSessionRunner(deps: SessionRunnerDeps): Engine {
     },
 
     continueChain: (sessionId) => roundTable.continueChain(sessionId),
+
+    catalogueAgent,
 
     hasPendingChain: (sessionId) => roundTable.hasPending(sessionId),
 

@@ -1,32 +1,17 @@
 # Phase 9 resume review — 2026-09-08
 
-Open findings, not phase acceptance. Astra reviewed the completed worker outputs after
-resuming. The initial expired-login blocker was resolved by the user; Opus work has resumed.
+Phase 9 accepted after independent review and the full Windows gate on 2026-09-08.
+Typecheck/build passed; 2749 unit tests passed, 4 skipped; 52 native tests passed,
+12 live-backend tests explicitly skipped. See PROJECT_LOG.md for evidence and prior failures.
 
 ## Current review queue
 
-The sections below retain chronological findings; some are already corrected. Current work:
-
-- Engine accepted/pushed as `96f4cf9`: 602 tests passed, four explicit skips, types clean,
-  eight native Claude cases proven after environment/deadline cleanup. A separate Windows
-  8.3-path containment false positive is now assigned to Opus.
-- Desktop: typed originating-turn permission events and authority rechecks passed the real
-  API tool test, including exact grants, revocation, busy reassignment refusal and restrictive
-  viewer cancellation with zero further provider requests. Claude capability reporting and
-  widget ownership/lifecycle remain under review. NEW: widget captures retain Claude/Codex
-  backend but request api-tool; LocalPolicyService.capabilityProblem requires backend equality,
-  so marking api-tool available alone cannot authorize those widget calls. Resolve explicitly.
-- Sharing/renderer: native Prepare/save/import/restart first-use flow passed. NEW native
-  repeat-use regression: after successful save, useStagedShare.exclusive increments generation
-  before finally checks it, leaving busy true and Prepare disabled (resume-sharing-repeat.log).
-  All stale-operation finally blocks also unconditionally clear running, potentially unlocking
-  a newer generation's in-flight operation. Give running/busy ownership to the operation.
-  Approve aggregation and shared fresh continuation are being implemented.
-- Notes: complete CRUD/reply/export plumbing reported; final root review still needs native
-  proof. Live block anchors currently become session-level on export; preserve a safe projected
-  entry mapping where available and disclose any deliberately dropped anchors/count limits.
-- Still required: session MCP editor/Composer catalogue integration, native acceptance evidence
-  and the full phase gate. Phase 9 and later phases remain unchecked.
+All Phase 9 high/medium findings below are resolved. Audit site snapshots, sharing comment
+redaction, MCP field preservation and explicit disable have regression coverage. Codex
+refresh starts transient probes but preserves one persistent server and cleans up on dispose.
+The native workspace fixture now requests an ephemeral port only in its owned project copy.
+Remaining work belongs to Phase 9C and later. Codex no-tool authoring is still unproven.
+Chronological findings below are retained as review history, not current blockers.
 
 Do not repeat already-passing checks without a change or unresolved concern, and do not run
 mutation sweeps in the shared working tree while another agent is building it.
@@ -243,3 +228,26 @@ provider credentials. Keep real model requests routed to the owned endpoint and 
 nonessential CLI network traffic where the pinned CLI supports it. No request bodies or
 credential values belong in evidence. The sentinel/control precedence result is independent
 of this reporting correction.
+
+## Native session MCP override regression (Astra)
+
+`tests/e2e/sessionMcp.spec.ts` adds a credential-free stdio server to the agent's Claude config
+and refreshes the captured runtime through real main/preload/CLI. It currently returns an
+empty successful catalogue rather than the configured fixture tool (21.5s red; log
+`e2e-out/session-mcp-native.log`). No model prompt is sent by the test.
+
+SessionRunner resolves mcpServerConfigs and passes them to widgets and API, but Claude's
+factory receives only extras.mcpServers (the delegate-task server). ClaudeHarness's typed
+config reader does not apply the agent mcpServers map. Codex also needs explicit pinned
+runtime configuration wiring; do not assume persistence means native activation. The session
+MCP editor task must include actual backend activation and preserve inherited backend-owned
+servers plus disabled-name shadowing without a duplicate native MCP process. Root owns the
+native regression and will extend it through the editor/slash menu after that UI lands.
+
+### Attribution navigation still needs exact targeting
+
+PermissionCard currently labels its generic `/settings/policies` link “Edit this restriction”
+but does not encode the rule/scope or focus its editor. Approve has the same generic link.
+Wire a bounded rule identifier/scope into navigation and focus the actual owning rule after
+loading (or show an explicit deleted/unavailable rule state); a generic settings landing does
+not meet ADR-0007's owning-rule navigation requirement. Keep it display-only, never authority.

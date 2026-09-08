@@ -29,6 +29,15 @@ export interface SlashMenuProps {
   commands: SlashCommand[];
   /** Session-effective MCP tools are discovery-only rows, never commands. */
   mcpTools?: McpToolMenuEntry[];
+  /**
+   * Why there are no tool rows, when that needs saying.
+   *
+   * A backend that cannot report its tools, one whose agent has not started,
+   * and one that genuinely has none are three different facts. Showing an empty
+   * section for all three tells a person nothing, so the reason is rendered in
+   * the section instead.
+   */
+  mcpStatus?: string | null;
   highlightedIndex: number;
   onSelect: (command: SlashCommand) => void;
   onHover: (index: number) => void;
@@ -39,8 +48,10 @@ export interface McpToolMenuEntry {
   name: string;
 }
 
-export function SlashMenu({ commands, mcpTools = [], highlightedIndex, onSelect, onHover }: SlashMenuProps) {
-  if (commands.length === 0 && mcpTools.length === 0) {
+export function SlashMenu({
+  commands, mcpTools = [], mcpStatus = null, highlightedIndex, onSelect, onHover,
+}: SlashMenuProps) {
+  if (commands.length === 0 && mcpTools.length === 0 && mcpStatus === null) {
     return (
       <div
         data-testid="slash-menu"
@@ -115,10 +126,15 @@ export function SlashMenu({ commands, mcpTools = [], highlightedIndex, onSelect,
           </ul>
         </li>
       ))}
-      {mcpTools.length > 0 ? (
+      {mcpTools.length > 0 || mcpStatus !== null ? (
         <li data-testid="slash-menu-mcp-section">
           <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium text-muted-foreground">MCP tools</div>
           <div className="px-2 pb-1 text-xs text-muted-foreground">Called by the agent</div>
+          {mcpStatus !== null ? (
+            <div data-testid="slash-menu-mcp-status" className="px-2 pb-1.5 text-xs text-muted-foreground">
+              {mcpStatus}
+            </div>
+          ) : null}
           <ul>
             {mcpTools.map((tool) => (
               <li key={`${tool.serverName}:${tool.name}`}>

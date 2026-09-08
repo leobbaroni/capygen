@@ -9,6 +9,7 @@ import type { ModelCatalogue } from "@capygen/shared";
 import { openDatabase, type OpenDatabaseOptions } from "./migrate.js";
 import type { Database } from "./driver.js";
 import { AutomationsRepo, InboxRepo } from "./persistence.js";
+import { LocalNotesRepo } from "./localNotes.js";
 import {
   LocalMembersRepo,
   LocalPolicyAuditRepo,
@@ -41,6 +42,7 @@ export * from "./migrate.js";
 export * from "./repos.js";
 export * from "./persistence.js";
 export * from "./localPolicies.js";
+export * from "./localNotes.js";
 
 /** Every repository over one connection. */
 export interface CapygenStore {
@@ -95,6 +97,9 @@ export interface CapygenStore {
   sessionMembers: SessionMembersRepo;
   localPolicyRules: LocalPolicyRulesRepo;
   localPolicyAudit: LocalPolicyAuditRepo;
+  /** Locally authored notes on any session (migration 0011, P15) — kept apart
+   *  from a received bundle's own comments so an artifact stays immutable. */
+  localNotes: LocalNotesRepo;
   /** Migrations applied by this open, and the backup taken beforehand. */
   migration: { applied: string[]; backupFile: string | null };
   /** Turns/sessions this open had to close because the last run did not. */
@@ -154,6 +159,7 @@ export function openStore(file: string, options: OpenDatabaseOptions = {}): Capy
     sessionMembers: new SessionMembersRepo(db, localMembers),
     localPolicyRules: new LocalPolicyRulesRepo(db),
     localPolicyAudit: new LocalPolicyAuditRepo(db),
+    localNotes: new LocalNotesRepo(db),
     migration: result,
     close: () => db.close(),
   };

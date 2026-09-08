@@ -2399,3 +2399,131 @@ The filename filter also selected codexDynamicTools.test.ts; counts above are th
 Opus reports full engine 613 passed / 4 skipped and clean typecheck. Root's native API fixture
 now supplies the original absolute temp alias path for the next integrated app run. Root also
 renamed the probe's legacy allow-case wording; production neutral behavior is unchanged.
+
+## 2026-09-08 — integrated UI correction and new redaction tripwire
+
+After the repeat-use fix, root rebuilt and ran actual main/preload/renderer/native tests:
+```text
+$ corepack pnpm exec playwright test tests/e2e/localPoliciesShell.spec.ts tests/e2e/localPolicyTools.spec.ts tests/e2e/sharingShell.spec.ts
+  3 passed (7.9s)
+```
+This includes Approve's actual session-grant button, absolute alias file execution, viewer
+cancellation/no further provider request, local notes/replies/re-export, new live continuation,
+source immutability, and repeat Prepare after Save. Luna reviewed root fixture code; the MCP
+fixture is still red and was not represented as a passing capability proof.
+
+A new fake-token note assertion exposed a separate live export defect:
+```text
+$ corepack pnpm exec playwright test tests/e2e/sharingShell.spec.ts
+Error: expect(received).not.toContain(expected)
+Expected substring: not "sk-ant-fixtureOnly1234567890"
+Received string: "Example token sk-ant-fixtureOnly1234567890"
+1 failed (3.6s)
+```
+The string is a test fixture, not a credential. Live comments were appended after sanitizer
+projection. Fix assigned alongside correct source-to-entry truncation mapping; no export task
+acceptance until this regression passes. Session MCP native activation is separately red and
+assigned; its fixture uses owned homes and an environment allowlist without credentials.
+
+### Astra native follow-through: notes and MCP discovery
+
+Live-note fake-token regression corrected: projector now sanitizes comments and preserves
+entry anchors; native sharing continuation/re-import/restart/repeat-save remains green.
+`e2e-out/live-note-corrected-native.log`: `1 passed (5.9s)`.
+
+Claude session-owned MCP discovery now finds the configured fixture, starts its process once
+for concurrent refreshes, and creates no session turn. A diagnostic red isolated one request
+to `/api/hello` (CLI startup); the assertion now rejects every other provider endpoint.
+Owned homes and dummy credentials only. `e2e-out/session-mcp-discovery-native.log` tail:
+
+```text
+ok 1 tests\e2e\sessionMcp.spec.ts:15:5 > session MCP discovery reuses the native runtime without a model turn (2.6s)
+1 passed (3.5s)
+```
+
+This does not accept Codex override suppression, renderer editor wiring, or Phase 9.
+
+Native MCP acceptance expanded to the actual editor and slash menu (owned stdio fixture):
+add through UI, saved command/args and effort preserved, one native server process, explicit
+refresh, tool visible as an informational row, physical click leaves composer unchanged,
+no model endpoint or session turn. Initial test mistakenly used Playwright activation on an
+aria-disabled row; corrected to a physical pointer click after asserting the disabled state.
+`e2e-out/session-mcp-editor-native.log` tail:
+
+```text
+ok 1 tests\e2e\sessionMcp.spec.ts:15:5 > session MCP editor discovers tools in the slash menu without a model turn (4.8s)
+1 passed (6.5s)
+```
+
+Editor preservation of unrelated existing server fields and Codex disable behavior still
+under worker correction/review; this native fixture covers Claude only.
+
+Astra full-gate attempt stopped at unit tests: typecheck passed, 2728 tests passed,
+4 skipped, 1 failed in the new pending-widget audit fixture (it had omitted its
+widget execution-site claim and therefore never reached the ask). Worker corrected
+that fixture and is finishing admission-snapshot review. Build/e2e did not run in
+that chained attempt. Log: `e2e-out/phase9-full-gate.log`.
+
+Added the same real MCP editor/discovery fixture for Codex. It finds fixture_echo
+but observes three server starts versus one expected; this is a native red and
+not accepted as process reuse. `e2e-out/session-mcp-codex-editor-native.log`:
+`1 failed`, test duration16.7s. Runtime worker is tracing actual process lifetimes.
+
+Astra final audit review corrected two further attribution cases: each authorize invocation
+clones request metadata before recording its site, and an unmatched lifecycle records unknown.
+Live authority is still rechecked after waits. Independent check `policy-audit-final-astra.log`:
+`Test Files 3 passed (3)` / `Tests21 passed (21)` / `Duration1.66s`.
+Renderer final review (MCP-only menus, key-specific loading, policy links and site display):
+`phase9-renderer-final-astra.log`: `Test Files6 passed (6)` / `Tests139 passed (139)` / `Duration10.05s`.
+
+Codex start-count assumption corrected using a native plain-config control. The pinned
+app-server starts transient discovery probes; process liveness shows one persistent child
+after each query and none after dispose. App session overrides have the same behavior. Root
+now tests persistent PID stability across explicit refresh and zero survivors after app close
+for BOTH Claude and Codex; Claude additionally retains the one-total-start assertion.
+`session-mcp-lifetimes-accepted-native.log` tail:
+
+```text
+ok 1 tests\e2e\sessionMcp.spec.ts:16:5 > claude session MCP editor discovers tools in the slash menu without a model turn (3.8s)
+ok 2 tests\e2e\sessionMcp.spec.ts:16:5 > codex session MCP editor discovers tools in the slash menu without a model turn (1.9s)
+2 passed (6.6s)
+```
+
+The preceding whole native attempt:49 passed,12 live skips,2 failures,1 did not run(4.4m).
+One failure was the above disproven total-start assumption; the other is workspace dev-server
+title mismatch. Worker confirmed an existing localhost:5199 service returns the capygen title;
+fixing the fixture collision without touching that service is underway.
+
+Final native override proof: inherited fixture present in owned backend files, UI add/refresh,
+then disable/restart refuses inherited tools and starts no further process. Both backends
+pass, including Claude's non-strict default case. Root fixed lost Codex disabled entries
+(after ordinary resolution filters them out), strict Claude override precedence and fixed
+resolver error text. Luna independently reviewed those bounded code/test changes.
+`mcp-override-final-astra.log`:48 passed(3 files),3.02s.
+`session-mcp-disable-final-native.log`:2 passed(7.9s).
+
+Luna's ephemeral workspace fixture passed7 native tests(9.1s). Full unit gate then caught
+three detector tests that also consume its shared package fixture. Root retained the shared
+explicit-port package example and changes only the owned e2e copy's script; Luna reviewed
+that correction. The stopped attempt passed typecheck and2746 tests, skipped4, failed3
+(workspaceDetectors); build/native did not run in that chain. The final gate is running
+against the corrected stable sources. No phase checkbox yet.
+
+## Phase 9 accepted — 2026-09-08
+
+Astra accepted integrated desktop policy enforcement, safe sharing/local notes, members and
+approvals, and native MCP editor/catalogue/disable after Opus/Luna reviews and fixes.
+The final Windows command was `corepack pnpm typecheck && corepack pnpm test &&
+corepack pnpm build && corepack pnpm exec playwright test` (exit 0). Output tails:
+
+```text
+Test Files  201 passed (201)
+Tests       2749 passed | 4 skipped (2753)
+[build completed successfully]
+12 skipped
+52 passed (1.8m)
+```
+
+Full evidence: e2e-out/phase9-acceptance-final-gate.log. Skipped live tests are not passes
+and remain explicit Phase 11 work. Phase 9C contract/probe drafts are excluded from this
+acceptance. No paid/live model prompts were used. The app is not yet complete.

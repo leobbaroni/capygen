@@ -25,7 +25,7 @@
  * reachable through the workspace's own toolbar/tab strip
  * (`panes/agents/AgentsWorkspacePane.tsx`).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ArrowDownIcon, SettingsIcon, UsersIcon, XIcon } from "lucide-react";
 import type { SessionMode } from "@capygen/shared";
@@ -43,7 +43,14 @@ import { useMascotState } from "@/hooks/useMascotState";
 import { blocksOfTurn, isBusy, useAppStore } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { WorkspaceHost } from "@/workspace/WorkspaceHost";
+import {
+  catalogueStatusText,
+  catalogueToolRows,
+  useAgentCatalogue,
+} from "@/components/useAgentCatalogue";
+import type { SessionMcpServersPatch } from "@/components/SessionMcpPanel";
 import { ImportedTranscript } from "@/components/ImportedTranscript";
+import { SharedTranscript } from "@/components/SharedTranscript";
 
 export function ChatPage() {
   const { sessionId = "" } = useParams();
@@ -56,6 +63,7 @@ export function ChatPage() {
   const continueChat = useAppStore((s) => s.continueChat);
   const setMode = useAppStore((s) => s.setMode);
   const updateSessionSettings = useAppStore((s) => s.updateSessionSettings);
+  const updateAgent = useAppStore((s) => s.updateAgent);
   const turns = useAppStore((s) => s.turns);
   const busy = useAppStore(isBusy);
   const session = useAppStore((s) => s.sessions.find((x) => x.id === sessionId));
@@ -68,6 +76,54 @@ export function ChatPage() {
   // agent — round-table's own per-message @-mention routing is separate
   // (the composer's `@mention` menu below), not a second backend picker.
   const leadAgent = agents.find((a) => a.id === session?.leadAgentId);
+  /**
+   * The lead agent's MCP tools, for the composer's informational menu.
+   *
+   * Keyed on the agent, so switching session or lead re-reads rather than
+   * showing the previous one's servers. Read-only and `initialize: false`:
+   * opening the slash menu must not start a backend's servers, and nothing
+   * here reaches a prompt or model context.
+   */
+  const catalogue = useAgentCatalogue(sessionId ?? null, leadAgent?.id ?? null);
+  const mcpTools = useMemo(() => catalogueToolRows(catalogue.catalogue), [catalogue.catalogue]);
+  const mcpStatus = catalogueStatusText(catalogue.catalogue);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+
+  /**
+   * The session-MCP section of the settings sheet, for the lead agent.
+   *
+   * The sheet takes the panel's props whole and owns only layout; the IPC is
+   * this page's, which is why the write goes through `updateAgent` here. The
+   * server map is merged into the agent's *own* backend section rather than
+   * replacing `config`, so editing servers cannot drop the model, permission
+   * mode or anything else the agent already carries.
+   *
+   * Editing waits for quiescence: a running turn already holds the harness the
+   * change would reconfigure, and main refuses the write anyway — saying so up
+   * front beats a refusal after the fact.
+   */
+  const mcpPanel = useMemo(() => {
+    if (!leadAgent) return null;
+    return {
+      agent: leadAgent,
+      catalogue: catalogue.catalogue,
+      refreshing: catalogue.loading,
+      // Explicit refresh is the only thing allowed to start servers.
+      onRefresh: () => void catalogue.refresh({ initialize: true }),
+      disabledReason: busy ? "Finish or stop the current turn before editing servers." : null,
+      error: mcpError,
+      onChange: (servers: SessionMcpServersPatch) => {
+        setMcpError(null);
+        const config = (leadAgent.config ?? {}) as Record<string, unknown>;
+        const section = (config[leadAgent.backend] ?? {}) as Record<string, unknown>;
+        void updateAgent(leadAgent.id, {
+          config: { ...config, [leadAgent.backend]: { ...section, mcpServers: servers } },
+        } as never).catch((cause: unknown) => {
+          setMcpError(cause instanceof Error ? cause.message : String(cause));
+        });
+      },
+    };
+  }, [leadAgent, catalogue.catalogue, catalogue.loading, catalogue.refresh, busy, mcpError, updateAgent]);
   const queuedMessages = useAppStore((s) => s.queuedMessages);
   const error = useAppStore((s) => s.error);
   // Subscribing to the map (not a derived array) keeps the component re-rendering
@@ -132,7 +188,15 @@ export function ChatPage() {
   const canSwitchModel = leadAgent ? leadAgent.backend !== "api" : false;
 
   if (!session) return <div role="status" className="p-8">Loading session…</div>;
-  if (session.origin === "import") return <ImportedTranscript key={sessionId} sessionId={sessionId} />;
+  // The reader is chosen by `artifactKind`, not by `origin`: a native
+  // transcript and a received bundle are sibling artifacts stored in different
+  // tables, and both carry `origin: "import"`. `artifactKind` is absent only in
+  // a legacy snapshot, where "import" has always meant a native transcript.
+  if (session.origin === "import") {
+    return session.artifactKind === "shared-bundle"
+      ? <SharedTranscript key={sessionId} sessionId={sessionId} />
+      : <ImportedTranscript key={sessionId} sessionId={sessionId} />;
+  }
 
   return (
     // `min-w-0` on both: a flex item's default minimum width is its content,
@@ -184,6 +248,7 @@ export function ChatPage() {
                 onOpenChange={setSettingsOpen}
                 settings={session.settings}
                 onChange={(patch) => void updateSessionSettings(sessionId, patch)}
+                mcp={mcpPanel}
               />
             ) : null}
           </div>
@@ -288,6 +353,8 @@ export function ChatPage() {
               testId="chat-composer"
               placeholder={session?.mode === "round-table" ? "Reply, or @mention an agent…" : "Reply…"}
               commands={commands}
+              mcpTools={mcpTools}
+              mcpStatus={mcpStatus}
               harnesses={harnesses}
               agent={leadAgent ? { backend: leadAgent.backend, model: leadAgent.model } : null}
               // This agent exists, so its backend is fixed for its lifetime.

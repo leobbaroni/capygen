@@ -84,3 +84,32 @@ export function preflightShare(bundle: ShareBundle, limits: SharePreflightLimits
     html: { bytes: html.bytes, withinLimit: html.ok, limit: htmlLimit },
   };
 }
+export {
+  ShareStagingError,
+  ShareStagingService,
+  SHARE_STAGING_DEFAULT_MAX_BYTES,
+  SHARE_STAGING_DEFAULT_MAX_CONCURRENT,
+  SHARE_STAGING_DEFAULT_TTL_MS,
+  SHARE_STAGING_PROVISIONAL_BYTES,
+  type ShareStagingDeps,
+  type ShareStagingErrorCode,
+  type ShareStagingKind,
+  type StagedShare,
+} from "./staging.js";
+export { planShareExport, type ShareExportOrigin, type ShareExportPlan } from "./exportSource.js";
+export { buildEntriesBundle, buildLiveBundle, type LiveBlockRow, type ShareExportRequest } from "./buildBundle.js";
+export { decodeShareFile, type DecodeShareFileInput, type DecodedShareFile } from "./decode.js";
+export { createShareWorkerHost, type ShareWorkerHost } from "./workerHost.js";
+export {
+  SHARE_WORKER_MAX_JOBS,
+  SHARE_WORKER_PROTOCOL_VERSION,
+  type ShareJobPreview,
+  type ShareWorkerRequest,
+  type ShareWorkerResponse,
+} from "./workerHostTypes.js";
+export {
+  ShareWorkerClient,
+  SHARE_WORKER_DEFAULT_TIMEOUT_MS,
+  type ShareWorkerClientOptions,
+  type ShareWorkerProcessLike,
+} from "./workerClient.js";

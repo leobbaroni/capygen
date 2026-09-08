@@ -35,6 +35,33 @@ export const PolicyBoundarySchema = z.enum([
 ]);
 export type PolicyBoundary = z.infer<typeof PolicyBoundarySchema>;
 
+/** A link from a permission card to its owning restriction; never execution authority. */
+/**
+ * Where a call capygen asked about was actually intercepted.
+ *
+ * Display metadata, not authority: it says whether the interception was the
+ * backend's own boundary or capygen's app host, so a card can be honest about
+ * why it appeared. Optional, because a card raised before this existed — or by
+ * an ordinary backend boundary — carries nothing extra.
+ */
+export const PolicyExecutionSiteSchema = z.enum(["backend", "widget-host"]);
+export type PolicyExecutionSite = z.infer<typeof PolicyExecutionSiteSchema>;
+
+export const LocalPolicyAttributionSchema = z.object({
+  ruleId: id.nullable(),
+  scope: LocalPolicyScopeSchema.nullable(),
+  boundary: PolicyBoundarySchema,
+  /** Present when the call ran somewhere other than the backend's own boundary. */
+  executionSite: PolicyExecutionSiteSchema.optional(),
+}).strict();
+export type LocalPolicyAttribution = z.infer<typeof LocalPolicyAttributionSchema>;
+
+/** Renderer invalidation only; no rule payload, tool input or private grant identity. */
+export const LocalPolicyChangedSchema = z.object({
+  area: z.enum(["members", "subjects", "rules", "grants", "runtime"]),
+  sessionId: id.nullable().default(null),
+}).strict();
+
 /** Backend is derived, so a rule cannot name a contradictory backend/boundary. */
 export function policyBoundaryBackend(boundary: PolicyBoundary): Backend {
   switch (boundary) {

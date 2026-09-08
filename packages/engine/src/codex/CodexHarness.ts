@@ -174,6 +174,26 @@ export interface CodexHarnessDeps {
   /** capygen's own restrictions (ADR-0007) at the boundaries Codex offers. */
   authorizeLocal?: LocalAuthorize;
   /**
+   * The session's own MCP entries, **merged** into what `config.toml` already
+   * gives this thread.
+   *
+   * Passed as `thread/start`'s `config.mcp_servers`, the same table the user's
+   * file uses (app-server `ThreadStartParams.config`) — so an override is
+   * expressed in Codex's own vocabulary, without capygen writing to the user's
+   * file or opening a second MCP client.
+   *
+   * Additive, not authoritative. Probed against the pinned binary: a thread
+   * that passes its own config still sees the home's servers
+   * (`hardened-excludes-inherited-mcp`, refuted, `e2e-out/9c-isolation.json`),
+   * so omitting a server here does **not** suppress it. Suppression is
+   * attempted through the table's own `enabled = false` key instead, which is
+   * proven for `config.toml` and unproven for this channel.
+   */
+  resolvedMcpServers?: () =>
+    | Promise<Record<string, Record<string, unknown>> | null>
+    | Record<string, Record<string, unknown>>
+    | null;
+  /**
    * Persist a dynamic tool's **full** output and return an opaque reference the
    * transcript can retrieve it by (SPEC R25).
    *
@@ -682,6 +702,17 @@ export class CodexHarness implements Harness {
     const approvalPolicy = config.approvalPolicy ?? "on-request";
     const sandbox = config.sandbox ?? "workspace-write";
     const reviewer: CodexApprovalsReviewer = "user";
+    // Resolved before the params object so the thread is started with it: a
+    // server table that moved after the thread began would not apply to it.
+    let mcpOverride: Record<string, Record<string, unknown>> | null = null;
+    try {
+      mcpOverride = (await this.deps.resolvedMcpServers?.()) ?? null;
+    } catch (err) {
+      // Fails closed: starting the thread anyway would silently run it without
+      // the session's own entries, and without whatever disable it asked for.
+      this.log.warn("[codex] the session MCP server list could not be resolved");
+      throw new Error("The session MCP server list could not be resolved.");
+    }
     const base = {
       cwd: session.projectPath,
       approvalPolicy,
@@ -696,6 +727,9 @@ export class CodexHarness implements Harness {
       // `ThreadStartParams`), i.e. set once for the thread — nothing per-turn
       // may go in it, or every turn would re-write the thread's prefix.
       ...(agent.promptAddition ? { developerInstructions: agent.promptAddition } : {}),
+      // Merged into the thread's own table. `mcp_servers` is the file's own
+      // key, so this reads exactly the way the user's `config.toml` does.
+      ...(mcpOverride ? { config: { mcp_servers: mcpOverride } } : {}),
     };
 
     const tools = this.validatedDynamicTools();

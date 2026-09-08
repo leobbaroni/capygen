@@ -11,6 +11,7 @@ import type { KeyProvider, McpServerConfig } from "@capygen/engine";
 import type {
   AgentDescribe,
   AgentRuntimeInfo,
+  AgentToolCatalogue,
   EventChannel,
   EventInput,
   SlashCommand,
@@ -163,6 +164,8 @@ export interface Engine {
    * effective config object, environment, headers or keys.
    */
   agentRuntime?(agentId: string): AgentRuntimeInfo | null;
+  /** Metadata from this agent's captured runtime; initialization never sends a prompt. */
+  catalogueAgent?(sessionId: string, agentId: string, initialize: boolean): Promise<AgentToolCatalogue>;
   /**
    * Release every backend. Resolves only once each harness is down *and* the
    * final status of any turn it was running has been written, so a caller can

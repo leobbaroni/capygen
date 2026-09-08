@@ -32,6 +32,7 @@
  * Electron is injected, so all of this is unit-testable without a running app.
  */
 import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { InvokeArgs, InvokeResult } from "@capygen/shared";
 import {
   WidgetHostBridge,
@@ -119,6 +120,31 @@ export interface WidgetHostDeps {
   /** Called when a widget reports a new size, so the block row can keep it. */
   onSize?: (blockId: string, size: { width?: number; height?: number }) => void;
   maxHtmlBytes?: number;
+  /**
+   * capygen's own restriction on a widget's tool call.
+   *
+   * A widget is a page the *server* wrote, running in the app's window, and its
+   * visibility grants it nothing: every call it makes is checked against the
+   * same one policy service a model's call goes through, bound to the session
+   * and agent the widget was opened for and to the MCP connection it will
+   * actually run on. The token is derived from the live connection object, so a
+   * replaced or disposed connection cannot satisfy a grant made against the one
+   * it replaced — and it is opaque, so nothing about the server's command,
+   * environment or URL is exposed through it.
+   */
+  authorizeWidgetCall?: (request: {
+    sessionId: string;
+    agentId: string;
+    connectionToken: string;
+    /** The turn the widget's own block belongs to, so a card can be answered. */
+    originTurnId: string | null;
+    toolName: string;
+    input: unknown;
+  }) => Promise<{ allowed: boolean; approvedInput?: unknown; message?: string | null }>;
+  /** The turn a block belongs to; main reads the row, this file parses no ids. */
+  turnOfBlock?: (blockId: string) => string | null;
+  /** A connection went away; anything granted against it dies with it. */
+  onConnectionEnded?: (connectionToken: string) => void;
 }
 
 /** What the session runner knows about a finished MCP tool call. */
@@ -205,6 +231,33 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
   const snapshots = new Map<string, { key: string; servers: readonly McpServerConfig[] }>();
   /** blockId → the project whose bridge owns it. */
   const owner = new Map<string, string>();
+  /**
+   * blockId → who opened this widget, and on which connection.
+   *
+   * The host key alone is a *server list* identity shared by every agent with
+   * the same configuration, so it cannot say which agent a call belongs to.
+   * This is recorded when the widget opens, because that is the only moment the
+   * originating agent is known.
+   */
+  const origin = new Map<string, { sessionId: string; agentId: string; host: ProjectHost }>();
+  /**
+   * The opaque identity of one live connection.
+   *
+   * Keyed by the host *object*, so it follows the connection instance rather
+   * than its name or its server list: two hosts built from identical
+   * configuration are still two connections, and a restarted one is not the
+   * one a grant was made against.
+   */
+  const connectionTokens = new WeakMap<ProjectHost, string>();
+
+  function connectionToken(host: ProjectHost): string {
+    let token = connectionTokens.get(host);
+    if (!token) {
+      token = `conn-${randomUUID()}`;
+      connectionTokens.set(host, token);
+    }
+    return token;
+  }
   /** widget host label → blockId, so `serve` needs no scan. */
   const byHost = new Map<string, string>();
 
@@ -325,6 +378,9 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
         : await hostFor(input.sessionId, input.agentId);
       settled.set(key, host);
       owner.set(input.blockId, key);
+      // Recorded here and nowhere else: after this, the renderer can name a
+      // block but never the agent or the connection behind it.
+      origin.set(input.blockId, { sessionId: input.sessionId, agentId: input.agentId, host });
       byHost.set(widgetHost(input.blockId), input.blockId);
       return host.bridge.open(input);
     },
@@ -338,6 +394,37 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
       // bridge — cannot borrow another session's server connection.
       if (state.sessionId !== args.sessionId) {
         throw new Error(`widget.callTool: ${args.blockId} does not belong to ${args.sessionId}`);
+      }
+      // The host's own restrictions are checked **first**, so a user is never
+      // shown a card for a call this widget could not make anyway: a widget may
+      // only reach its own server, and never a tool the server marked
+      // `visibility: ["model"]`. `bridge.callTool` re-checks both and remains
+      // the enforcing authority — this only decides whether asking is worth it.
+      const denial = await nativeRefusal(host, state.serverName, args.name);
+      if (denial) throw new Error(denial);
+
+      if (deps.authorizeWidgetCall) {
+        const from = origin.get(args.blockId);
+        if (!from || from.host !== host) {
+          // The connection this widget opened on is gone or was replaced, so
+          // there is nothing left that its grants could apply to.
+          throw new Error(`widget.callTool: ${args.blockId} has no live connection`);
+        }
+        const verdict = await deps.authorizeWidgetCall({
+          sessionId: from.sessionId,
+          agentId: from.agentId,
+          connectionToken: connectionToken(host),
+          originTurnId: deps.turnOfBlock?.(args.blockId) ?? null,
+          toolName: args.name,
+          input: args.args,
+        });
+        if (!verdict.allowed) {
+          throw new Error(verdict.message ?? "capygen's local policy refused this call.");
+        }
+        // The approved input executes, not the widget's original object.
+        return host.bridge.callTool(
+          args.blockId, args.name, verdict.approvedInput as never,
+        ) as Promise<unknown>;
       }
       return host.bridge.callTool(args.blockId, args.name, args.args) as Promise<unknown>;
     },
@@ -412,12 +499,16 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
       hosts.clear();
       settled.clear();
       owner.clear();
+      origin.clear();
       snapshots.clear();
       byHost.clear();
       await Promise.all(
         pending.map(async (promise) => {
           try {
             const host = await promise;
+            // The connection is going: everything granted against it goes too.
+            const ending = connectionTokens.get(host);
+            if (ending) deps.onConnectionEnded?.(ending);
             host.bridge.dispose();
             await host.close();
           } catch {
@@ -427,6 +518,36 @@ export function createWidgetHost(deps: WidgetHostDeps): WidgetHostHandlers {
       );
     },
   };
+}
+
+/**
+ * Why the host itself would refuse this call, or null.
+ *
+ * A pre-check, not a second enforcement point: `WidgetHostBridge.callTool`
+ * performs the same two tests and is what actually stops the call. This runs
+ * earlier only so a local `ask` rule cannot put a card in front of the user for
+ * a call the host was always going to reject. A listing that cannot be fetched
+ * answers null — exactly as the bridge does, since the server is the final
+ * authority — and the bridge still refuses if it must.
+ */
+async function nativeRefusal(
+  host: ProjectHost,
+  serverName: string,
+  toolName: string,
+): Promise<string | null> {
+  try {
+    const tools = await host.access.listTools(serverName);
+    const tool = tools.find((candidate) => candidate.name === toolName);
+    if (!tool) return `${serverName} has no tool named ${JSON.stringify(toolName)}`;
+    const meta = (tool as { meta?: unknown }).meta;
+    const visibility = isRecord(meta) ? meta["visibility"] : undefined;
+    if (Array.isArray(visibility) && visibility.length > 0 && !visibility.includes("app")) {
+      return `${toolName} is not available to a widget`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

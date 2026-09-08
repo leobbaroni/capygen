@@ -5,6 +5,7 @@
  * question) also exercise the click → store-action wiring.
  */
 import { cleanup, render, screen, fireEvent, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -43,7 +44,13 @@ const base = {
 };
 
 function renderBlock(block: Block, isUser = false) {
-  return render(<BlockRenderer block={block} isUser={isUser} />);
+  // A local-policy card links to its owning restriction's editor, so the tree
+  // needs a router; every other block renders identically inside one.
+  return render(
+    <MemoryRouter>
+      <BlockRenderer block={block} isUser={isUser} />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -930,5 +937,92 @@ describe("ToolCallCard per family (SPEC R6 item 3)", () => {
     await user.click(screen.getByTestId("tool-output-expand"));
     expect(ipcInvoke).toHaveBeenCalledWith("blocks.getOutput", { id: "tout_1" });
     expect(await screen.findByText("THE FULL VALUE")).toBeInTheDocument();
+  });
+});
+
+describe("PermissionCard ▸ a local-policy card mints a session grant", () => {
+  const localBlock = (): PermissionBlock => ({
+    ...base,
+    id: "b-local",
+    kind: "permission",
+    request: {
+      requestId: "req-local",
+      toolName: "mcp__docs__search",
+      input: { query: "capybara" },
+      suggestions: [],
+      localPolicy: {
+        ruleId: "lpr_1",
+        scope: { kind: "session", sessionId: "ses_1" },
+        boundary: "api-tool",
+      },
+    },
+    decision: null,
+  });
+
+  it("sends allow with scope session, never the historical allow_always", async () => {
+    const user = userEvent.setup();
+    const answerPermission = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerPermission });
+    renderBlock(localBlock());
+
+    await user.click(screen.getByTestId("block-permission-allow-always"));
+    // `allow_always` is collapsed to a single-use allow by the local broker, so
+    // sending it would have made this button promise a session grant and
+    // deliver one use.
+    expect(answerPermission).toHaveBeenCalledWith("req-local", "allow", { scope: "session" });
+    expect(answerPermission).not.toHaveBeenCalledWith("req-local", "allow_always");
+  });
+
+  it("leaves an ordinary native card's answer exactly as it was", async () => {
+    const user = userEvent.setup();
+    const answerPermission = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ answerPermission });
+    const block = localBlock();
+    renderBlock({ ...block, id: "b-native", request: { ...block.request, localPolicy: undefined } });
+
+    await user.click(screen.getByTestId("block-permission-allow-always"));
+    expect(answerPermission).toHaveBeenCalledWith("req-local", "allow_always");
+  });
+
+  it("names the owning restriction and links to its editor", () => {
+    renderBlock(localBlock());
+    const attribution = screen.getByTestId("block-permission-local-policy");
+    expect(attribution).toHaveTextContent(/restriction on this session/i);
+    expect(attribution).toHaveTextContent(/an API tool call/i);
+    // ADR-0007: an exception is made by editing the owning restriction.
+    // The id travels, so Policies can open the restriction that actually
+    // refused rather than the page in general.
+    expect(screen.getByTestId("block-permission-rule-link")).toHaveAttribute(
+      "href",
+      "/settings/policies?rule=lpr_1",
+    );
+  });
+
+  it("says when the call runs in this app's widget host rather than the backend", () => {
+    const block = localBlock();
+    renderBlock({
+      ...block,
+      id: "b-widget",
+      request: {
+        ...block.request,
+        localPolicy: { ...block.request.localPolicy!, executionSite: "widget-host" },
+      },
+    });
+    // Which boundary covers the call and where it actually runs are different
+    // questions; without this the card reads as if the backend were running it.
+    expect(screen.getByTestId("block-permission-local-policy"))
+      .toHaveTextContent(/widget running in this app/i);
+  });
+
+  it("says nothing about an execution site for an ordinary backend call", () => {
+    renderBlock(localBlock());
+    expect(screen.getByTestId("block-permission-local-policy"))
+      .not.toHaveTextContent(/widget/i);
+  });
+
+  it("shows no policy attribution on an ordinary native card", () => {
+    const block = localBlock();
+    renderBlock({ ...block, id: "b-native2", request: { ...block.request, localPolicy: undefined } });
+    expect(screen.queryByTestId("block-permission-local-policy")).toBeNull();
   });
 });

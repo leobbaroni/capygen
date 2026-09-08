@@ -33,10 +33,13 @@ import {
   screen,
   session,
   shell,
+  utilityProcess,
   webContents,
 } from "electron";
+import { cleanEnv } from "@capygen/engine";
 import { openStore, type CapygenStore } from "@capygen/db";
 import {
+  newId,
   DEV_URL_ENV,
   ENGINE_ENV,
   INVOKE_CHANNEL_NAMES,
@@ -81,6 +84,14 @@ import type { EngineDeps } from "./engine/types.js";
 import { createElectronImportWorkerClient } from "./imports/electronUtilityWorker.js";
 import type { ImportWorkerClient } from "./imports/utilityWorker.js";
 import { ImportStagingService } from "./imports/staging.js";
+import {
+  createPolicyRuntime,
+  createPermissionCardPublisher,
+  type PolicyRuntime,
+} from "./policies/runtime.js";
+import { ShareWorkerClient } from "./sharing/workerClient.js";
+import { ShareStagingService } from "./sharing/staging.js";
+import type { ShareStagingMeta } from "./ipc/sharing.js";
 
 /**
  * dist/ after bundling. esbuild emits CommonJS here (Electron's main entry is
@@ -106,6 +117,23 @@ let tray: TrayIntegration | null = null;
 let notifier: Notifier | null = null;
 let importWorker: ImportWorkerClient | null = null;
 let importStaging: ImportStagingService | null = null;
+let policyRuntime: PolicyRuntime | null = null;
+let shareWorker: ShareWorkerClient | null = null;
+let shareStaging: ShareStagingService<ShareStagingMeta> | null = null;
+let shareSweep: ReturnType<typeof setInterval> | null = null;
+
+function disposePolicy(): void {
+  policyRuntime?.dispose();
+  policyRuntime = null;
+}
+
+async function disposeSharing(): Promise<void> {
+  if (shareSweep) clearInterval(shareSweep);
+  shareSweep = null;
+  // Stop the process before waiting on release acknowledgements during quit.
+  shareWorker?.dispose();
+  await shareStaging?.dispose();
+}
 
 // ---------------------------------------------------------------------------
 // single instance
@@ -257,6 +285,9 @@ function createWindow(): BrowserWindow {
   win.on("closed", () => {
     shellWindows.delete(win);
     void importStaging?.releaseWindow(importOwnerId);
+    void shareStaging?.releaseWindow(importOwnerId).catch(() => {
+      log.warn("[sharing] window cleanup failed");
+    });
   });
 
   // External links open in the user's browser, never inside the shell.
@@ -341,6 +372,15 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
       return activeStore.projects.get(session.projectId)?.path ?? null;
     },
     openExternal: (url) => shell.openExternal(url),
+    // Fails closed: the widget host outlives no policy runtime in practice,
+    // but a call that cannot be evaluated is a call that must not run.
+    authorizeWidgetCall: async (request) =>
+      policyRuntime
+        ? policyRuntime.widgets.authorizeWidgetCall(request)
+        : { allowed: false, message: "capygen's local policy is not available." },
+    onConnectionEnded: (token) => policyRuntime?.widgets.onConnectionEnded(token),
+    // The block row carries its turn; nothing here parses an id to find one.
+    turnOfBlock: (blockId) => store?.blocks.get(blockId)?.turnId ?? null,
     saveFile: async (file) => {
       const owner = [...shellWindows][0];
       const result = await dialog.showSaveDialog(
@@ -500,11 +540,53 @@ function registerIpc(activeStore: CapygenStore): IpcContext {
         return picked.canceled ? null : picked.filePaths[0] ?? null;
       },
     },
+    sharing: {
+      staging: shareStaging!,
+      worker: shareWorker!,
+      appVersion: app.getVersion(),
+      ownerId: () => {
+        const owner = ipcSender.getStore();
+        if (owner === undefined) throw new Error("missing sharing window");
+        return owner;
+      },
+      isOwnerAlive: (owner) => [...shellWindows].some((win) =>
+        !win.isDestroyed() && win.webContents.id === owner),
+      pickFile: async (owner) => {
+        const win = [...shellWindows].find((candidate) =>
+          !candidate.isDestroyed() && candidate.webContents.id === owner);
+        if (!win) throw new Error("the sharing window was closed");
+        const picked = await dialog.showOpenDialog(win, {
+          title: "Import a shared session",
+          properties: ["openFile"],
+          filters: [{ name: "Shared sessions", extensions: ["json", "html"] }],
+        });
+        return picked.canceled ? null : picked.filePaths[0] ?? null;
+      },
+      chooseSaveTarget: async (owner, suggestedName) => {
+        const win = [...shellWindows].find((candidate) =>
+          !candidate.isDestroyed() && candidate.webContents.id === owner);
+        if (!win) throw new Error("the sharing window was closed");
+        const extension = path.extname(suggestedName).slice(1);
+        const selected = await dialog.showSaveDialog(win, {
+          title: "Export the reviewed session",
+          defaultPath: suggestedName,
+          properties: ["showOverwriteConfirmation"],
+          filters: [{ name: "Shared session", extensions: [extension] }],
+        });
+        return selected.canceled ? null : selected.filePath ?? null;
+      },
+      writeFile: (filePath, text) => fs.promises.writeFile(longPath(filePath), text, "utf8"),
+    },
     broadcast,
     log,
     widgets,
     pools: mcpPools,
     browser: browserViews,
+    localPolicies: policyRuntime!.ipcDeps,
+    policyHooks: policyRuntime!.hooks,
+    policyAnswer: policyRuntime!.broker,
+    policySubject: policyRuntime!.subject,
+    policyApprovability: (sessionId) => policyRuntime!.approvability(sessionId),
     ...(useStub
       ? {
           makeEngine: (engineDeps: EngineDeps) =>
@@ -749,6 +831,44 @@ app.whenReady().then(async () => {
     log,
   });
   await importStaging.initialize();
+  shareWorker = new ShareWorkerClient({
+    fork: () => utilityProcess.fork(path.join(HERE, "shareWorker.cjs"), [], {
+      serviceName: "capygen sharing",
+      stdio: "ignore",
+      // This worker needs no backend credentials or configuration homes.
+      env: cleanEnv({
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+      }),
+    }),
+    log: { warn: (message) => log.warn(message) },
+  });
+  shareStaging = new ShareStagingService<ShareStagingMeta>({
+    releaseJob: (jobId) => shareWorker!.release(jobId),
+    isWorkerGone: () => shareWorker!.isGone(),
+    log,
+  });
+  shareSweep = setInterval(() => {
+    void shareStaging?.sweepNow().catch(() => log.warn("[sharing] expiry cleanup failed"));
+  }, 5_000);
+  shareSweep.unref();
+  // One local policy runtime, before the IPC context that both the management
+  // channels and the session runner read it from (ADR-0007: one service).
+  policyRuntime = createPolicyRuntime({
+    store,
+    ask: createPermissionCardPublisher({
+      store,
+      // Typed, not cast: the publisher's payloads are checked against the
+      // event contract at compile time.
+      broadcast,
+      newBlockId: () => newId("block"),
+    }),
+    publishChanged: (change) => broadcast("policy.changed", change),
+    // Read lazily: the engine is built inside `registerIpc`, after this.
+    engine: () => ipc?.engine ?? null,
+  });
   ipc = registerIpc(store);
 
   // [Phase 6/C] The notifications switch, made real (SPEC R19/R30). Built
@@ -822,6 +942,8 @@ app.whenReady().then(async () => {
   });
 }).catch(async (error: unknown) => {
   log?.error("[main] startup failed", error);
+  try { disposePolicy(); } catch { /* preserve the startup error */ }
+  try { await disposeSharing(); } catch { /* preserve the startup error */ }
   try { await importStaging?.dispose(); } catch { /* preserve the startup error */ }
   try { await importWorker?.dispose(); } catch { /* preserve the startup error */ }
   try { store?.close(); store = null; } catch { /* process is terminating */ }
@@ -855,6 +977,10 @@ app.on("will-quit", (event) => {
   shuttingDown = true;
   event.preventDefault();
   void (async () => {
+    try { disposePolicy(); }
+    catch { log?.warn("[policy] shutdown cleanup failed"); }
+    try { await disposeSharing(); }
+    catch { log?.warn("[sharing] shutdown cleanup failed"); }
     try {
       await importStaging?.dispose();
     } catch (err) {

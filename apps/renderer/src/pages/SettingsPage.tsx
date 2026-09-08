@@ -26,13 +26,13 @@ import { DevServersSection } from "./settings/DevServersSection";
 import { PrereqsSection } from "./settings/PrereqsSection";
 import { DiagnosticsSection } from "./settings/DiagnosticsSection";
 import { ImportSection } from "./settings/ImportSection";
+import { MembersSection } from "./settings/MembersSection";
+import { PoliciesSection } from "./settings/PoliciesSection";
+import { SharingSection } from "./settings/SharingSection";
 import {
   AccountSection,
   LegacyIntegrationsSection,
   LocalCliSection,
-  MembersSection,
-  PoliciesSection,
-  SharingSection,
   UpdatesSection,
 } from "./settings/PlaceholderSections";
 

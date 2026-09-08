@@ -17,7 +17,7 @@
 import http from "node:http";
 
 const portFlag = process.argv.indexOf("--port");
-const port = portFlag >= 0 ? Number(process.argv[portFlag + 1]) : 5199;
+const port = portFlag >= 0 ? Number(process.argv[portFlag + 1]) : 0;
 
 const server = http.createServer((_req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -25,8 +25,10 @@ const server = http.createServer((_req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
+  const address = server.address();
+  const actualPort = typeof address === "object" && address ? address.port : port;
   process.stdout.write("\n  VITE-ish dev server ready\n");
-  process.stdout.write(`  ➜  Local:   http://localhost:${port}/\n`);
+  process.stdout.write(`  ➜  Local:   http://127.0.0.1:${actualPort}/\n`);
 });
 
 // A dev server that ignores SIGTERM is a dev server capygen has to tree-kill;

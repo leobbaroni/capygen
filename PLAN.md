@@ -299,7 +299,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       prevent overlap, and unknown costs remain explicit. Full gate: typecheck/build passed;
       144 unit files, 1883 passed/4 skipped; 46 Playwright passed/12 skipped.
       Historical stop point completed; the user has now authorized Phase 9 onward.
-- [ ] Phase 9: MCP catalogue, sharing, members, policies, approvals (M5–M6)
+- [x] Phase 9: MCP catalogue, sharing, members, policies, approvals (M5–M6)
       Done when: session MCP servers page adds a stdio server and its tools appear in the slash
       menu; Sharing exports a session bundle (HTML/JSON) and re-imports; Members/Policies/Approve
       pages render and gate tool permissions locally.

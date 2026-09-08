@@ -61,6 +61,7 @@ import {
   type LocalAuthorize,
   type PolicyBoundarySupport,
 } from "../policy/types.js";
+import { mergeReservedServers } from "../config/nativeMcpOverrides.js";
 import {
   CatalogueRunner,
   MAX_SCANNED_SERVERS,
@@ -128,6 +129,20 @@ export interface ClaudeHarnessDeps {
    * whole prefix each time. Returning `null` is normal — it means this agent's
    * sub-agents run natively and there is nothing to add.
    */
+  /**
+   * The complete MCP server set this backend session must run, when capygen's
+   * resolution differs from what the CLI would read on its own.
+   *
+   * Authoritative, not additive: it is accompanied by `strictMcpConfig`, so the
+   * CLI uses exactly this set instead of also loading its own files. That is
+   * the only way a session can *remove* a server the user's files enable, and
+   * it is what stops every native server being started twice. Absent means the
+   * session adds nothing, and the CLI's own configuration is left alone.
+   */
+  resolvedMcpServers?: () =>
+    | Promise<Record<string, Record<string, unknown>> | null>
+    | Record<string, Record<string, unknown>>
+    | null;
   mcpServers?: () =>
     | Promise<Record<string, unknown> | null>
     | Record<string, unknown>
@@ -450,6 +465,20 @@ export class ClaudeHarness implements Harness {
       // R12 fails open: no delegation tool beats no session.
       this.log.warn("[claude] the extra MCP server list could not be built", err);
     }
+    // The session's own resolved set, when it differs from the CLI's files.
+    // Built here, with `extraServers`, so both are part of the one options
+    // object this backend session is created from (R24: an MCP list that moved
+    // between turns is a cache miss on every turn).
+    let resolvedServers: Record<string, Record<string, unknown>> | null = null;
+    try {
+      resolvedServers = (await this.deps.resolvedMcpServers?.()) ?? null;
+    } catch (err) {
+      // Fails *closed* on purpose, unlike delegation: silently starting the
+      // session with the CLI's own list would run servers a session had
+      // switched off, which is the opposite of what the user asked for.
+      this.log.warn("[claude] the session MCP server list could not be resolved");
+      throw new Error("The session MCP server list could not be resolved.");
+    }
     if (superseded()) {
       // `dispose()` already nulled these; only clear them when they are still
       // the ones this call put there, so a newer session is never disturbed.
@@ -459,7 +488,7 @@ export class ClaudeHarness implements Harness {
       return;
     }
 
-    const options = this.buildOptions(session, agent, abort, extraServers);
+    const options = this.buildOptions(session, agent, abort, extraServers, resolvedServers);
     this.log.info(
       `[claude] starting session for agent ${agent.agentId} model=${agent.model}` +
         `${options.resume ? ` resume=${options.resume}` : ""}`,
@@ -499,6 +528,7 @@ export class ClaudeHarness implements Harness {
     agent: HarnessAgent,
     abort: AbortController,
     extraServers: Record<string, unknown> | null = null,
+    resolvedServers: Record<string, Record<string, unknown>> | null = null,
   ): ClaudeOptions {
     const config = readClaudeConfig(agent.config);
     const permissionMode = agent.permissionMode ?? config.permissionMode ?? "default";
@@ -540,7 +570,29 @@ export class ClaudeHarness implements Harness {
         snapshot: true,
       };
     }
-    if (extraServers && Object.keys(extraServers).length > 0) {
+    if (resolvedServers) {
+      // Authoritative for Claude, and only for Claude: `strictMcpConfig` is
+      // documented as "only use MCP servers passed via the `mcpServers` option
+      // … ignoring all other MCP configurations" (sdk.d.ts:2128-2134). Without
+      // it the CLI would *also* load its own files, starting every native
+      // server twice — and a session could never switch one off, because
+      // omission would mean nothing.
+      const { merged, displaced } = mergeReservedServers(
+        resolvedServers,
+        (extraServers ?? {}) as Record<string, Record<string, unknown>>,
+      );
+      for (const name of displaced) {
+        // capygen's own server keeps the name the model's tool name is built
+        // from; the configured entry that wanted it is not applied, and says so.
+        this.log.warn(
+          `[claude] the configured MCP server "${name}" was not applied: capygen reserves that name for its own tools`,
+        );
+      }
+      options.mcpServers = merged as ClaudeOptions["mcpServers"];
+      // A session override is the resolved effective set; strictness is
+      // required to honor a disabled entry instead of loading it again.
+      options.strictMcpConfig = true;
+    } else if (extraServers && Object.keys(extraServers).length > 0) {
       options.mcpServers = {
         ...(options.mcpServers ?? {}),
         ...extraServers,
@@ -548,7 +600,7 @@ export class ClaudeHarness implements Harness {
     }
     if (permissionMode === "bypassPermissions") options.allowDangerouslySkipPermissions = true;
     if (this.sdkSessionId) options.resume = this.sdkSessionId;
-    if (config.strictMcpConfig !== undefined) options.strictMcpConfig = config.strictMcpConfig;
+    if (!resolvedServers && config.strictMcpConfig !== undefined) options.strictMcpConfig = config.strictMcpConfig;
     if (config.allowedTools) options.allowedTools = config.allowedTools;
     if (config.skills) options.skills = config.skills;
     // Session-scoped like the rest of this object: effort is part of what the

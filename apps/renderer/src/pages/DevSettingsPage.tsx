@@ -35,6 +35,9 @@ import {
   type PluginMarketplaceEntry,
   type PrereqStep,
   type SkillEntry,
+  SessionSchema,
+  type LocalMember,
+  type LocalPolicyRule,
   type ToolPolicyEntry,
 } from "@capygen/shared";
 import { SettingsPage } from "./SettingsPage";
@@ -210,6 +213,68 @@ const FIXTURE_DIAGNOSTICS: DiagnosticsInfo = {
   logDir: "C:/Users/tuga/AppData/Roaming/capygen/logs",
 };
 
+/**
+ * Local execution policy fixtures (Phase 9 / P16-P17), so `/dev/settings/members`
+ * and `/dev/settings/policies` render their real components against data rather
+ * than against the honest "service unavailable" state the default branch would
+ * otherwise produce.
+ */
+const FIXTURE_MEMBERS: LocalMember[] = [
+  { id: "mbr_builtin_owner", label: "Owner", role: "owner", builtIn: true, createdAt: 0, updatedAt: 0 },
+  { id: "mbr_editor", label: "Pairing seat", role: "editor", builtIn: false, createdAt: 1, updatedAt: 1 },
+  { id: "mbr_viewer", label: "Reviewer", role: "viewer", builtIn: false, createdAt: 2, updatedAt: 2 },
+];
+
+// Parsed, not cast: a cast let an earlier version of this fixture ship a
+// `settings: null` the contract rejects, and the only symptom was `init()`
+// throwing and the whole hub rendering session-less.
+const FIXTURE_SESSION = SessionSchema.parse({
+  id: "ses_fixture", projectId: "prj_fixture", mode: "solo", leadAgentId: "agt_fixture",
+  title: "Refactor the importer", status: "idle", archived: false,
+  origin: "live", artifactKind: null, createdAt: 0, updatedAt: 0,
+});
+
+const FIXTURE_RULES: LocalPolicyRule[] = [
+  {
+    id: "lpr_docs", scope: { kind: "global" }, boundary: "api-tool",
+    pattern: "mcp__docs__*", decision: "ask", enabled: true, createdAt: 0, updatedAt: 0,
+  },
+  {
+    id: "lpr_shell", scope: { kind: "project", projectId: "prj_fixture" },
+    boundary: "claude-pre-tool", pattern: "Bash", decision: "deny", enabled: true,
+    createdAt: 1, updatedAt: 1,
+  },
+  {
+    id: "lpr_write", scope: { kind: "session", sessionId: "ses_fixture" },
+    boundary: "codex-file-approval", pattern: "*", decision: "ask", enabled: false,
+    createdAt: 2, updatedAt: 2,
+  },
+];
+
+const FIXTURE_GRANTS = [
+  {
+    grantId: "grt_fixture", sessionId: "ses_fixture", agentId: "agt_fixture", backend: "api",
+    boundary: "api-tool", toolName: "mcp__docs__search", grantedAt: Date.now() - 60_000,
+  },
+];
+
+const FIXTURE_AUDIT = [
+  {
+    id: "lpa_3", ts: Date.now() - 30_000, requestId: "req_3", sessionId: "ses_fixture",
+    agentId: "agt_fixture", backend: "api", boundary: "api-tool", boundaryAvailable: true,
+    toolName: "mcp__docs__search", decision: "allow", source: "grant", ruleId: "lpr_docs",
+    scopeKind: "global", scopeId: null, memberId: "mbr_editor", memberLabel: "Pairing seat",
+    memberRole: "editor",
+  },
+  {
+    id: "lpa_2", ts: Date.now() - 90_000, requestId: "req_2", sessionId: "ses_fixture",
+    agentId: "agt_fixture", backend: "claude", boundary: "claude-pre-tool",
+    boundaryAvailable: true, toolName: "Bash", decision: "deny", source: "rule",
+    ruleId: "lpr_shell", scopeKind: "project", scopeId: "prj_fixture",
+    memberId: "mbr_editor", memberLabel: "Pairing seat", memberRole: "editor",
+  },
+];
+
 function fixtureInvoke(channel: string, payload: unknown): Promise<unknown> {
   const args = (payload ?? {}) as { backend?: keyof typeof FIXTURE_MCP };
   switch (channel) {
@@ -223,7 +288,13 @@ function fixtureInvoke(channel: string, payload: unknown): Promise<unknown> {
     case "harness.list":
       return Promise.resolve(FIXTURE_HARNESSES);
     case "projects.list":
+      return Promise.resolve([
+        { id: "prj_fixture", name: "capygen", path: "C:/dev/capygen", layout: null, devServers: null, createdAt: 0, updatedAt: 0 },
+      ]);
+    // One session, so the Members assignment control and the Policies preview
+    // have something to point at rather than their (correct) empty states.
     case "sessions.list":
+      return Promise.resolve([FIXTURE_SESSION]);
     case "chat.listCommands":
       return Promise.resolve([]);
     case "secrets.has":
@@ -244,6 +315,45 @@ function fixtureInvoke(channel: string, payload: unknown): Promise<unknown> {
       return Promise.resolve({ steps: FIXTURE_PREREQS, recommendation: "Install the Codex CLI next." });
     case "diagnostics.get":
       return Promise.resolve(FIXTURE_DIAGNOSTICS);
+    case "policy.members.list":
+      return Promise.resolve({ members: FIXTURE_MEMBERS });
+    case "policy.session.subject.get":
+      return Promise.resolve({
+        subject: { sessionId: "ses_fixture", member: FIXTURE_MEMBERS[1], explicit: true },
+      });
+    case "policy.rules.list":
+      return Promise.resolve({ rules: FIXTURE_RULES });
+    case "policy.rules.preview":
+      return Promise.resolve({
+        decision: "ask", source: "rule", ruleId: "lpr_docs", scopeKind: "global",
+        scopeId: null, matchedRuleIds: ["lpr_docs"], boundaryAvailable: true,
+      });
+    case "policy.grants.list":
+      return Promise.resolve({ grants: FIXTURE_GRANTS });
+    case "policy.audit.list":
+      return Promise.resolve({ records: FIXTURE_AUDIT, nextCursor: null, truncated: false });
+    case "policy.boundaries.availability":
+      return Promise.resolve({
+        sessionId: "ses_fixture", agentId: "agt_fixture", backend: "api",
+        boundaries: [
+          { boundary: "api-tool", available: true, reason: null },
+          { boundary: "claude-pre-tool", available: false, reason: "harness-unavailable" },
+          { boundary: "codex-command-approval", available: false, reason: "unsupported-backend" },
+          { boundary: "codex-file-approval", available: false, reason: "capability-unproven" },
+        ],
+      });
+    case "sessions.get":
+      return Promise.resolve({
+        session: FIXTURE_SESSION,
+        agents: [
+          {
+            id: "agt_fixture", sessionId: "ses_fixture", name: "Assistant",
+            displayName: "Assistant", mentionName: "assistant", backend: "api",
+            model: "claude-opus-5", role: "lead", createdAt: 0,
+          },
+        ],
+        turns: [], blocks: [], chainPending: false,
+      });
     default:
       return Promise.resolve({ ok: true });
   }

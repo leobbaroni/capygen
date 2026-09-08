@@ -34,6 +34,9 @@ await build({
     // for the same reason: the worker loads it lazily, only for a Claude
     // transcript, and it has to keep its own directory layout to do that.
     importWorker: path.join(appDir, "src", "imports", "workerEntry.ts"),
+    // The share worker: decoding, projection, redaction, schema validation and
+    // the encoders all run here so none of them can block the window.
+    shareWorker: path.join(appDir, "src", "sharing", "workerEntry.ts"),
   },
   outdir: outDir,
   outExtension: { ".js": ".cjs" },

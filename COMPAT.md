@@ -660,3 +660,31 @@ when the protocol cannot apply them. `probe:claude-hook-precedence` uses a proce
 allowlist, disposable homes and dummy loopback credentials; it observes requests received by
 the fixture endpoint, not every socket opened by the child. Routing uses a local haiku alias
 fixture to prove child execution, not a paid model request.
+
+
+### Session MCP overrides and native discovery costs
+
+Session overrides are captured with the effective agent configuration. Claude receives the
+complete resolved set via SDK `mcpServers` and `strictMcpConfig:true`; that strict setting is
+required even if the native default is false, so omitted disabled servers cannot be reloaded.
+Codex `thread/start` config.mcp_servers merges inherited tables: an empty map does not clear
+anything. Explicit named `{enabled:false}` suppresses an inherited entry, verified against
+an enabled native control: disabled status, zero tools, zero server launches. Disabled agent
+entries must therefore be carried separately after ordinary resolution filters them out.
+Stdio command/args/env/cwd and HTTP url/http_headers use Codex's existing config format.
+Reserved app delegation names retain their callable identity; conflicting configured servers
+are reported. Resolver failures expose fixed errors, never exception contents.
+
+Pinned Codex0.153.4 starts transient MCP discovery processes for mcpServerStatus/list, even
+with plain config.toml and no app override. Native liveness checks prove one persistent
+session server after repeated queries and none after disposal; a total-start count is not a
+leak test. Concurrent catalogue requests share one backend query, but repeated explicit
+refreshes each incur this native discovery cost. Claude reuses its single SDK-owned server.
+Neither path creates a model turn. The pinned Claude CLI may call /api/hello on startup;
+fixture tests reject every other provider endpoint during discovery.
+
+Audit migration0012 adds execution_site with historical default backend. New rows distinguish
+backend, widget-host, and unknown (no matching capture). Main snapshots the matched site once
+per authorization invocation for audit only; live authority still rechecks after awaits.
+Migration0011 stores local notes separately from immutable received comments. Live-note export
+passes notes through the same redacting projector and maps source block anchors to entries.

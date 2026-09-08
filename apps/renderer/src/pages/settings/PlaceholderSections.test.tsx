@@ -10,9 +10,6 @@ import {
   AccountSection,
   LegacyIntegrationsSection,
   LocalCliSection,
-  MembersSection,
-  PoliciesSection,
-  SharingSection,
   UpdatesSection,
 } from "./PlaceholderSections";
 
@@ -23,9 +20,6 @@ function renderWithRouter(node: ReactElement) {
 describe("PlaceholderSections", () => {
   it.each([
     ["settings-updates", UpdatesSection, "Phase 12"],
-    ["settings-members", MembersSection, "Phase 9"],
-    ["settings-policies", PoliciesSection, "Phase 9"],
-    ["settings-sharing", SharingSection, "Phase 9"],
   ] as const)("%s names its arriving phase and has no dead controls", (testId, Section, phase) => {
     renderWithRouter(<Section />);
     const root = screen.getByTestId(testId);

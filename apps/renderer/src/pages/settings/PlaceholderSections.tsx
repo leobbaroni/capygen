@@ -4,9 +4,9 @@
  * clear 'arrives with …' note and no dead controls." Grouped into one file —
  * each is a couple of static rows, not worth its own module.
  *
- *  - Import sessions, Updates, Members, Policies, Sharing: named directly by
- *    Task B2's phase map (Import → Phase 7, Updates → Phase 12,
- *    Members/Policies/Sharing → Phase 9).
+ *  - Updates: named by Task B2's phase map (Phase 12). Import sessions,
+ *    Members, Policies and Sharing have since been built for real and live in
+ *    their own modules.
  *  - Account: Omnigent's is a cloud login profile; capygen is local-only by
  *    scope (SPEC "Out of Scope: Multi-tenant cloud server mode"), so there is
  *    no phase where a real login page arrives — the note says that instead.
@@ -26,33 +26,6 @@ export function UpdatesSection() {
     <div data-testid="settings-updates">
       <SectionIntro title="Updates" description="Automatic / at-launch / manual / never, from GitHub Releases (R4)." />
       <ArrivesLaterNote phase="Phase 12" what="Packaging and self-update" />
-    </div>
-  );
-}
-
-export function MembersSection() {
-  return (
-    <div data-testid="settings-members">
-      <SectionIntro title="Members" description="Local roles for this machine's users." />
-      <ArrivesLaterNote phase="Phase 9" what="Local members" />
-    </div>
-  );
-}
-
-export function PoliciesSection() {
-  return (
-    <div data-testid="settings-policies">
-      <SectionIntro title="Policies" description="Default and session-level tool policies (the fuller successor to Settings ▸ Tools, P17)." />
-      <ArrivesLaterNote phase="Phase 9" what="The Policies page" />
-    </div>
-  );
-}
-
-export function SharingSection() {
-  return (
-    <div data-testid="settings-sharing">
-      <SectionIntro title="Sharing" description="Exporting and re-importing a session bundle." />
-      <ArrivesLaterNote phase="Phase 9" what="Sharing" />
     </div>
   );
 }

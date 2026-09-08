@@ -1042,12 +1042,22 @@ export class SharesRepo {
       .map((row) => ShareEntrySchema.parse(fromJson<unknown>(row.entry_json, null)));
   }
 
-  /** Every comment in the bundle's own order. Bounded by the bundle schema. */
-  comments(sessionId: string): ShareComment[] {
+  /**
+   * Comments in the bundle's own order.
+   *
+   * Paged like `entries`: the schema bounds a bundle's comments, but "bounded"
+   * is not "small", and a reader that has to take every comment to show the
+   * first twenty is the same mistake as loading a whole transcript to read its
+   * head. An unpaged call keeps the previous whole-list behaviour.
+   */
+  comments(sessionId: string, page: TranscriptImportPage = {}): ShareComment[] {
+    const { offset, limit } = importPage(page);
     return this.db
       .all<Row>(
-        `SELECT * FROM share_import_comments WHERE session_id = ? ORDER BY ordinal`,
+        `SELECT * FROM share_import_comments WHERE session_id = ? ORDER BY ordinal LIMIT ? OFFSET ?`,
         sessionId,
+        limit,
+        offset,
       )
       .map((row) =>
         ShareCommentSchema.parse({
@@ -1060,6 +1070,93 @@ export class SharesRepo {
           resolved: intToBool(row.resolved),
         }),
       );
+  }
+
+  /**
+   * What this machine actually stored, as opposed to what the bundle claimed.
+   *
+   * `ShareCounts` is the sender's tally and is displayed as such; a reader
+   * paging through rows needs the number of rows that exist here, which is the
+   * only figure that can bound its paging correctly.
+   */
+  storedCounts(sessionId: string): { entries: number; comments: number } {
+    const entries = this.db.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM share_import_entries WHERE session_id = ?",
+      sessionId,
+    );
+    const comments = this.db.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM share_import_comments WHERE session_id = ?",
+      sessionId,
+    );
+    return { entries: Number(entries?.n ?? 0), comments: Number(comments?.n ?? 0) };
+  }
+
+  /**
+   * Link a fresh live session as the continuation of a received bundle.
+   *
+   * The mirror of `ImportsRepo.linkContinuation`, and deliberately a *separate*
+   * method rather than a generalization of it: each asserts its own
+   * `artifact_kind`, so neither can silently accept the other's artifact. The
+   * native one says as much in its own comment; this is the sibling it
+   * anticipated.
+   *
+   * The destination is a session this app just created, with its own agent and
+   * its own backend identity. Nothing from the sender is resumed: a bundle
+   * carries no conversation id, no configuration and no tool authority, and the
+   * only thing that crosses is inert quoted text the caller writes as a block.
+   */
+  linkContinuation(sessionId: string, sourceSessionId: string): Session {
+    return this.db.transaction(() => {
+      const destination = this.db.get<{
+        origin: string;
+        continuation_source_session_id: string | null;
+        lead_agent_id: string | null;
+        status: string;
+        archived: number;
+      }>(
+        `SELECT origin, continuation_source_session_id, lead_agent_id, status, archived
+         FROM sessions WHERE id = ?`,
+        sessionId,
+      );
+      if (!destination) throw new Error(`unknown session: ${sessionId}`);
+      if (destination.origin !== "live") {
+        throw new Error("continuation destination must be a live session");
+      }
+      if (destination.continuation_source_session_id !== null) {
+        throw new Error("continuation destination is already linked");
+      }
+      if (destination.lead_agent_id === null) {
+        throw new Error("continuation destination must have a lead agent with a current backend");
+      }
+      if (destination.status !== "idle" || destination.archived !== 0) {
+        throw new Error("continuation destination must be an idle, unarchived fresh session");
+      }
+      const hasTurns = this.db.get<{ present: number }>(
+        "SELECT 1 AS present FROM turns WHERE session_id = ? LIMIT 1",
+        sessionId,
+      );
+      if (hasTurns) {
+        throw new Error("continuation destination must be a fresh session with no turns");
+      }
+      const source = this.db.get<{ session_id: string }>(
+        `SELECT i.session_id FROM share_imports i
+         JOIN sessions s ON s.id = i.session_id
+         WHERE i.session_id = ? AND s.origin = 'import'
+           AND s.artifact_kind = 'shared-bundle'`,
+        sourceSessionId,
+      );
+      if (!source) throw new Error("continuation source must be a received shared bundle");
+
+      this.db.run(
+        "UPDATE sessions SET continuation_source_session_id = ?, updated_at = ? WHERE id = ?",
+        sourceSessionId,
+        now(),
+        sessionId,
+      );
+      const linked = new SessionsRepo(this.db).get(sessionId);
+      if (!linked) throw new Error(`unknown session: ${sessionId}`);
+      return linked;
+    });
   }
 
   private provenance(bundleId: string): ShareProvenanceRow | undefined {

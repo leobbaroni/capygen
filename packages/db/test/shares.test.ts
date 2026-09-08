@@ -304,3 +304,38 @@ describe("session artifact kinds", () => {
     expect(store.shares.artifactKindOf(fresh.session.id)).toBeNull();
   });
 });
+
+describe("stored shared artifacts are read by page", () => {
+  it("pages comments and reports what is actually stored", () => {
+    const comments = Array.from({ length: 7 }, (_, i) =>
+      comment({ id: String(i).padStart(32, "c"), body: `note ${i}`, entryIndex: 0 }));
+    const { session } = store.shares.commit({
+      projectId,
+      bundle: bundle({ entries: [entry(0)], comments,
+        counts: { entries: 1, messages: 1, thinking: 0, activities: 0, notices: 0,
+          truncatedTexts: 0, droppedInteractive: 0, droppedThinking: 0, droppedWidgets: 0,
+          droppedUsage: 0, redactions: 0 } }),
+    });
+
+    // The bundle's own order, not insertion luck.
+    expect(store.shares.comments(session.id, { offset: 0, limit: 3 }).map((c) => c.body))
+      .toEqual(["note 0", "note 1", "note 2"]);
+    expect(store.shares.comments(session.id, { offset: 3, limit: 3 }).map((c) => c.body))
+      .toEqual(["note 3", "note 4", "note 5"]);
+    expect(store.shares.comments(session.id, { offset: 6, limit: 3 }).map((c) => c.body))
+      .toEqual(["note 6"]);
+    // An unpaged call keeps its previous whole-list behaviour.
+    expect(store.shares.comments(session.id)).toHaveLength(7);
+
+    // Counts describe the rows this machine holds, which is what bounds paging.
+    expect(store.shares.storedCounts(session.id)).toEqual({ entries: 1, comments: 7 });
+    expect(store.shares.storedCounts("ses_missing")).toEqual({ entries: 0, comments: 0 });
+  });
+
+  it("refuses an unbounded page the same way entries do", () => {
+    const { session } = store.shares.commit({ projectId, bundle: bundle() });
+    expect(() => store.shares.comments(session.id, { limit: 0 })).toThrow();
+    expect(() => store.shares.comments(session.id, { limit: 101 })).toThrow();
+    expect(() => store.shares.comments(session.id, { offset: -1 })).toThrow();
+  });
+});

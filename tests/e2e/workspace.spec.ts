@@ -63,9 +63,6 @@ const appDir = path.join(repoRoot, "apps", "desktop");
 const outDir = path.join(repoRoot, "e2e-out");
 const fixtureDir = path.join(repoRoot, "tests", "fixtures", "servers", "node");
 
-/** The port the fixture's `dev` script binds (`package.json`). */
-const FIXTURE_PORT = 5199;
-const FIXTURE_URL = `http://localhost:${FIXTURE_PORT}/`;
 /** Starting a server means spawning a package manager: slower than a click. */
 const SERVER_TIMEOUT_MS = 90_000;
 
@@ -181,6 +178,12 @@ test.beforeAll(async () => {
   for (const name of ["package.json", "server.mjs"]) {
     fs.copyFileSync(path.join(fixtureDir, name), path.join(projectDir, name));
   }
+  // Keep the shared detector fixture's explicit-port example intact. Only
+  // this owned runnable copy requests an OS-assigned port.
+  const packagePath = path.join(projectDir, "package.json");
+  const fixturePackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+  fixturePackage.scripts.dev = "node server.mjs";
+  fs.writeFileSync(packagePath, JSON.stringify(fixturePackage));
   fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
   fs.writeFileSync(path.join(projectDir, "src", "greeting.txt"), "hello\n", "utf8");
 
@@ -464,7 +467,6 @@ test("(f) the fixture dev server is detected, started, and loaded in the Browser
   // manager the lockfile names.
   const row = page.getByTestId("server-row").filter({ hasText: "npm dev" });
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await expect(row).toContainText("port 5199");
 
   await row.getByTestId("server-logs-toggle").click();
   await row.getByTestId("server-start").click();
@@ -480,9 +482,10 @@ test("(f) the fixture dev server is detected, started, and loaded in the Browser
 
   // G6: the URL discovered from that log line opens in the Browser pane
   // without anyone clicking anything else.
-  await expect(page.getByTestId("browser-url-input")).toHaveValue(FIXTURE_URL, {
+  await expect.poll(() => page.getByTestId("browser-url-input").inputValue(), {
     timeout: SERVER_TIMEOUT_MS,
-  });
+  }).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d*\/$/);
+  const fixtureUrl = await page.getByTestId("browser-url-input").inputValue();
   // Proof the *native* view actually loaded the page rather than the URL bar
   // merely echoing what was typed: the title only exists if the document
   // parsed (`browser.state`, pushed from `did-navigate`/`page-title-updated`).
@@ -503,7 +506,7 @@ test("(f) the fixture dev server is detected, started, and loaded in the Browser
     }
     return null;
   });
-  expect(shot?.url).toBe(FIXTURE_URL);
+  expect(shot?.url).toBe(fixtureUrl);
   fs.writeFileSync(path.join(outDir, "workspace-server-view.png"), Buffer.from(shot!.png, "base64"));
 
   // Opening the URL activated the Browser tab, which shares this group — the
@@ -531,7 +534,7 @@ test("(g) the native overlay tracks its placeholder through maximise and a windo
   // loads does not matter (the view is created either way).
   const urlBar = page.getByTestId("browser-url-input");
   if ((await urlBar.inputValue()) === "") {
-    await urlBar.fill(FIXTURE_URL);
+    await urlBar.fill("http://127.0.0.1:1/");
     await urlBar.press("Enter");
   }
   await expect.poll(overlayOffset, { timeout: 20_000, intervals: [250] }).toBeLessThanOrEqual(2);

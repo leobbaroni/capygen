@@ -7,8 +7,7 @@
  * own block kinds (`question`) in our contract.
  *
  * Three buttons per SPEC R32/R28: Allow once (`decision: "allow"`), Allow
- * for session (`decision: "allow_always"` — the handler persists it as
- * `scope: "always"`; `ipc.ts`'s own comment explains the collapse), Deny,
+ * for session, Deny,
  * with an optional free-text reason carried on the deny. Enter/Escape are
  * the CLI's own shortcuts for this exact prompt; scoped to `window` rather
  * than the card's own DOM, since the composer usually still has focus while an
@@ -37,7 +36,14 @@ import {
   XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { PermissionBlock, PermissionRequest } from "@capygen/shared";
+import { Link } from "react-router-dom";
+import { ShieldIcon } from "lucide-react";
+import type {
+  LocalPolicyAttribution as LocalPolicyAttributionType,
+  PermissionBlock,
+  PermissionRequest,
+  PolicyBoundary,
+} from "@capygen/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { pendingInteractionBlock, useAppStore } from "@/store/appStore";
@@ -133,6 +139,92 @@ const DECISION_COPY: Record<"allow" | "allow_always" | "deny", string> = {
   deny: "Denied",
 };
 
+/**
+ * Where "edit the owning restriction" actually goes.
+ *
+ * A rule id travels as a query parameter that Policies resolves against its own
+ * list. Attribution without a rule (a boundary refusal, say) has nothing to
+ * open, so it links to the page rather than to a rule that does not exist.
+ */
+export function policiesRuleHref(ruleId: string | null): string {
+  return ruleId === null
+    ? "/settings/policies"
+    : `/settings/policies?rule=${encodeURIComponent(ruleId)}`;
+}
+
+/** Each enforcement point, named as a place rather than as an enum value. */
+const BOUNDARY_TEXT: Record<PolicyBoundary, string> = {
+  "api-tool": "an API tool call",
+  "claude-pre-tool": "Claude's pre-tool hook",
+  "codex-dynamic-tool": "a Codex dynamic tool",
+  "codex-command-approval": "a Codex command approval",
+  "codex-file-approval": "a Codex file approval",
+  "codex-permissions-approval": "a Codex permissions approval",
+};
+
+/**
+ * Why capygen is asking, and which restriction to edit to stop it asking.
+ *
+ * ADR-0007: a refusal or a prompt names its owning rule and links to that
+ * rule's editor, because the way to make an exception is to edit the
+ * restriction rather than to route around it. Attribution is display-only —
+ * main minted it, and nothing here is authority.
+ */
+function LocalPolicyAttribution({ attribution }: { attribution: LocalPolicyAttributionType }) {
+  const scope = attribution.scope;
+  const scopeText =
+    scope === null ? "a local restriction"
+      : scope.kind === "global" ? "a global restriction"
+      : scope.kind === "project" ? "a project restriction"
+      : "a restriction on this session";
+  return (
+    <span
+      data-testid="block-permission-local-policy"
+      className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+    >
+      <ShieldIcon className="size-3 shrink-0" aria-hidden />
+      <span>
+        capygen is asking because {scopeText} covers{" "}
+        {BOUNDARY_TEXT[attribution.boundary]}
+        {attribution.executionSite === "widget-host"
+          // Where a call *runs* is not the same question as which boundary
+          // covers it: a widget's tool executes in the app's own host, not in
+          // the backend, and an approval that did not say so would read as if
+          // the backend were about to run it.
+          ? ", requested by a widget running in this app"
+          : ""}
+        .
+      </span>
+      <Link
+        // The id, not a selector: Policies looks it up among the rules it
+        // already read, so this can only ever open a real restriction — and
+        // says so plainly when that restriction has since been deleted.
+        to={policiesRuleHref(attribution.ruleId)}
+        data-testid="block-permission-rule-link"
+        className="underline underline-offset-2 hover:text-foreground"
+      >
+        {attribution.ruleId === null ? "Open Policies" : "Edit this restriction"}
+      </Link>
+    </span>
+  );
+}
+
+/**
+ * How "Allow for session" is sent.
+ *
+ * A card raised by capygen's *own* local policy sends `allow` with an explicit
+ * `scope: "session"`, which is what mints a session grant. The historical
+ * `allow_always` value means something else entirely: the local broker collapses
+ * it to a single-use allow, so a card sending it could never create the grant
+ * its own button promised — the button said "for the session" and delivered
+ * once. Ordinary native cards keep their existing behaviour untouched.
+ */
+function sessionAnswer(
+  request: PermissionBlock["request"],
+): { decision: "allow"; scope: "session" } | null {
+  return request.localPolicy ? { decision: "allow", scope: "session" } : null;
+}
+
 export function PermissionCard({ block }: { block: PermissionBlock }) {
   const answerPermission = useAppStore((s) => s.answerPermission);
   const { request, decision } = block;
@@ -155,7 +247,11 @@ export function PermissionCard({ block }: { block: PermissionBlock }) {
     void answerPermission(request.requestId, "allow");
   }
   function allowForSession(): void {
-    void answerPermission(request.requestId, "allow_always");
+    const answer = sessionAnswer(request);
+    // Arity matters (see the note above `allowOnce`): the ordinary native call
+    // stays two-argument, and only a local-policy card carries a scope.
+    if (answer === null) void answerPermission(request.requestId, "allow_always");
+    else void answerPermission(request.requestId, "allow", { scope: "session" });
   }
   function deny(): void {
     const trimmed = reason.trim();
@@ -246,6 +342,7 @@ export function PermissionCard({ block }: { block: PermissionBlock }) {
       <AlertDescription>
         {block.description ? <span>{block.description}</span> : null}
         {request.reason ? <span>{request.reason}</span> : null}
+        {request.localPolicy ? <LocalPolicyAttribution attribution={request.localPolicy} /> : null}
         {detail.body}
         {inputSummary ? (
           <span className="font-mono text-xs text-muted-foreground">{inputSummary}</span>

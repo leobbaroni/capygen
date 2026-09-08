@@ -1,0 +1,35 @@
+-- capygen 0012 — record *where* a policy decision was enforced (ADR-0007, P17).
+--
+-- A widget's tool call and an ordinary backend tool call are authorized by the
+-- same service against the same rules, and until now their audit rows were
+-- indistinguishable. They are not the same event: an app widget executes inside
+-- capygen's own host, so "which of these refusals came from a widget" is a
+-- question an operator reviewing the log has to be able to answer.
+--
+-- Additive by design. 0010 is never rewritten: it has shipped, and an applied
+-- migration is history rather than a document to edit. `ALTER TABLE ... ADD
+-- COLUMN` with a constant default rewrites no rows in SQLite, so this is cheap
+-- on an existing log.
+--
+-- `backend` is the default, and it is the right one for every historical row:
+-- widget authorization did not exist when they were written, so every one of
+-- them was in fact enforced at a backend execution site. The default states a
+-- fact about the past, not a guess.
+--
+-- This is deliberately *separate* from `backend` and `boundary`, which keep
+-- meaning what they meant: the origin agent's backend and the protocol boundary
+-- the rule was enforced at. A widget call still originates from an agent with a
+-- backend and is still checked at that backend's tool boundary; the execution
+-- site says which of capygen's own surfaces asked. Collapsing the two would
+-- lose the origin, and ADR-0007 needs both to attribute a refusal.
+--
+-- `unknown` exists because a decision can be recorded for a request that never
+-- matched a live capture — a refusal for an agent main knows nothing about.
+-- Writing `backend` there would be a claim about where the call ran; `unknown`
+-- is the honest reading, and keeps the default meaningful for historical rows.
+--
+-- No column here can hold a tool argument, credential or output: as in 0010,
+-- the absence of the column is the enforcement.
+ALTER TABLE local_policy_audit
+  ADD COLUMN execution_site TEXT NOT NULL DEFAULT 'backend'
+    CHECK (execution_site IN ('backend', 'widget-host', 'unknown'));

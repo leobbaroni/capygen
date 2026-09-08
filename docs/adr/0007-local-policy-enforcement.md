@@ -107,3 +107,20 @@ request/reply enforcement. Revocation while approval waits and input changes are
 cases. Native capability checks use only owned homes; authenticated proofs use dedicated
 identities and only Luna low / Sonnet 5 low. Synthetic transport proves client handling, not
 that a live model chose a tool. Phase 9 remains open until its Done-when and full gate hold.
+
+## Widget execution-site clarification (Astra, 2026-09-08)
+
+A widget call is executed by the app's MCP host, while its restrictions and grant identity
+belong to the originating agent/backend. Evaluate the origin's tool rule family: api-tool,
+claude-pre-tool or codex-dynamic-tool respectively. This deliberately also restricts widgets
+opened by that origin; it does not claim interception of Codex's native MCP calls. Keep
+actual execution site separately as widget-host in display metadata. Do not reinterpret a
+Claude/Codex origin as API, or apply unrelated backend/category rules.
+
+The execution site is a main-owned capture fact. A request claiming widget-host cannot bypass
+backend equality, capture ownership, lifecycle checks or tool-family selection. A backend
+capture still requires its actual boundary availability; only a captured widget connection
+uses the app host's interception point. Its connection token keeps grants separate from the
+origin harness and other widget connections. Connection disposal settles pending cards and
+revokes its grants. The UI must identify host execution so a tool-family label is not mistaken
+for proof that the native backend intercepted this widget call.

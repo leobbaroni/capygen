@@ -21,11 +21,27 @@ import {
   TranscriptImportRecordSchema,
 } from "./imports.js";
 import {
+  LocalNoteCreateSchema,
+  LocalNotePageSchema,
+  LocalNoteSchema,
+  LocalNoteUpdateSchema,
+  ShareArtifactSchema,
+  ShareExportPreviewSchema,
+  ShareImportPreviewSchema,
+  SharePagedEntriesSchema,
+  SharePagedCommentsSchema,
+  ShareSaveResultSchema,
+} from "./sharingIpc.js";
+import {
   WorktreeBranchChoiceSchema,
   WorktreeCreateResultSchema,
   WorktreeRemoveResultSchema,
   WorktreeSchema,
 } from "./worktrees.js";
+import { LOCAL_POLICY_INVOKE_CHANNELS } from "./localPolicyIpc.js";
+import { AgentToolCatalogueSchema } from "./toolCatalogue.js";
+import { LocalPolicyChangedSchema } from "./localPolicies.js";
+import { ApprovePendingPageSchema, ApprovePendingRequestArgsSchema } from "./approveIpc.js";
 import {
   AgentConfigSchema,
   AgentDescribeSchema,
@@ -204,6 +220,126 @@ export const INVOKE_CHANNELS = {
     z.object({ session: SessionSchema, agents: z.array(AgentSchema) }),
   ),
 
+  /**
+   * Sharing (Phase 9 / P15). Export pins an immutable, already-redacted and
+   * validated snapshot behind an opaque handle; import stages a decoded bundle
+   * the same way. No channel here accepts a filesystem path, file content or an
+   * owner claim — main captures window and project identity itself.
+   */
+  "sharing.export.preview": channel(
+    z.object({ sessionId: z.string().min(1), includeReasoning: z.boolean().default(false) }).strict(),
+    ShareExportPreviewSchema,
+  ),
+  "sharing.export.entries": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedEntriesSchema,
+  ),
+  "sharing.export.comments": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedCommentsSchema,
+  ),
+  "sharing.export.save": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/), format: z.enum(["json", "html"]) }).strict(),
+    ShareSaveResultSchema.nullable(),
+  ),
+  "sharing.export.cancel": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+    z.object({ ok: z.boolean() }),
+  ),
+  "sharing.import.pick": channel(
+    z.object({ projectId: z.string().min(1) }).strict(),
+    ShareImportPreviewSchema.nullable(),
+  ),
+  "sharing.import.entries": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedEntriesSchema,
+  ),
+  "sharing.import.comments": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedCommentsSchema,
+  ),
+  "sharing.import.cancel": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+    z.object({ ok: z.boolean() }),
+  ),
+  "sharing.import.commit": channel(
+    z.object({ handle: z.string().regex(/^[0-9a-f]{32}$/) }).strict(),
+    z.object({ session: SessionSchema, duplicate: z.boolean() }),
+  ),
+  "sharing.entries": channel(
+    z.object({ sessionId: z.string().min(1),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedEntriesSchema,
+  ),
+  /** A stored shared bundle's provenance and tallies. Null for anything else —
+   *  a live session, or a native transcript import, which has its own reader. */
+  "sharing.get": channel(
+    z.object({ sessionId: z.string().min(1) }).strict(),
+    ShareArtifactSchema.nullable(),
+  ),
+  /** A bounded, inert quotation of the received transcript's tail — the same
+   *  shape native continuation uses. Text only: a bundle carries no
+   *  configuration, no tool authority and no conversation to resume. */
+  "sharing.reference": channel(
+    z.object({ sessionId: z.string().min(1) }).strict(),
+    z.object({
+      text: z.string().refine((text) => new TextEncoder().encode(text).byteLength <= 6000),
+      truncated: z.boolean(),
+    }).strict(),
+  ),
+  /** Start a *fresh* live session that quotes a received bundle. The agent is
+   *  chosen here and gets a new backend identity; nothing from the sender is
+   *  resumed. */
+  "sharing.continue": channel(
+    z.object({
+      sessionId: z.string().min(1),
+      projectId: z.string().min(1),
+      agent: AgentDraftSchema,
+    }).strict(),
+    z.object({ session: SessionSchema, agents: z.array(AgentSchema) }).strict(),
+  ),
+
+  /** Notes this machine wrote on a session, paged. Never a bundle's own
+   *  comments: those are immutable and read through `sharing.comments`. */
+  "sharing.notes.list": channel(
+    z.object({ sessionId: z.string().min(1),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    LocalNotePageSchema,
+  ),
+  "sharing.notes.create": channel(LocalNoteCreateSchema, z.object({ note: LocalNoteSchema }).strict()),
+  "sharing.notes.update": channel(LocalNoteUpdateSchema, z.object({ note: LocalNoteSchema }).strict()),
+  "sharing.notes.remove": channel(
+    z.object({ noteId: z.string().min(1).max(256) }).strict(),
+    z.object({ removed: z.boolean() }).strict(),
+  ),
+
+  /** The stored bundle's own comments, paged. Not `imports.*`: a shared bundle
+   *  and a native transcript are sibling artifacts with separate tables. */
+  "sharing.comments": channel(
+    z.object({ sessionId: z.string().min(1),
+      offset: z.number().int().nonnegative().default(0),
+      limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    SharePagedCommentsSchema,
+  ),
+
+  /**
+   * Every permission request still waiting, across sessions (P17).
+   *
+   * Read-only. Answers go through `permission.answer`, so this page cannot
+   * become a second decision path with its own rules.
+   */
+  "approve.pending": channel(ApprovePendingRequestArgsSchema, ApprovePendingPageSchema),
+
   "sessions.create": channel(
     z.object({
       projectId: z.string().min(1),
@@ -288,6 +424,11 @@ export const INVOKE_CHANNELS = {
   ),
   /** One agent's usage description, Claude-Code-info-card style (R13). */
   "agents.describe": channel(z.object({ agentId: z.string().min(1) }), AgentDescribeSchema),
+  "agents.catalogue": channel(z.object({
+    sessionId: z.string().min(1),
+    agentId: z.string().min(1).nullable().default(null),
+    initialize: z.boolean().default(false),
+  }).strict(), AgentToolCatalogueSchema),
   /** [7-P1] The minimal non-secret runtime facts about one agent's live
    *  harness — effective model, effort, permission mode, whether a restart is
    *  pending. Never the effective config object, environment or any key. */
@@ -865,6 +1006,7 @@ export const INVOKE_CHANNELS = {
     OkSchema,
   ),
   "browser.devtools": channel(z.object({ viewId: z.string().min(1) }), OkSchema),
+  ...LOCAL_POLICY_INVOKE_CHANNELS,
 } as const satisfies Record<string, ChannelDef>;
 
 export type InvokeChannels = typeof INVOKE_CHANNELS;
@@ -882,6 +1024,7 @@ export const INVOKE_CHANNEL_NAMES = Object.keys(INVOKE_CHANNELS) as InvokeChanne
 // ---------------------------------------------------------------------------
 
 export const EVENT_CHANNELS = {
+  "policy.changed": LocalPolicyChangedSchema,
   "automations.changed": z.object({ automation: AutomationSchema.nullable(), id: z.string() }),
   "automationRun.changed": AutomationRunSchema,
   "inbox.changed": z.object({ unreadCount: z.number().int().nonnegative() }),

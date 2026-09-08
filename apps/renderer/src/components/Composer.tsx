@@ -77,7 +77,7 @@ import {
 } from "lucide-react";
 import type { Agent, Backend, HarnessInfo, SlashCommand } from "@capygen/shared";
 import { MentionMenu } from "@/components/MentionMenu";
-import { SlashMenu } from "@/components/SlashMenu";
+import { SlashMenu, type McpToolMenuEntry } from "@/components/SlashMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
@@ -101,6 +101,17 @@ export interface ComposerProps {
   tray?: ReactNode;
   /** Slash-command catalogue (R14) — built-ins plus the backend's own. */
   commands?: SlashCommand[];
+  /**
+   * The selected agent's MCP tools, shown for discovery only.
+   *
+   * Optional on purpose: a composer with no session behind it (the New Session
+   * landing) has no agent to ask about, and the menu simply omits the section.
+   * These rows are never selectable and never become a command — the agent
+   * calls a tool, the user does not.
+   */
+  mcpTools?: McpToolMenuEntry[];
+  /** Why there are no tool rows, when that is worth saying. */
+  mcpStatus?: string | null;
   /** Backend/model catalogue for the picker (`harness.list`). Omitted or
    *  empty: the picker still shows the current/default choice, just with
    *  nothing to switch to. */
@@ -145,6 +156,8 @@ export function Composer({
   autoFocus = true,
   tray,
   commands = [],
+  mcpTools,
+  mcpStatus = null,
   harnesses = [],
   agent = null,
   lockBackend = false,
@@ -199,7 +212,21 @@ export function Composer({
     const query = value.slice(1).toLowerCase();
     return commands.filter((c) => c.name.slice(1).toLowerCase().includes(query));
   }, [slashActive, value, commands]);
-  const slashMenuOpen = slashActive && commands.length > 0;
+  /**
+   * The menu also opens when the only thing to show is informational.
+   *
+   * It used to require at least one slash command, which hid the MCP section
+   * entirely on any backend that publishes none — the API backend, or a Claude
+   * session before its commands have loaded. Those are exactly the cases where
+   * a person most wants to see what tools the agent has.
+   *
+   * Opening it changes no keyboard semantics: Arrow keys and Enter below stay
+   * gated on `filteredCommands.length`, so with nothing selectable Enter still
+   * submits the message and the arrows still move the caret. An informational
+   * row cannot be highlighted, chosen, or turned into a command.
+   */
+  const hasMcpInfo = (mcpTools?.length ?? 0) > 0 || mcpStatus !== null;
+  const slashMenuOpen = slashActive && (commands.length > 0 || hasMcpInfo);
 
   // `@mention` autocomplete (SPEC item B2.2) — same "open whenever there is
   // anything to offer, filter separately" shape as the slash menu just
@@ -294,12 +321,17 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    // Escape closes the menu whatever it is showing — an informational-only
+    // menu is still something the user asked to be rid of.
+    if (slashMenuOpen && event.key === "Escape") {
+      event.preventDefault();
+      setSlashDismissedFor(value);
+      return;
+    }
+    // Everything below moves or chooses a *command*, so it stays gated on
+    // there being one: with only informational rows, these keys belong to the
+    // textarea exactly as they did before this menu could open.
     if (slashMenuOpen && filteredCommands.length > 0) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissedFor(value);
-        return;
-      }
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setHighlighted((h) => (h + 1) % filteredCommands.length);
@@ -391,6 +423,8 @@ export function Composer({
       {slashMenuOpen ? (
         <SlashMenu
           commands={filteredCommands}
+          mcpTools={mcpTools}
+          mcpStatus={mcpStatus}
           highlightedIndex={highlighted}
           onHover={setHighlighted}
           onSelect={selectCommand}

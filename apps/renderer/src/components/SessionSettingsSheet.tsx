@@ -9,6 +9,7 @@
 import type { Backend, SessionSettings, SessionSettingsPatch } from "@capygen/shared";
 import { Button } from "@/components/ui/button";
 import { BACKEND_LABEL } from "@/lib/agentDisplay";
+import { SessionMcpPanel, type SessionMcpPanelProps } from "./SessionMcpPanel";
 
 const BACKENDS: Backend[] = ["claude", "codex", "api"];
 
@@ -17,6 +18,15 @@ export interface SessionSettingsSheetProps {
   onOpenChange: (open: boolean) => void;
   settings: SessionSettings;
   onChange: (patch: SessionSettingsPatch) => void;
+  /**
+   * The session's own MCP servers, for the agent the sheet is open for.
+   *
+   * Optional so every existing caller compiles unchanged: without it the sheet
+   * renders exactly what it rendered before. The panel is deliberately handed
+   * whole rather than assembled here — this sheet owns layout, not the IPC or
+   * the runtime state behind that section.
+   */
+  mcp?: SessionMcpPanelProps | null;
 }
 
 export function SessionSettingsSheet({
@@ -24,6 +34,7 @@ export function SessionSettingsSheet({
   onOpenChange,
   settings,
   onChange,
+  mcp,
 }: SessionSettingsSheetProps) {
   if (!open) return null;
   const routingBackend = settings.routing?.subagents?.backend ?? "";
@@ -117,6 +128,11 @@ export function SessionSettingsSheet({
             className="h-7 flex-1 rounded-md border border-border-weak bg-background px-1.5 text-xs outline-none"
           />
         </div>
+        {mcp ? (
+          <div className="mt-3 border-t border-border-weak pt-3">
+            <SessionMcpPanel {...mcp} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
