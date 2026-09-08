@@ -28,6 +28,15 @@ bundled CLI versions, PTY echo/raw Codex startup and extension assets. No instal
 and no release was published. Benchmark authentication, microphone acceptance and actual
 older-build/private-feed proof remain missing; Phases 10–12 are not accepted.
 
+Clean Windows packaging diagnostic passed at `b574099` (GitHub run 34199812626):
+frozen dependency install, `build:win`, artifact audit, packaged smoke (17.7s) and private
+artifact upload. Both clean-build EXEs are approximately 265 MiB; the local builds are
+approximately 268 MiB. CI manifest sourceDirty=false. This was explicitly package-only:
+unit and ordinary Electron gates were skipped, and no release/tag was published. Full CI
+acceptance remains open after fixture fixes; the preceding full run had 2831 passed,
+two failures since fixed in focused checks, seven skipped and a worker RPC timeout.
+Artifacts: https://github.com/leobbaroni/capygen/actions/runs/34199812626/artifacts/10045522661
+
 Current execution is Astra low for hard/medium work while Opus is unavailable, with Luna low
 on easy tasks and lighter reviews/new crucial tests. Root alone stages and commits. No full
 phase acceptance should be inferred from focused checks.

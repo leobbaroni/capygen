@@ -50,5 +50,5 @@ gates; focused tests and implementation proofs below do not replace the full Pha
 | R32 | permission/question/elicitation/approval fixture tests and Claude evidence | Backend-specific edge cases remain open |
 
 Known open acceptance areas are real microphone behavior, live model/API benchmarks, private-feed
-and updater behavior, published-release verification, and remote CI completion (local packaging/runtime proof passed). No entry here
+and updater behavior, published-release verification, and full CI acceptance (clean packaging diagnostic and local runtime proof passed). No entry here
 claims those checks passed.

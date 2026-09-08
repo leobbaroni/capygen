@@ -2695,3 +2695,21 @@ startup update timer. It directly executes the compiled speech helper's NDJSON p
 compares its installed-language result with IPC, and requires the appropriate unavailable
 message when none exist. The stdin pipe remains open (EOF intentionally ends the helper).
 Local packaged smoke passes again: 1 passed (10.5s), no microphone/model/installer use.
+
+## 2026-09-08 — clean Windows packaging diagnostic passed
+
+GitHub run 34199812626 at b574099 completed successfully. Its explicit `validation=package`
+mode skipped unit/ordinary Electron gates; full CI/phase acceptance is NOT claimed.
+Frozen install, Windows build, audit, packaged runtime smoke and private artifact upload passed.
+```
+sourceCommit: b5740990e3bf581aef81bd41f770e58feda04ecb
+sourceDirty: false
+setup:    277967234 bytes
+portable: 277676941 bytes
+packaged smoke: 1 passed (17.7s)
+```
+Artifact `capygen-windows` (555736894-byte ZIP, seven-day retention):
+https://github.com/leobbaroni/capygen/actions/runs/34199812626/artifacts/10045522661
+Evidence: `e2e-out/ci-packaging-success.log`. Release job/tag verification correctly skipped;
+no release was published. Remaining acceptance needs microphone result, separately authenticated
+benchmark homes, actual older-build/private-feed proof and the final full gate.
