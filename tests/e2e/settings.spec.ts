@@ -68,6 +68,7 @@ import {
   usingDedicatedIdentity,
   E2E_CLAUDE_MODEL,
 } from "./testPolicy.js";
+import { nativeClaudePath } from "./nativeClaude.js";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const appDir = path.join(repoRoot, "apps", "desktop");
@@ -374,7 +375,10 @@ test.describe("settings hub on isolated backend homes", () => {
   test.beforeAll(async () => {
     fs.mkdirSync(outDir, { recursive: true });
     homes = makeHomes("settings");
-    launched = await launch(homes);
+    // R29 writes through the real CLI; use the pinned dependency on clean CI.
+    const fixturePath = [path.dirname(nativeClaudePath(repoRoot)), path.dirname(process.execPath), path.join(process.env.SystemRoot!, "System32"),
+      process.env.SystemRoot!].join(path.delimiter);
+    launched = await launch(homes, { PATH: fixturePath, Path: fixturePath });
     page = launched.page;
   });
 
@@ -419,7 +423,13 @@ test.describe("settings hub on isolated backend homes", () => {
     await page.getByTestId("mcp-input-args").fill(FIXTURE_SERVER);
     await page.getByTestId("mcp-dialog-save").click();
 
-    await expect(page.getByTestId(`mcp-row-${FIXTURE_NAME}`)).toBeVisible();
+    try {
+      await expect(page.getByTestId(`mcp-row-${FIXTURE_NAME}`)).toBeVisible({ timeout: 15_000 });
+    } catch (error) {
+      const submitError = await page.getByTestId("mcp-submit-error").allTextContents().catch(() => []);
+      const panel = await page.getByTestId("mcp-panel-claude").innerText().catch(() => "");
+      throw new Error(`MCP add did not appear: ${submitError.join(" | ") || "no submit error"}\n${panel}`, { cause: error });
+    }
     await page.screenshot({ path: path.join(outDir, "settings-mcp-added.png") });
 
     // 1. Claude's own file, in the isolated home. `.claude.json` moves inside
@@ -438,11 +448,13 @@ test.describe("settings hub on isolated backend homes", () => {
     //    backend's side rather than capygen's.
     let cliOutput = "";
     try {
-      cliOutput = execFileSync("claude", ["mcp", "list"], {
+      cliOutput = execFileSync(nativeClaudePath(repoRoot), ["mcp", "list"], {
         encoding: "utf8",
         windowsHide: true,
         timeout: 60_000,
-        env: { ...process.env, CLAUDE_CONFIG_DIR: homes.claudeHome },
+        cwd: homes.projectDir,
+        env: launchEnv({ userDataDir: homes.userDataDir, projectDir: homes.projectDir,
+          homes: { claudeHome: homes.claudeHome, codexHome: homes.codexHome } }),
       });
     } catch (err) {
       // `claude mcp list` exits non-zero when a listed server fails to

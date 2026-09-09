@@ -3,6 +3,7 @@ import path from "node:path";
 import { createServer } from "node:http";
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { launchEnv, PERSONAL_KEY_ENV, E2E_CLAUDE_MODEL } from "./testPolicy.js";
+import { nativeClaudePath } from "./nativeClaude.js";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const invoke = <T>(page: Page, channel: string, payload: unknown): Promise<T> => page.evaluate(async ({ channel, payload }) =>
@@ -61,6 +62,11 @@ test("custom draft generation, reviewed Apply and restart preserve the working t
     env.ANTHROPIC_API_KEY = "fixture-only-custom-mode";
     env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${address.port}`;
     env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+    // The SDK can chat without a global CLI, but the catalogue probes PATH.
+    // Supply the same real pinned CLI and exclude developer-installed backends.
+    for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
+    env.PATH = [path.dirname(nativeClaudePath(repoRoot)), path.dirname(process.execPath),
+      path.join(process.env.SystemRoot!, "System32"), process.env.SystemRoot!].join(path.delimiter);
     const launch = () => electron.launch({ args: [path.join(repoRoot, "apps", "desktop"), `--user-data-dir=${userDataDir}`], cwd: repoRoot, env });
     app = await launch();
     let page = await app.firstWindow();

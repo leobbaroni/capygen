@@ -3011,3 +3011,19 @@ budgets for db/desktop. Other projects, local limits, and explicit test deadline
 remain unchanged. Removed the superseded policyReceipt-specific override. Independent
 Luna review accepted the broader evidence-based scope. Focused CI=true validation:
 2 files, 12 passed, 1.83s. Full CI still must pass before publication approval.
+
+### 2026-09-09 — Native fixtures use the pinned installed CLI
+
+CI 34295293705 passed all typechecks, 2920 unit tests (7 skipped), and build:win.
+Native fixtures had 49 passed, 12 skipped, 5 blocked by the serial failure, and two
+failures: Custom's generator catalogue lacked Claude and the MCP save produced no row.
+Both fixtures depended on a developer-installed global Claude CLI. Root reproduced
+the settings failure with a curated PATH: the real integrations.mcp.add command failed
+with spawn claude ENOENT. This disproved an initial review inference that saving was
+direct-file-only; no timeout increase was applied to either native assertion.
+Both fixtures now use the already-installed pinned SDK CLI on PATH; the independent
+MCP-list check uses its absolute executable with isolated backend homes and cwd.
+Added bounded save-error diagnostics and failure-only upload of native error-context
+files/custom screenshot. No app code, dependencies or personal configuration changed.
+Different-model review covered the final scope. Verification: Custom 1 passed (12.6s),
+settings 9 passed and 1 authenticated test skipped (32.0s), tests TypeScript passed.
