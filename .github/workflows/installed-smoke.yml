@@ -1,0 +1,59 @@
+name: Installed Windows smoke
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Verified Windows artifact run
+        required: true
+        default: '34358643906'
+      source_commit:
+        description: Expected artifact source commit
+        required: true
+        default: 'c4e18af542f83ca94960d43760bd9fc9e9663146'
+      version:
+        description: Expected package version
+        required: true
+        default: '0.1.3'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install pinned test dependencies
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Download verified build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+        run: |
+          if ($env:SOURCE_RUN -notmatch '^\d+$') { throw 'Invalid source run.' }
+          gh run download $env:SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name capygen-windows --dir "$env:RUNNER_TEMP/capygen-artifact"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify isolated installation and removal
+        shell: pwsh
+        env:
+          EXPECTED_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: ./scripts/packaging/verify-installed.ps1 -ArtifactDirectory "$env:RUNNER_TEMP/capygen-artifact" -ExpectedCommit $env:EXPECTED_COMMIT -ExpectedVersion $env:EXPECTED_VERSION
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: installed-smoke-proof
+          if-no-files-found: warn
+          path: |
+            e2e-out/installed-smoke-proof.json
+            e2e-out/installed-runtime-proof.json
+            e2e-out/installed-browser.png
+            e2e-out/installed-artifacts/**/error-context.md

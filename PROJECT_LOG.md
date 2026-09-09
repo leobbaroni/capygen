@@ -3119,3 +3119,42 @@ retain JSON test results on failure. Worker limit, test/hook timeouts, assertion
 fatal handling remain unchanged. Existing shared fixture proves both reporters and
 JSON output (2 passed, 405ms). This is diagnostic instrumentation, not a claimed fix.
 Evidence: e2e-out/ci-34356392024-failed.log and unit-reporter-proof.{log,json}.
+
+Controlled local diagnosis used the complete CI-mode suite with two workers and both
+reporters: Node 22.16.0 passed all 242 files/2923 tests (4 skipped) in 234.07s; the
+already-installed Node 24.19.0 passed the same suite in 208.12s. Neither reproduced
+the worker timeout. These runs do not prove a hosted root cause; they rule out a
+reliable local failure from CI=true or the Node major alone. Per-test JSON reports
+are e2e-out/unit-ci-local-results.json and unit-ci-node24-results.json. No dependency,
+user configuration, assertion, deadline or runtime source was changed by these probes.
+
+Corrected candidate full clean Windows CI 34358643906 succeeded at
+c4e18af542f83ca94960d43760bd9fc9e9663146: typechecks; all applicable units
+(241 files passed/1 skipped, 2920 tests passed/7 skipped, 499.58s); build:win and
+artifact audit; native Electron 56 passed/12 skipped (5.1m); packaged runtime and
+real updater transport 2 passed (14.4s). Artifact 10107740025 contains installer,
+portable, latest.yml and audit. Raw log: e2e-out/ci-34358643906-passed.log.
+The intermittent worker timeout did not recur; its root cause is not claimed fixed.
+Private v0.1.3 publication and actual packaged 0.1.2 forward-discovery remain pending.
+
+### 2026-09-09 — Close the installed-artifact acceptance gap
+
+The user authorized publishing and related release operations going forward; tagged
+v0.1.3 at verified c4e18af and started release workflow 34362025359. Final checklist
+review found that the earlier unpacked smoke did not prove detailed Phase 12's actual
+installation/uninstallation requirement. Added a separate hosted-Windows-only workflow
+that downloads the already-verified artifact, checks clean source identity and SHA256,
+installs into a generated spaces/Unicode path, exercises the runtime, uninstalls, and
+checks executable/registry removal plus four owned user-data/backend/project hashes.
+No installer runs on the user's computer; the local-execution refusal was tested.
+
+Runtime rehearsal used an owned package copy, not an installation: 1 passed (13.3s),
+direct EXE launch to focused composer 1855ms (G1 <=3000ms), actual PTY command output,
+native browser title/bounds/pixels, close-to-tray, real second-process reveal, and
+SQLite session recovery after restart. Initial ElectronApplication.launch timing
+included its two debugger connections; the final timing probe directly spawns the
+shipping EXE and connects only to its browser, with no Node debugger or app changes.
+A rejected -r timing-hook experiment is absent from the final test. Strict spec/config
+TypeScript, PowerShell parser, workflow YAML and different-model final review passed.
+Evidence: e2e-out/installed-runtime-direct-launch.log and installed-runtime-proof.json.
+Actual hosted installation/uninstall proof is still pending; Phase 12 remains open.
