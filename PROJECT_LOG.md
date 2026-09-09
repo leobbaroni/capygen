@@ -2998,3 +2998,16 @@ Changed the workflow reporter to dot to reduce progress output; worker RPC error
 remain fatal. Independent Luna review recommended this scope instead of a global
 test deadline increase. Focused CI=true verification: 9 passed, 1 file, 1.49s total
 (488ms test execution). Full hosted validation remains required and will rerun.
+
+### 2026-09-09 — Consistent CI budgets for disk-backed suites
+
+CI 34294275721 passed typechecks, the policy receipt test and all prior timeout cases.
+It reported 2919 passed, 7 skipped, and one 5s timeout in db/usage's range-report test,
+which opens and migrates a fresh SQLite store inside its body. No worker RPC error
+recurred. Raw evidence: e2e-out/ci-34294275721-raw.log (the gh run summary omitted
+the final compact-reporter output, so the raw job log was inspected).
+This repeated cross-suite fixture I/O variance justifies CI-only 30s body and hook
+budgets for db/desktop. Other projects, local limits, and explicit test deadlines
+remain unchanged. Removed the superseded policyReceipt-specific override. Independent
+Luna review accepted the broader evidence-based scope. Focused CI=true validation:
+2 files, 12 passed, 1.83s. Full CI still must pass before publication approval.

@@ -166,7 +166,6 @@ describe("the final check always re-evaluates current authority", () => {
     expect((await authorize({ stage: "final", lifecycleToken: fresh })).allowed).toBe(false);
   });
 
-  // Three disk-backed authorization pairs can exceed 5s on hosted Windows.
   it("asks again when the tool, cwd or input changed", async () => {
     for (const changed of [
       { toolName: "Read" },
@@ -179,7 +178,7 @@ describe("the final check always re-evaluates current authority", () => {
       await authorize({ stage: "final", ...changed });
       expect(asks, JSON.stringify(changed)).toBe(2);
     }
-  }, process.env.CI ? 30_000 : 5_000);
+  });
 
   it("refuses a final check that was cancelled, without reusing the answer", async () => {
     expect((await authorize()).allowed).toBe(true);

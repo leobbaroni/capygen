@@ -21,8 +21,9 @@ export default defineConfig({
         test: {
           name: "db",
           // Hosted Windows can spend >10s applying the 14 disk-backed migrations.
-          // Keep test-body deadlines intact; only fixture hooks get extra CI time.
+          // Some fixtures open/migrate inside the test body instead of a hook.
           hookTimeout: process.env.CI ? 30_000 : 10_000,
+          testTimeout: process.env.CI ? 30_000 : 5_000,
           root: "./packages/db",
           environment: "node",
           include: ["test/**/*.test.ts"],
@@ -41,6 +42,7 @@ export default defineConfig({
         test: {
           name: "desktop",
           hookTimeout: process.env.CI ? 30_000 : 10_000,
+          testTimeout: process.env.CI ? 30_000 : 5_000,
           setupFiles: [fileURLToPath(new URL("./tests/unit/isolatedHomes.ts", import.meta.url))],
           root: "./apps/desktop",
           environment: "node",
