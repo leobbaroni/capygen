@@ -3105,3 +3105,17 @@ TypeScript and native-test TypeScript passed. Two clean different-model updater
 review rounds and the additional prerequisite-fixture review are recorded.
 Evidence: e2e-out/updater-fix-{typecheck,unit-bounded,build,native-final}.log,
 e2e-out/updater-0.1.3-{package,packaged}.log and updater-proof-types.log.
+
+### 2026-09-09 — Capture the remaining CI runner error before changing behavior
+
+Full Windows CI 34356392024 passed typechecks and every applicable unit assertion
+(241 files passed/1 skipped, 2920 tests passed/7 skipped), but failed on the unhandled
+Vitest worker error `Timeout calling "onTaskUpdate"` after 878.32s. Packaging/native
+steps correctly did not run. The prior CI-only db/desktop afterEach yield is therefore
+not sufficient evidence of a complete runner fix. The same symptom has multiple
+possible sources; no application defect or exact affected project is established.
+The dot log lacks per-file durations, so restore the standard reporter and additionally
+retain JSON test results on failure. Worker limit, test/hook timeouts, assertions and
+fatal handling remain unchanged. Existing shared fixture proves both reporters and
+JSON output (2 passed, 405ms). This is diagnostic instrumentation, not a claimed fix.
+Evidence: e2e-out/ci-34356392024-failed.log and unit-reporter-proof.{log,json}.
