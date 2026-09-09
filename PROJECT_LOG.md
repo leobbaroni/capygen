@@ -2986,3 +2986,15 @@ and strengthened the IPC assertion to require the exact submitted name and promp
 The deadline and production behavior are unchanged. Independent Luna review found no
 coverage regression. Focused verification: 1 file, 3 tests passed in 3.43s; the creation
 test took 475ms. The full Windows gate will rerun before release publication approval.
+
+### 2026-09-09 — Bounded permission fixture and compact CI reporting
+
+CI 34293000066 passed typechecks and the automation form test (2919 tests passed,
+7 skipped), but the policy receipt case containing three disk-backed authorization
+pairs exceeded 5s. Its nine-test suite took 54.345s on the hosted runner; Vitest also
+reported an onTaskUpdate worker RPC timeout. Added a CI-only 30s deadline solely to
+that case, preserving the local 5s deadline, assertions and real SQLite durability.
+Changed the workflow reporter to dot to reduce progress output; worker RPC errors
+remain fatal. Independent Luna review recommended this scope instead of a global
+test deadline increase. Focused CI=true verification: 9 passed, 1 file, 1.49s total
+(488ms test execution). Full hosted validation remains required and will rerun.
