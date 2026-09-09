@@ -26,19 +26,18 @@ the browser during this check. Third-party listings have inconsistent generic li
 none is used to replace the notice carried by this exact asset.
 
 Astra decision: retain the requested font and preserve its embedded CC0 notice in the
-packaged attribution material. Do not claim designer endorsement. No standalone attribution
-file or Windows packaging configuration exists yet. `reference/omnigent/LICENSE` and
+packaged attribution material. Do not claim designer endorsement. Phase 12 now supplies
+the packaged `resources/app/legal/FONT-NOTICE.md`. `reference/omnigent/LICENSE` and
 `reference/omnigent/NOTICE` describe the read-only reference tree and are not the capygen
-font's attribution location. This document is the current repository evidence to carry into
-the eventual package attribution file.
+font's attribution location. The packaging audit verifies the notice and exact font bytes.
 
-When Phase 12 packaging is implemented, the exact preservation/check steps are:
+The implemented preservation/check steps are:
 
 1. Keep `assets/fonts/CheGuevaraBarry-Brown.ttf` as the source and let
    `apps/renderer/scripts/sync-assets.ts` stage the identical bytes at
    `apps/renderer/public/fonts/CheGuevaraBarry-Brown.ttf`; do not convert it to SVG.
-2. Add a package attribution file beside the packaged app's existing legal metadata (the
-   final electron-builder resource path is still undecided) containing the font name,
+2. Stage `resources/app/legal/FONT-NOTICE.md` beside the packaged app's legal metadata,
+   containing the font name,
    creator name as embedded (`DrJohnDee`), the literal embedded notice `CC0 - No Rights
    Reserved`, the embedded FontSpace URL, and this document's SHA-256. Do not describe this
    as designer endorsement or add a stronger legal claim.
@@ -47,5 +46,5 @@ When Phase 12 packaging is implemented, the exact preservation/check steps are:
    `f121fa2c8d8d9005d212f3738b1a8464bf5c26b2edd7bddee4a3fbf8d0a21141`; inspect its OpenType
    name table for the CC0 notice. Record the artifact path and result as Phase 12 evidence.
 
-This closes the missing-notice investigation, not the packaged-asset verification, which
-remains Phase 12 work. No packaging implementation is implied by this record.
+Both the notice investigation and packaged-asset verification are complete. The clean
+v0.1.3 build's `artifact-audit.json` records the font identity and notices checks.

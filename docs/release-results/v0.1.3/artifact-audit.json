@@ -1,0 +1,31 @@
+{
+  "sourceCommit": "c4e18af542f83ca94960d43760bd9fc9e9663146",
+  "sourceDirty": false,
+  "version": "0.1.3",
+  "unsigned": true,
+  "publisherIdentityVerified": false,
+  "runtimeEntries": 426,
+  "artifacts": [
+    {
+      "url": "capygen-0.1.3-setup.exe",
+      "sha512": "ew2vuan5qWQvnTKqRxH+OqlFCE6rmP1aKc7siB5j82mNUmxF82XXVitRtjYLXF+c3vJfPfS9tqwEJApdUqQQ1g==",
+      "size": 277989154,
+      "sha256": "93bc1a2cf8807c205f3256d4c9fbb4c365f53d2fcb6c197f2573c09d11370ef7"
+    },
+    {
+      "url": "capygen-0.1.3-portable.exe",
+      "sha512": "IHvUuiN2rbHsz8XVRm+tENzOT1dyqCzixvhxB+SFnuuiucSELSdy6CLaGjkXeGTyAZ/Ar/Sk7Pb8UL7VDP/CnA==",
+      "size": 277698850,
+      "sha256": "b0e6aa3e4fd5c7db2d1838a4c06642d6c52891bcc83e2abd4cbae387a509af7a"
+    }
+  ],
+  "speechSha256": "8db8dc8ae93409022836fd7a390c6ff4b7e10a92536fb0e2ccdd77a093a439c7",
+  "checks": [
+    "runtime allowlist",
+    "required physical executables",
+    "font identity",
+    "notices",
+    "explicit private repository",
+    "two-artifact feed checksums"
+  ]
+}

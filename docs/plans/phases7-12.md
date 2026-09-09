@@ -1,6 +1,8 @@
 # Phase 7–12 execution briefs
 
-Current run boundary (latest user update, 2026-09-07): Phases 7–8 accepted; resume Phases 9, 9C and 10–12 on main. Push verified updates to origin/main.
+Current state (2026-09-09): Phases 7–12 and 9C are accepted. Evidence is in
+`../release-results/v0.1.3/README.md`. The execution briefs below retain the build contract.
+Work and verified pushes use main; publishing and related release steps are authorized.
 
 Prepared by GPT Astra (medium), 2026-09-06, against `067a7dc`.
 Status: Astra-prepared, independently reviewed by Opus 5, debated with Fable 5.1 medium in two rounds.
@@ -181,7 +183,8 @@ features land; Phase 11 closes quantitative G9 and compaction/output requirement
 - Smoke the installed app: launch/focus budget, real terminal, browser overlay, SQLite restart,
   config isolation, tray manual checklist, and uninstall behavior without deleting user data.
 - Updater fixture: all four modes, explicit install click, failure/cancellation, older build
-  reads test feed. Preparing workflow/artifacts is authorized; verified pushes to main are authorized, publishing/tagging is separate.
+  reads test feed. The user authorized publishing/tagging and related release operations
+  on 2026-09-09; verified pushes to main remain authorized.
 - Start resolving font redistribution by Phase 10; Phase 12 acceptance requires resolution: converting a font to an SVG does not establish a right
   to distribute its artwork. Obtain license evidence or select an authorized fallback through
   the design decision process; no legal conclusion is inferred from a missing license file.

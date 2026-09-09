@@ -1,0 +1,9 @@
+{
+  "currentVersion": "0.1.2",
+  "targetVersion": "0.1.3",
+  "phase": "available",
+  "passed": true,
+  "packaged": true,
+  "privateFeed": true,
+  "installInvoked": false
+}

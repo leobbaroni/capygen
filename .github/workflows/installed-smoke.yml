@@ -5,7 +5,7 @@ on:
       source_run:
         description: Verified Windows artifact run
         required: true
-        default: '34358643906'
+        default: '34362025359'
       source_commit:
         description: Expected artifact source commit
         required: true

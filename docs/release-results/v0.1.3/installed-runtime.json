@@ -1,0 +1,13 @@
+{
+  "version": "0.1.3",
+  "launchMs": 2946,
+  "focused": true,
+  "packaged": true,
+  "pathSpacesAndUnicode": true,
+  "terminal": true,
+  "nativeBrowser": true,
+  "closeToTray": true,
+  "secondInstanceReveal": true,
+  "sqliteRestart": true,
+  "isolatedHomes": true
+}

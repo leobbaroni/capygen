@@ -3158,3 +3158,43 @@ A rejected -r timing-hook experiment is absent from the final test. Strict spec/
 TypeScript, PowerShell parser, workflow YAML and different-model final review passed.
 Evidence: e2e-out/installed-runtime-direct-launch.log and installed-runtime-proof.json.
 Actual hosted installation/uninstall proof is still pending; Phase 12 remains open.
+
+### 2026-09-09 — Phase 12 accepted; all planned phases complete
+
+The user authorized publishing and related release operations going forward. Private
+v0.1.3 was published at 2026-09-09T14:33:25Z from c4e18af542f83ca94960d43760bd9fc9e9663146.
+Release workflow 34362025359 passed the full gate again:
+```
+typecheck: passed
+Test Files  241 passed | 1 skipped (242)
+Tests       2920 passed | 7 skipped (2927)
+build:win / artifact audit: passed
+native Electron: 56 passed, 12 skipped (5.1m)
+packaged runtime + Electron updater transport: 2 passed (15.2s)
+```
+The actual preserved 0.1.2 packaged executable then read the real private feed:
+```
+currentVersion=0.1.2 targetVersion=0.1.3 phase=available
+passed=true packaged=true privateFeed=true installInvoked=false
+```
+Its temporary credential was deleted and isolated profile cleaned. Published 0.1.0/0.1.1
+transport is broken and requires manual replacement; the successful forward check does
+not claim those binaries can self-repair. Release notes include this distinction.
+
+Installed CI 34364288140 first passed against the candidate artifact. Because its checksum
+differed from the published binary, repeated the same fixture against release-run artifacts
+in installed CI 34364630748. The latter passed 1 test (17.0s), direct launch to focused
+composer 2946ms (<=3000ms), installed path with spaces/Unicode, real PTY/native browser,
+close-to-tray and second-instance reveal, SQLite restart and configuration isolation.
+NSIS uninstall removed the installed EXE and registry entry, and four owned app/backend/
+project file hashes were unchanged. Installer SHA256 matches the published artifact:
+93bc1a2cf8807c205f3256d4c9fbb4c365f53d2fcb6c197f2573c09d11370ef7.
+All installation was on disposable hosted Windows; no installer ran on the user's machine.
+
+Permanent sanitized evidence is in docs/release-results/v0.1.3/. Raw logs remain in
+ e2e-out/release-34362025359-passed.log and installed-ci-34364630748.log. Two independent
+clean updater reviews plus installed-harness review passed. Font identity/notices and
+P1–P20/R1–R32 reconciliation are complete; live provider/connector coverage gaps remain
+explicitly documented, not silently treated as passes. Intermittent prior CI worker RPC
+errors are not claimed causally fixed, but both final full gates passed with errors fatal.
+Updated PLAN, README, HANDOFF, RUN, PARITY and font evidence to the verified final state.

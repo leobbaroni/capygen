@@ -76,9 +76,9 @@ corepack pnpm start          # launch Electron on the built output
 into `apps/desktop/dist/migrations`, and the brand icons into `apps/desktop/dist/assets`.
 A new migration needs no build change; a new runtime file read by path does.
 
-Packaging (`build:win`, NSIS + portable + updater feed) is implemented for Phase 12. Local
-artifact and packaged-smoke checks exist, while older-build updater, private-feed/release and
-full Phase 12 acceptance remain open; see the Windows packaging section below.
+Phase 12 packaging (`build:win`, NSIS + portable + updater feed) is accepted. Clean CI,
+published v0.1.3, installed/uninstall smoke and actual older-build private discovery pass;
+see the Windows packaging section below and `release-results/v0.1.3/README.md`.
 
 ---
 
@@ -273,7 +273,7 @@ corepack pnpm exec vitest run --project engine test/mcpServerResolver.test.ts
 
 The current implementation checkpoint and output tails are in `PROJECT_LOG.md`. The native import
 e2e currently has one verified pass including restart/deduplication and source-hash stability.
-Worktree integration is accepted by the final Phase 7–8 gate. Packaged worker SDK-resolution verification remains Phase 12 work; live benchmark evidence remains a Phase 11 requirement. Live checks require dedicated authenticated
+Worktree integration is accepted by the final Phase 7–8 gate. Phase 12 packaged runtime checks and Phase 11 benchmark evidence are complete. Authenticated transcript reconstruction through the installed SDK worker remains a live coverage gap. Live checks require dedicated authenticated
 homes; never point them at personal Claude or Codex configuration.
 
 ---
@@ -398,7 +398,7 @@ logged with its real message before it is re-thrown to the renderer.
 - **The Terminal pane is empty in a packaged build but fine in `pnpm dev`**: `node-pty` was packed
   into the asar. Its binding loader does a relative `require("../build/Release/pty.node")` and it
   launches `conpty.dll` / `OpenConsole.exe` as *files*, neither of which works from inside an
-  archive. Phase 12 must `asarUnpack` `**/node_modules/node-pty/**` — see
+  archive. The accepted Phase 12 package uses `asar: false` to keep this runtime physical — see
   `docs/adr/0005-terminal-node-pty.md`. Nothing needs rebuilding: node-pty 1.1.0's prebuilds are
   N-API and load under Electron 44 and Node 22.16 unchanged (both measured).
 - **Stopping a dev server leaves the port taken**: the stop path must tree-kill *synchronously*.
@@ -535,8 +535,23 @@ history is retained.
 On native Windows x64, run `corepack pnpm build:win` to build and stage the runtime, or
 `corepack pnpm package:win` to package and audit it. Local output is under `release/artifacts/`:
 `capygen-<version>-setup.exe`, `capygen-<version>-portable.exe`, `latest.yml`, and
-`artifact-audit.json`. Current artifacts are about 268 MiB each and unsigned. There is no verified
-published release or live updater acceptance yet.
+`artifact-audit.json`. Artifacts are approximately 265–268 MiB each and unsigned. Private
+[v0.1.3](https://github.com/leobbaroni/capygen/releases/tag/v0.1.3) is verified and published.
+Versions 0.1.0 and 0.1.1 cannot fetch the repair: download v0.1.3 manually and retain the
+existing user-data folder. The corrected, unpublished 0.1.2 baseline found the live release.
+
+The installed acceptance workflow runs only on a disposable hosted Windows runner. It
+verifies artifact source/checksum, installs to an owned spaces/Unicode path, runs the
+installed smoke, uninstalls, and compares owned user-data/backend/project hashes:
+
+```powershell
+gh workflow run installed-smoke.yml --ref main -f source_run=34362025359 -f source_commit=c4e18af542f83ca94960d43760bd9fc9e9663146 -f version=0.1.3
+```
+
+Use a retained verified Windows artifact run for later versions; workflow artifacts expire.
+The wrapper deliberately refuses local execution. It never installs on the developer's
+computer. The updater verifier requires an actual older packaged binary and explicit `--live`;
+it uses an isolated profile and deletes the temporary credential without downloading/installing.
 
 ### Repair build: tools and session setup
 

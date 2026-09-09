@@ -310,7 +310,7 @@ Added by Phase 5 task B1 (`apps/desktop/src/workspace/**`). Verified on this mac
 |---|---|---|---|
 | `node-pty` | **1.1.0**; prebuilds are N-API (`node-addon-api` ^7), so one binary answers Electron 44 (ABI 149) and Node 22.16 (ABI 127) — both measured, no `@electron/rebuild` | `workspace/TerminalService.ts` | see ADR-0005. Fallback: `@electron/rebuild` 4.2.0 scoped to this module |
 | `pty.spawn(file, args, {name, cols, rows, cwd, env, useConpty})` → `IPty` (`pid`, `onData`, `onExit`, `write`, `resize`, `kill`) | `typings/node-pty.d.ts` 1.1.0 | the whole Terminal pane | the `PtySpawner` seam is one function type; a signature change is a compile error, and every test drives a fake through it |
-| node-pty's binding loader is a **relative** `require("../build/Release/pty.node")` (then `build/Debug`, then `prebuilds/<platform>-<arch>`) | `node-pty/lib/utils.js` | why `node-pty` is **external** in `apps/desktop/scripts/build.ts`, and why Phase 12 must `asarUnpack` the whole package directory | inlining it into `main.cjs` makes the require resolve next to the bundle and find nothing |
+| node-pty's binding loader is a **relative** `require("../build/Release/pty.node")` (then `build/Debug`, then `prebuilds/<platform>-<arch>`) | `node-pty/lib/utils.js` | why `node-pty` is **external** in `apps/desktop/scripts/build.ts`, and why the packaged runtime must keep the whole package directory physical | inlining it into `main.cjs` makes the require resolve next to the bundle and find nothing |
 | bundled ConPTY (`build/Release/conpty/{conpty.dll,OpenConsole.exe}`, v1.23.251008001 here) is placed by node-pty's own post-install | install log | `useConpty: true` | these are launched as *files*, so they cannot live inside an asar either |
 | `chokidar` | **5.0.0** | `workspace/FsService.ts` watcher | `ignored` is a `Matcher` **predicate**, not a glob (chokidar 4 dropped globs, 5 kept it that way) — `ignoredUnder(root)`; event names `add`/`change`/`unlink`/`addDir`/`unlinkDir` are exactly `FileChangeKindSchema` |
 | `simple-git` | **3.36.0**; `checkIsRepo`, `status`, `diff`, `add`, `commit`, `revparse` | `workspace/GitService.ts` | the only six members touched, declared structurally as `GitClientLike`; `status().files[].{index,working_dir}` are the two porcelain columns `GitStatusEntry.status` joins |
@@ -339,18 +339,18 @@ installed in `apps/renderer/node_modules` on 2026-09-06, read back from each pac
 | xterm's `fontFamily` reaches a `CanvasRenderingContext2D.font` string and the WebGL atlas | Chromium behaviour | `xtermTheme.readXtermFontFamily` | a CSS `var(--font-mono)` is **not** resolvable there — Chromium drops the whole declaration and measures a proportional face, so the cursor lands in the wrong column. Colours have the same constraint, which is why both are read with `getComputedStyle` |
 | under WebGL, xterm draws to a canvas and puts nothing in the DOM | xterm's own design | `tests/e2e/workspace.spec.ts` `(d)` | there is no DOM-element → `Terminal` lookup in xterm's API, so the pane hangs the instance on its own container (`__xterm`) and the e2e reads the public `buffer` API off it |
 
-**Packaging (Phase 12) owes this section three things**, all Windows-specific and all silent
+**Packaging preserves these three constraints**, all Windows-specific and all silent
 failures if missed:
 
-1. `asarUnpack` `**/node_modules/node-pty/**` — the *whole* package directory, not just the
+1. Keep `**/node_modules/node-pty/**` physical — the *whole* package directory, not just the
    `.node`: `conpty.dll` and `OpenConsole.exe` are launched as files and the loader also needs
    `lib/`, `build/Release/conpty/` and `prebuilds/win32-<arch>/`. A packaged build that skips
    this looks fine until someone opens the Terminal pane (ADR-0005 makes that an acceptance step).
 2. `node-pty` stays **external** in `apps/desktop/scripts/build.ts` — its binding loader is a
    relative `require`, so inlining it into `main.cjs` makes that require resolve next to the
    bundle and find nothing.
-3. Nothing else here needs unpacking: `chokidar`, `simple-git`, `dockview` and `xterm` are pure
-   JS and ride inside the asar, and the SQLite driver is `node:sqlite` (ADR-0003), not an addon.
+3. `chokidar`, `simple-git`, `dockview` and `xterm` are pure JS; the current `asar:false`
+   runtime packages their files physically too. SQLite is `node:sqlite` (ADR-0003), not an addon.
 
 ## Historical review caveat — 2026-09-06 (superseded by Phase 7 acceptance)
 
@@ -452,7 +452,7 @@ repeat them when the dependency changes. The `git.commit` IPC schema also requir
 The bounded parser, Electron utility-process worker, main-process staging, import IPC, SQLite
 persistence, read-only transcript view and fresh-session continuation path are implemented in the
 current checkout. Imported history is inert: tools, approvals, configuration and native
-resume identities are never activated. Phase 7 is accepted by the final integrated gate. Packaged SDK-resolution verification remains Phase 12 work; live benchmark evidence remains Phase 11 work and requires dedicated authenticated homes.
+resume identities are never activated. Phase 7 is accepted by the final integrated gate. Phase 12 packaged runtime checks and Phase 11 benchmark evidence are complete. Authenticated transcript reconstruction through the installed SDK worker remains a live coverage gap and requires dedicated authenticated homes.
 
 | Contract | Verified authority | Consumer / regression |
 |---|---|---|
@@ -487,7 +487,7 @@ exclusively in bounded chunks; partial writes are retried. IPC returns bounded
 metadata or a sanitized error, not the transcript. This is process separation, not an OS
 filesystem sandbox. The Electron utility-process client is wired at startup through
 `createElectronImportWorkerClient`; it validates and streams the result, then adopts it with an
-exclusive hard link. The packaged SDK-resolution smoke test remains pending. Worker checks use
+exclusive hard link. Authenticated transcript reconstruction through the installed SDK worker remains a live coverage gap. Worker checks use
 owned homes and do not access personal backend homes.
 
 ## Scoped MCP runtime resolution (2026-09-07)
@@ -581,16 +581,16 @@ backend/model groups, and session groups. `knownCostUsd` and `unknownCostEvents`
 together; unknown cost is never a claim of free usage. Published model rates remain estimates.
 
 
-## Phase 9 share bundle contract (integration pending)
+## Phase 9 share bundle contract (accepted)
 
 `packages/shared/src/shares.ts` defines `capygen.share` version 1. It contains inert
 transcript entries, display-only source metadata, checked counts and ordered comments;
 no native resume identity or executable configuration is accepted. Strict objects reject
 unknown fields. Labels/comment bodies and the 32 MiB serialized JSON envelope use UTF-8
 byte limits. HTML transport has an independent 96 MiB ceiling, checked before Save by the
-future encoder. Reasoning is opt-in and `droppedThinking` records omission. Comment IDs
+encoder. Reasoning is opt-in and `droppedThinking` records omission. Comment IDs
 are bundle-local; replies refer only to earlier comments and anchors must exist.
-The schema is available; export/import persistence and UI are not yet implemented.
+The schema, export/import persistence and UI are integrated and accepted in Phase 9.
 
 
 Migration `0009_share_imports` adds `sessions.artifact_kind` (NULL for live,
@@ -769,8 +769,12 @@ removes that user-saved copy. Owned cache limits are 512 MiB per artifact, 1536 
 and four artifact slots including reserved download/copy space.
 
 These builds are unsigned: checksums detect mismatches against release metadata but do not
-verify publisher identity. Local build/audit and isolated fixtures do not establish the
-still-pending older-build/private-release or installed-app acceptance.
+verify publisher identity. Private v0.1.3 passed its full release gate, actual packaged
+0.1.2 forward-discovery, and hosted installation/runtime/uninstall checks against the exact
+published installer checksum. Evidence is in `docs/release-results/v0.1.3/README.md`.
+The hosted-only installer wrapper uses NSIS `/S /currentuser /D=<owned path>` with `/D`
+last and unquoted, then the generated uninstaller's `/S`. These silent flags are confined
+to disposable CI verification; the app's user-facing installation remains visibly confirmed.
 
 ## API context compaction (Phase 11 implementation)
 

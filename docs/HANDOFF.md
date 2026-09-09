@@ -1,19 +1,26 @@
-# capygen — handoff (2026-09-09, Phases 10–11 accepted; Phase 12 in progress)
+# capygen — handoff (2026-09-09, Phases 1–12 and 9C accepted)
 
 ## Current work
 
-Phase 10 is accepted: the user confirmed local Whisper microphone transcription works.
-The composer now shows request-scoped transcription progress and cancellation; measured
-CPU tuning reduced a fixed sample from 7.68s to 4.64s. Text overlay/selection metrics match
-at normal and increased font scale. Tools → App pages restores local extension access.
-Full gate: typecheck/build pass, 2923 unit tests pass / 4 skipped, 56 native Electron tests
-pass / 12 credential-dependent tests skipped. See PROJECT_LOG.md for evidence.
-Phase 11's full live cohort passed at 102.25% of baseline tokens; all journals and exact
-numbers are in docs/benchmarks.md. Version 0.1.1 packaging/audit and actual packaged
-smoke pass, including raw Codex with inherited TERM=dumb. Full CI, published release,
-older-build/private-feed verification and final review completion remain for Phase 12.
+All planned phases are accepted. Private v0.1.3 is published from c4e18af; the release
+workflow passed typechecks, 2920 unit tests (7 skipped), Windows build/audit, 56 native
+Electron tests (12 skipped), and both packaged tests. Actual packaged 0.1.2 discovers
+private 0.1.3 without installing. The exact published installer passed hosted installation
+in a spaces/Unicode path, focused launch in 2946ms, terminal/native browser/tray, SQLite
+restart, uninstall and preservation of owned user-data/backend/project files. Sanitized
+proofs and CI links are in `docs/release-results/v0.1.3/README.md`.
+
+Versions 0.1.0 and 0.1.1 contain a broken updater transport and require manual replacement
+from GitHub; retain user data. Version 0.1.2 was an unpublished corrected local baseline.
+The user authorized publishing and related release operations on 2026-09-09.
+Local microphone acceptance and progress/cancellation are complete; the fixed CPU sample
+improved from 7.68s to 4.64s. Phase 11's full paired cohort passed at 102.25% of baseline
+tokens, with journals in `docs/benchmarks.md`. Provider-specific live coverage limitations
+remain explicit in `docs/PARITY.md`; skipped checks are not claimed as passes.
 The pre-existing Codex isolation probe, engine package script, state.lock and Microsoft/
 directory are preserved. Historical checkpoints below describe earlier states.
+
+## Historical implementation checkpoints
 
 Phase 9 is accepted at `a319b5b`. Phase 9C passed its full gate on 2026-09-08: typechecks,
 2815 unit tests (4 skipped), build, and 54 native Electron tests (12 live skipped, 2.3m).

@@ -3,17 +3,16 @@
 One-line goal: see SPEC.md. This file is the build order; SPEC.md is the contract.
 
 UX repair evidence: [`docs/plans/2026-09-08-ux-repair.md`](docs/plans/2026-09-08-ux-repair.md).
-The repair is committed at `1a429b3`; the resumed run verifies it before continuing remaining acceptance work.
+The repair is committed at `1a429b3` and covered by the subsequent acceptance gates.
 
 ## Current State
 
-- Phases 1–10 and 9C are accepted. Work and verified pushes use `main`.
-- Phase 9C gate: typecheck/build passed; 2815 unit tests passed / 4 skipped;
-  54 native Electron tests passed / 12 live tests skipped. See `PROJECT_LOG.md` for evidence.
+- Phases 1–12 and 9C are accepted. Work and verified pushes use `main`.
+- Private v0.1.3 passed the full clean release gate, actual older-build private discovery,
+  and exact published-installer/uninstall checks. See `docs/release-results/v0.1.3/README.md`.
 - Phase 11 passed its complete live cohort at 102.25% of baseline tokens (limit 110%).
-  Phase 12 remains open pending full CI, release and actual older-build/private-feed proof.
-- Packaging and packaged smoke have passed; actual older-build/private-feed, release,
-  full CI and final review evidence remain required for Phase 12 acceptance.
+- Provider-specific live-test gaps remain explicit in `docs/PARITY.md`; skipped checks
+  are not passes. Versions 0.1.0/0.1.1 require manual replacement from GitHub.
 
 ## Approach
 
@@ -290,7 +289,7 @@ silently substitute models. Review status and failed Claude attempts are recorde
       imports.spec.ts. Scoped MCP fixture coverage verifies real tools/widgets; unsupported
       Claude user/local cwd/disable writes are refused before mutation (COMPAT.md).
       Final shared gate with Phase 8: 1883 unit tests passed, 4 skipped; 46 Playwright passed,
-      12 skipped; typecheck and build passed. Packaged SDK smoke remains Phase 12 work.
+      12 skipped; typecheck and build passed. Packaged runtime validation was scheduled for Phase 12 and is now complete; authenticated installed SDK transcript reconstruction remains a live coverage gap.
 - [x] Phase 8: Tasks, Inbox, Usage, Automations (M3–M4)
       Done when: Tasks page lists agent todos across sessions; Inbox shows needs-input/finished
       items with toasts + badge; Usage page aggregates fixture events; an automation scheduled
@@ -343,13 +342,17 @@ silently substitute models. Review status and failed Claude attempts are recorde
       the full gate. All three paired 20-turn live sessions completed; pooled token ratio
       1.022469 (≤1.10). Exact accounting, failed attempts and source hashes are published
       in docs/benchmarks.md and docs/benchmark-results/.
-- [ ] Phase 12: Packaging, updater, CI, docs, parity audit, release
+- [x] Phase 12: Packaging, updater, CI, docs, parity audit, release
       Done when: `pnpm build:win` yields installer + portable + latest.yml; release workflow
       publishes on tag; updater finds the release from an older build; README/ARCHITECTURE/
       COMPAT written; adversarial review wave (correctness, security, UX, parity) two clean rounds.
       Covers: R4, G8, G10; checks: A10.
-      Implementation: integrated Windows installer/portable/feed audit and packaged smoke pass;
-      private updater + tag CI written. Actual older-build/private-feed/release proof pending.
+      Accepted 2026-09-09: private v0.1.3 published from c4e18af after clean full CI;
+      actual packaged 0.1.2 discovers 0.1.3. The exact published installer passes hosted
+      installation, spaces/Unicode paths, 2946ms focused launch, terminal/browser/tray,
+      SQLite restart and uninstall/data-preservation checks. Two clean review rounds,
+      font attribution and parity reconciliation are recorded. Evidence: docs/release-results/v0.1.3/.
+      Broken 0.1.0/0.1.1 require manual replacement; skipped provider-live checks remain explicit.
 
 ## Verification
 
