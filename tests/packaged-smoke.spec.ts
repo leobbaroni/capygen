@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { _electron as electron, expect, test } from "@playwright/test";
 import { launchEnv, PERSONAL_KEY_ENV } from "./e2e/testPolicy.js";
 import { cleanEnv } from "../packages/engine/src/env.js";
@@ -107,6 +109,64 @@ test("packaged Windows runtime: bridge, updates, speech, bundled CLI, PTY and as
     await test.info().attach("runtime-proof", { body: JSON.stringify({ packaged: packaged.packaged, updater: status.phase, speechLanguages: speech.languages, bundledVersions: versions, terminalEcho: true, rawCodexStartup: true, assets: true }), contentType: "application/json" });
   } finally {
     await app?.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("packaged private updater fetches release metadata through real Electron transport", async () => {
+  test.skip(process.platform !== "win32", "Requires the Windows packaged executable");
+  const repo = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "capygen-updater-transport-"));
+  const userDataDir = path.join(root, "profile"), projectDir = path.join(root, "project");
+  const homes = { claudeHome: path.join(root, "claude"), codexHome: path.join(root, "codex"), dedicated: false, cleanup() {} };
+  for (const directory of [userDataDir, projectDir, homes.claudeHome, homes.codexHome]) fs.mkdirSync(directory);
+  const requests: string[] = [];
+  let nextVersion = "";
+  const server = createServer((request, response) => {
+    const pathname = new URL(request.url!, "http://localhost").pathname;
+    requests.push(pathname);
+    if (pathname === "/repos/leobbaroni/capygen/releases/latest") {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ tag_name: `v${nextVersion}`, assets: [
+        { name: "latest.yml", url: "https://api.github.com/fixture/latest.yml" },
+        { name: `capygen-${nextVersion}-setup.exe`, url: "https://api.github.com/fixture/setup.exe" },
+      ] }));
+    } else if (pathname === "/fixture/latest.yml") {
+      response.end(`version: ${nextVersion}\nfiles:\n  - url: capygen-${nextVersion}-setup.exe\n    sha512: ${createHash("sha512").update("fixture").digest("base64")}\n    size: 7\n`);
+    } else { response.writeHead(404).end(); }
+  });
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    app = await electron.launch({ executablePath: path.join(repo, "release/artifacts/win-unpacked/capygen.exe"),
+      args: [`--user-data-dir=${userDataDir}`], cwd: projectDir,
+      env: launchEnv({ userDataDir, projectDir, homes, engine: "stub" }) });
+    const version = await app.evaluate(({ app }) => app.getVersion());
+    const [major, minor, patch] = version.split(".").map(Number);
+    nextVersion = `${major}.${minor}.${patch! + 1}`;
+    await app.evaluate(({ session }, port) => {
+      // Only the remote endpoint is replaced. The shipping driver, provider,
+      // Electron net transport and updater service all execute unchanged.
+      session.fromPartition("electron-updater", { cache: false }).webRequest.onBeforeRequest(
+        { urls: ["https://api.github.com/*"] }, (details, callback) => {
+          callback({ redirectURL: `http://127.0.0.1:${port}${new URL(details.url).pathname}` });
+        });
+    }, port);
+    const page = await app.firstWindow();
+    await page.getByTestId("landing-heading").waitFor();
+    const result = await page.evaluate(async () => {
+      const bridge = (window as any).capygen;
+      await bridge.invoke("updates.setCredential", { value: "offline-updater-fixture" });
+      try { return await bridge.invoke("updates.check", {}); }
+      finally { await bridge.invoke("updates.deleteCredential", {}); }
+    });
+    expect(result, JSON.stringify({ result, requests })).toMatchObject({ phase: "available", version: nextVersion });
+    expect(requests).toEqual(["/repos/leobbaroni/capygen/releases/latest", "/fixture/latest.yml"]);
+    // autoDownload remains false: checking must not request an executable.
+  } finally {
+    await app?.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

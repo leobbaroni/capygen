@@ -3050,3 +3050,58 @@ tests install fake timers. RPC errors remain fatal; no retry, deadline increase,
 assertion change or database behavior change was introduced. Independent Luna review
 found no ordering/fake-timer issue. Both complete affected projects passed under
 CI=true: 108 files, 1378 tests, 110.21s. Evidence: e2e-out/ci-db-desktop-yield.log.
+
+### 2026-09-09 — Full clean Windows release gate passed
+
+CI 34300273621 succeeded for fd4b810f5422e3f5b79f72c982a6be88b5bd6f8b:
+typechecks passed; 241 unit files passed, 1 skipped; 2920 unit tests passed, 7 skipped;
+build:win passed; native Electron 56 passed, 12 live-integration tests skipped (4.9m);
+packaged runtime smoke 1 passed (12.8s). Installer, portable, latest.yml and artifact
+audit uploaded as capygen-windows (artifact 10085140022). Skipped checks are not
+claimed as passes. Raw output: e2e-out/ci-34300273621-passed.log.
+The user approved private v0.1.1 publication; release workflow 34351205803 passed
+the full gate and published its four assets. Phase 12 remained open for the actual
+older-version update discovery check.
+
+### 2026-09-09 — Repair packaged updater transport discovered by live acceptance
+
+The actual packaged 0.1.0 check against private v0.1.1 failed. Its updater passed
+an AppAdapter into electron-updater 6.8.9's constructor, selecting a test seam
+that leaves httpExecutor null. Published v0.1.1 contains the same defect and needs
+manual replacement; it cannot fetch its own repair. Neither release was retagged.
+The driver now initializes the native Electron transport before installing the
+contained-cache adapter. Explicit download/install policy remains unchanged.
+
+Added a packaged regression using the shipping service/provider/Electron transport
+and an owned local metadata endpoint: old 0.1.1 failed with zero HTTP requests;
+fixed 0.1.2 passed both packaged checks (14.5s), including metadata/channel requests
+and no executable download. Preserved that actual 0.1.2 binary as the older baseline
+before preparing candidate 0.1.3. This is a forward-discovery check, not evidence of
+an upgrade from broken 0.1.1. Proof script failure reporting and strict environment
+typing were corrected; credentials remain isolated and are deleted in finally.
+Different-model Luna review found no high/medium issues in the driver, regression,
+proof and pinned compatibility contract. Strict standalone proof/spec types pass.
+Full local default-concurrency units hit one 5s migration timeout (2922 passed,
+4 skipped); rerun uses the same two-worker limit as CI. Candidate gate and private
+publication/discovery acceptance are still pending; Phase 12 is not checked off.
+
+Candidate 0.1.3 final local verification:
+```
+typecheck: passed
+Test Files  242 passed (242)
+Tests       2923 passed | 4 skipped (2927)
+Duration    221.07s (two workers, same limit as CI)
+build: passed
+package:win: installer + portable + latest.yml + artifact audit passed
+packaged runtime: 2 passed (16.2s)
+native Electron: 56 passed, 12 skipped (3.0m)
+```
+Native first attempt: 55 passed/12 skipped, one prerequisite Cancel proof failed
+because explicit Re-detect overlapped Run's fresh detection; the fixture now waits
+for that refresh and requires the exact Codex command cancellation log. Luna reviewed
+this test-only synchronization and stricter assertion; the full native rerun above
+passed. No timeout or production detection behavior was changed. Proof/spec strict
+TypeScript and native-test TypeScript passed. Two clean different-model updater
+review rounds and the additional prerequisite-fixture review are recorded.
+Evidence: e2e-out/updater-fix-{typecheck,unit-bounded,build,native-final}.log,
+e2e-out/updater-0.1.3-{package,packaged}.log and updater-proof-types.log.

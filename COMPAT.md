@@ -746,6 +746,13 @@ exactly `capygen-${version}-setup.exe` or `capygen-${version}-portable.exe` from
 It retains the library's authenticated transport/checksum verification and additionally
 verifies the owned retained copy. `autoDownload`, `autoInstallOnAppQuit` and
 `autoRunAppAfterInstall` are false. No `quitAndInstall` call is used.
+The subclass calls `NsisUpdater` without a custom adapter to initialize its real
+Electron HTTP executor, then overrides the protected `app: AppAdapter` with the
+contained-cache/explicit-install adapter. In 6.8.9, passing the adapter into the
+constructor sets `httpExecutor = null` (a library test seam). The packaged regression
+uses real Electron networking against an owned HTTP fixture to enforce this contract.
+Published 0.1.1 used the constructor seam and cannot check for its own repair; users
+of that build must manually replace it with the corrected release.
 `PrivateGitHubProvider` is selected by an explicit safeStorage token with `private` omitted:
 in 6.8.9 `private:true` would prefer inherited GH_TOKEN/GITHUB_TOKEN over that token.
 The repository identity remains explicitly `leobbaroni/capygen`; omitting the option does

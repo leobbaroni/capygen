@@ -688,6 +688,7 @@ test.describe("prerequisites gate", () => {
       expect(codexCli.detected).toBe(true);
       expect(codexLogin.detected).toBe(false);
       await page.getByTestId("prereq-redetect").click();
+      await expect(page.getByTestId("prereq-redetect")).toBeEnabled({ timeout: 60_000 });
       const codexStep = page.locator('[data-testid="prereq-step-row"][data-step-id="codex-login"]');
       await expect(codexStep).toBeVisible({ timeout: 60_000 });
       await expect(codexStep).toHaveAttribute("data-detected", "false", { timeout: 60_000 });
@@ -701,7 +702,7 @@ test.describe("prerequisites gate", () => {
 
       await expect
         .poll(() => readLog(homes.userDataDir), { timeout: 20_000 })
-        .toContain("CAPYGEN_PREREQ_CONFIRM=cancel");
+        .toContain(`CAPYGEN_PREREQ_CONFIRM=cancel — auto-cancelling the confirm for \`${codexLogin.command}\``);
       const log = readLog(homes.userDataDir);
       // The dialog it built was for this step's exact command…
       expect(log).toContain(codexLogin.command!);

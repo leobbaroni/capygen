@@ -2,10 +2,19 @@ import path from "node:path";
 import { app } from "electron";
 import { NsisUpdater, type ProgressInfo } from "electron-updater";
 import type { DownloadUpdateOptions } from "electron-updater/out/AppUpdater.js";
+import type { AppAdapter } from "electron-updater/out/AppAdapter.js";
 import type { UpdateDriver } from "./UpdateService.js";
 
 /** Pinned 6.8.9 hook: retain its authenticated transport and checksum validation for both EXEs. */
 class CapygenUpdater extends NsisUpdater {
+  protected override readonly app: AppAdapter;
+  constructor(adapter: AppAdapter) {
+    // Passing an adapter to super is electron-updater's test seam: it disables
+    // the HTTP executor. Initialize the real Electron transport first, then
+    // retain our contained cache and explicit-install app adapter.
+    super(null);
+    this.app = adapter;
+  }
   portable = false;
   protected override doDownloadUpdate(options: DownloadUpdateOptions): Promise<string[]> {
     const info = options.updateInfoAndProvider.info;
@@ -17,7 +26,7 @@ class CapygenUpdater extends NsisUpdater {
   }
 }
 export function createPrivateUpdateDriver(input: { root: string; token: string; portable: boolean; progress(transferred: number, percent: number): void }): UpdateDriver {
-  const updater = new CapygenUpdater(null, {
+  const updater = new CapygenUpdater({
     version: app.getVersion(), name: "capygen", isPackaged: app.isPackaged,
     appUpdateConfigPath: path.join(process.resourcesPath, "app-update.yml"),
     userDataPath: app.getPath("userData"), baseCachePath: path.join(input.root, "cache"),
