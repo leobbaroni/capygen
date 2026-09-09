@@ -3027,3 +3027,14 @@ Added bounded save-error diagnostics and failure-only upload of native error-con
 files/custom screenshot. No app code, dependencies or personal configuration changed.
 Different-model review covered the final scope. Verification: Custom 1 passed (12.6s),
 settings 9 passed and 1 authenticated test skipped (32.0s), tests TypeScript passed.
+
+### 2026-09-09 — Serialize native prerequisite detection in its fixture
+
+CI 34297498312 passed typechecks, units and Windows packaging; native checks had
+55 passed, 12 skipped, and one failed initial Codex-detection assertion. All previous
+native failures passed. The prerequisite fixture issued another status call as soon
+as the panel mounted, concurrently with its initial detection's cold PowerShell probes.
+It now waits for Re-detect to become enabled before issuing its own status call.
+No detection result is mocked, no assertion is retried, and production probe deadlines
+remain unchanged. Independent Luna review confirmed the scope. Focused real Electron
+verification: 1 passed (19.3s), including signed-out state and Cancel starting nothing.

@@ -678,6 +678,9 @@ test.describe("prerequisites gate", () => {
       const page = launched.page;
       await openSettings(page, "prereqs");
       await expect(page.getByTestId("prereq-panel")).toBeVisible({ timeout: 60_000 });
+      // Mount already runs detection. Do not launch a second set of cold
+      // PowerShell probes concurrently on the hosted Windows runner.
+      await expect(page.getByTestId("prereq-redetect")).toBeEnabled({ timeout: 60_000 });
 
       const status = await invoke<{ steps: { id: string; detected: boolean; command?: string }[] }>(page, "prereqs.status", {});
       const codexCli = status.steps.find((step) => step.id === "codex-cli")!;
