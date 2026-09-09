@@ -20,6 +20,7 @@ export default defineConfig({
       {
         test: {
           name: "db",
+          setupFiles: [fileURLToPath(new URL("./tests/unit/yieldToRunner.ts", import.meta.url))],
           // Hosted Windows can spend >10s applying the 14 disk-backed migrations.
           // Some fixtures open/migrate inside the test body instead of a hook.
           hookTimeout: process.env.CI ? 30_000 : 10_000,
@@ -43,7 +44,10 @@ export default defineConfig({
           name: "desktop",
           hookTimeout: process.env.CI ? 30_000 : 10_000,
           testTimeout: process.env.CI ? 30_000 : 5_000,
-          setupFiles: [fileURLToPath(new URL("./tests/unit/isolatedHomes.ts", import.meta.url))],
+          setupFiles: [
+            fileURLToPath(new URL("./tests/unit/isolatedHomes.ts", import.meta.url)),
+            fileURLToPath(new URL("./tests/unit/yieldToRunner.ts", import.meta.url)),
+          ],
           root: "./apps/desktop",
           environment: "node",
           include: ["test/**/*.test.ts"],

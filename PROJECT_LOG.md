@@ -3038,3 +3038,15 @@ It now waits for Re-detect to become enabled before issuing its own status call.
 No detection result is mocked, no assertion is retried, and production probe deadlines
 remain unchanged. Independent Luna review confirmed the scope. Focused real Electron
 verification: 1 passed (19.3s), including signed-out state and Cancel starting nothing.
+
+### 2026-09-09 — Yield synchronous fixtures to the test runner
+
+CI 34299161816 passed typechecks and all 2920 unit tests (7 skipped), but failed on
+an unhandled Vitest worker onTaskUpdate RPC timeout. The installed birpc transport
+uses a 60s deadline. Long sequences of synchronous disk-backed fixtures can starve
+worker message handling across microtask-only test transitions. Added a CI-only
+afterEach setImmediate yield to db/desktop setup, capturing the real timer before
+tests install fake timers. RPC errors remain fatal; no retry, deadline increase,
+assertion change or database behavior change was introduced. Independent Luna review
+found no ordering/fake-timer issue. Both complete affected projects passed under
+CI=true: 108 files, 1378 tests, 110.21s. Evidence: e2e-out/ci-db-desktop-yield.log.
